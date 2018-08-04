@@ -80,10 +80,6 @@ public:
 
     void markEndOfStream(MediaSourcePrivate::EndOfStreamStatus);
 
-#if ENABLE(LEGACY_ENCRYPTED_MEDIA)
-    void dispatchDecryptionKey(GstBuffer*) override;
-#endif
-
     void trackDetected(RefPtr<AppendPipeline>, RefPtr<WebCore::TrackPrivateBase> oldTrack, RefPtr<WebCore::TrackPrivateBase> newTrack);
     void notifySeekNeedsDataForTime(const MediaTime&);
 
@@ -105,10 +101,7 @@ private:
     void asyncStateChangeDone() override;
 
     // FIXME: Implement.
-    unsigned long totalVideoFrames() override { return 0; }
-    unsigned long droppedVideoFrames() override { return 0; }
-    unsigned long corruptedVideoFrames() override { return 0; }
-    MediaTime totalFrameDelay() override { return MediaTime::zeroTime(); }
+    std::optional<PlatformVideoPlaybackQualityMetrics> videoPlaybackQualityMetrics() override { return std::nullopt; }
     bool isTimeBuffered(const MediaTime&) const;
 
     bool isMediaSource() const override { return true; }

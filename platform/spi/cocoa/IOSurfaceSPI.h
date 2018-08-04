@@ -41,9 +41,11 @@
 
 typedef struct __IOSurface *IOSurfaceRef;
 
+#if PLATFORM(IOS) && __IPHONE_OS_VERSION_MIN_REQUIRED < 110000
 enum {
     kIOSurfaceLockReadOnly  = 0x00000001,
 };
+#endif
 
 #endif
 
@@ -79,6 +81,8 @@ Boolean IOSurfaceIsInUse(IOSurfaceRef buffer);
 IOReturn IOSurfaceLock(IOSurfaceRef buffer, uint32_t options, uint32_t *seed);
 IOSurfaceRef IOSurfaceLookupFromMachPort(mach_port_t);
 IOReturn IOSurfaceUnlock(IOSurfaceRef buffer, uint32_t options, uint32_t *seed);
+size_t IOSurfaceGetWidthOfPlane(IOSurfaceRef buffer, size_t planeIndex);
+size_t IOSurfaceGetHeightOfPlane(IOSurfaceRef buffer, size_t planeIndex);
 
 WTF_EXTERN_C_END
 
@@ -88,12 +92,18 @@ WTF_EXTERN_C_END
 
 #else
 
+#if (PLATFORM(IOS) && __IPHONE_OS_VERSION_MIN_REQUIRED >= 110000) || (PLATFORM(MAC) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 101300)
+
+#import <IOSurface/IOSurfaceTypes.h>
+
+#else
 enum {
     kIOSurfacePurgeableNonVolatile = 0,
     kIOSurfacePurgeableVolatile = 1,
     kIOSurfacePurgeableEmpty = 2,
     kIOSurfacePurgeableKeepCurrent = 3,
 };
+#endif
 
 #endif
 
@@ -109,6 +119,10 @@ WTF_EXTERN_C_END
 #import <IOSurfaceAccelerator/IOSurfaceAccelerator.h>
 
 #else
+
+#if __IPHONE_OS_VERSION_MIN_REQUIRED < 110000
+typedef uint32_t IOSurfaceID;
+#endif
 
 typedef struct __IOSurfaceAccelerator *IOSurfaceAcceleratorRef;
 

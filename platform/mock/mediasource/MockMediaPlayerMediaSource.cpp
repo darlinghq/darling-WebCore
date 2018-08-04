@@ -68,13 +68,15 @@ MediaPlayer::SupportsType MockMediaPlayerMediaSource::supportsType(const MediaEn
     if (!parameters.isMediaSource)
         return MediaPlayer::IsNotSupported;
 
-    if (parameters.type.isEmpty() || !mimeTypeCache().contains(parameters.type))
+    auto containerType = parameters.type.containerType();
+    if (containerType.isEmpty() || !mimeTypeCache().contains(containerType))
         return MediaPlayer::IsNotSupported;
 
-    if (parameters.codecs.isEmpty())
+    auto codecs = parameters.type.parameter(ContentType::codecsParameter());
+    if (codecs.isEmpty())
         return MediaPlayer::MayBeSupported;
 
-    return parameters.codecs == "mock" ? MediaPlayer::IsSupported : MediaPlayer::MayBeSupported;
+    return codecs == "mock" ? MediaPlayer::IsSupported : MediaPlayer::MayBeSupported;
 }
 
 MockMediaPlayerMediaSource::MockMediaPlayerMediaSource(MediaPlayer* player)
@@ -272,24 +274,9 @@ void MockMediaPlayerMediaSource::seekCompleted()
         });
 }
 
-unsigned long MockMediaPlayerMediaSource::totalVideoFrames()
+std::optional<PlatformVideoPlaybackQualityMetrics> MockMediaPlayerMediaSource::videoPlaybackQualityMetrics()
 {
-    return m_mediaSourcePrivate ? m_mediaSourcePrivate->totalVideoFrames() : 0;
-}
-
-unsigned long MockMediaPlayerMediaSource::droppedVideoFrames()
-{
-    return m_mediaSourcePrivate ? m_mediaSourcePrivate->droppedVideoFrames() : 0;
-}
-
-unsigned long MockMediaPlayerMediaSource::corruptedVideoFrames()
-{
-    return m_mediaSourcePrivate ? m_mediaSourcePrivate->corruptedVideoFrames() : 0;
-}
-
-MediaTime MockMediaPlayerMediaSource::totalFrameDelay()
-{
-    return m_mediaSourcePrivate ? m_mediaSourcePrivate->totalFrameDelay() : MediaTime::zeroTime();
+    return m_mediaSourcePrivate ? m_mediaSourcePrivate->videoPlaybackQualityMetrics() : std::nullopt;
 }
 
 }

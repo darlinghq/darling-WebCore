@@ -29,8 +29,6 @@
 #include "config.h"
 #include "DatabaseTracker.h"
 
-#include "Chrome.h"
-#include "ChromeClient.h"
 #include "Database.h"
 #include "DatabaseContext.h"
 #include "DatabaseManager.h"
@@ -40,16 +38,16 @@
 #include "FileSystem.h"
 #include "Logging.h"
 #include "OriginLock.h"
-#include "Page.h"
 #include "SecurityOrigin.h"
 #include "SecurityOriginData.h"
 #include "SecurityOriginHash.h"
 #include "SQLiteFileSystem.h"
 #include "SQLiteStatement.h"
-#include "UUID.h"
+#include "SQLiteTransaction.h"
 #include <wtf/MainThread.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/StdLibExtras.h>
+#include <wtf/UUID.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/StringBuilder.h>
 
@@ -779,25 +777,33 @@ void DatabaseTracker::deleteAllDatabasesImmediately()
 void DatabaseTracker::deleteDatabasesModifiedSince(std::chrono::system_clock::time_point time)
 {
     for (auto& origin : origins()) {
-        bool deletedAll = true;
-        for (auto& databaseName : databaseNames(origin)) {
+        Vector<String> databaseNames = this->databaseNames(origin);
+        Vector<String> databaseNamesToDelete;
+        databaseNamesToDelete.reserveInitialCapacity(databaseNames.size());
+        for (const auto& databaseName : databaseNames) {
             auto fullPath = fullPathForDatabase(origin, databaseName, false);
 
-            time_t modificationTime;
-            if (!getFileModificationTime(fullPath, modificationTime)) {
-                deletedAll = false;
-                continue;
+            // If the file doesn't exist, we previously deleted it but failed to remove the information
+            // from the tracker database. We want to delete all of the information associated with this
+            // database from the tracker database, so still add its name to databaseNamesToDelete.
+            if (fileExists(fullPath)) {
+                time_t modificationTime;
+                if (!getFileModificationTime(fullPath, modificationTime))
+                    continue;
+
+                if (modificationTime < std::chrono::system_clock::to_time_t(time))
+                    continue;
             }
 
-            if (modificationTime < std::chrono::system_clock::to_time_t(time)) {
-                deletedAll = false;
-                continue;
-            }
-
-            deleteDatabase(origin, databaseName);
+            databaseNamesToDelete.uncheckedAppend(databaseName);
         }
-        if (deletedAll)
+
+        if (databaseNames.size() == databaseNamesToDelete.size())
             deleteOrigin(origin);
+        else {
+            for (const auto& databaseName : databaseNamesToDelete)
+                deleteDatabase(origin, databaseName);
+        }
     }
 }
 
@@ -818,10 +824,9 @@ bool DatabaseTracker::deleteOrigin(const SecurityOriginData& origin, DeletionMod
             return false;
 
         databaseNames = databaseNamesNoLock(origin);
-        if (databaseNames.isEmpty()) {
+        if (databaseNames.isEmpty())
             LOG_ERROR("Unable to retrieve list of database names for origin %s", origin.databaseIdentifier().utf8().data());
-            return false;
-        }
+
         if (!canDeleteOrigin(origin)) {
             LOG_ERROR("Tried to delete an origin (%s) while either creating database in it or already deleting it", origin.databaseIdentifier().utf8().data());
             ASSERT_NOT_REACHED();
@@ -831,17 +836,45 @@ bool DatabaseTracker::deleteOrigin(const SecurityOriginData& origin, DeletionMod
     }
 
     // We drop the lock here because holding locks during a call to deleteDatabaseFile will deadlock.
+    bool failedToDeleteAnyDatabaseFile = false;
     for (auto& name : databaseNames) {
-        if (!deleteDatabaseFile(origin, name, deletionMode)) {
+        if (fileExists(fullPathForDatabase(origin, name, false)) && !deleteDatabaseFile(origin, name, deletionMode)) {
             // Even if the file can't be deleted, we want to try and delete the rest, don't return early here.
             LOG_ERROR("Unable to delete file for database %s in origin %s", name.utf8().data(), origin.databaseIdentifier().utf8().data());
+            failedToDeleteAnyDatabaseFile = true;
         }
+    }
+
+    // If databaseNames is empty, delete everything in the directory containing the databases for this origin.
+    // This condition indicates that we previously tried to remove the origin but didn't get all of the way
+    // through the deletion process. Because we have lost track of the databases for this origin,
+    // we can assume that no other process is accessing them. This means it should be safe to delete them outright.
+    if (databaseNames.isEmpty()) {
+#if PLATFORM(COCOA)
+        RELEASE_LOG_ERROR(DatabaseTracker, "Unable to retrieve list of database names for origin");
+#endif
+        for (const auto& file : listDirectory(originPath(origin), "*")) {
+            if (!deleteFile(file))
+                failedToDeleteAnyDatabaseFile = true;
+        }
+    }
+
+    // If we failed to delete any database file, don't remove the origin from the tracker
+    // database because we didn't successfully remove all of its data.
+    if (failedToDeleteAnyDatabaseFile) {
+#if PLATFORM(COCOA)
+        RELEASE_LOG_ERROR(DatabaseTracker, "Failed to delete database for origin");
+#endif
+        return false;
     }
 
     {
         LockHolder lockDatabase(m_databaseGuard);
         deleteOriginLockFor(origin);
         doneDeletingOrigin(origin);
+
+        SQLiteTransaction transaction(m_database);
+        transaction.begin();
 
         SQLiteStatement statement(m_database, "DELETE FROM Databases WHERE origin=?");
         if (statement.prepare() != SQLITE_OK) {
@@ -868,6 +901,8 @@ bool DatabaseTracker::deleteOrigin(const SecurityOriginData& origin, DeletionMod
             LOG_ERROR("Unable to execute deletion of databases from origin %s from tracker", origin.databaseIdentifier().utf8().data());
             return false;
         }
+
+        transaction.commit();
 
         SQLiteFileSystem::deleteEmptyDatabaseDirectory(originPath(origin));
 
@@ -1032,7 +1067,7 @@ bool DatabaseTracker::deleteDatabase(const SecurityOriginData& origin, const Str
     }
 
     // We drop the lock here because holding locks during a call to deleteDatabaseFile will deadlock.
-    if (!deleteDatabaseFile(origin, name, DeletionMode::Default)) {
+    if (fileExists(fullPathForDatabase(origin, name, false)) && !deleteDatabaseFile(origin, name, DeletionMode::Default)) {
         LOG_ERROR("Unable to delete file for database %s in origin %s", name.utf8().data(), origin.databaseIdentifier().utf8().data());
         LockHolder lockDatabase(m_databaseGuard);
         doneDeletingDatabase(origin, name);
@@ -1216,7 +1251,7 @@ bool DatabaseTracker::deleteDatabaseFileIfEmpty(const String& path)
     if (!database.open(path))
         return false;
     
-    // Specify that we want the exclusive locking mode, so after the next read,
+    // Specify that we want the exclusive locking mode, so after the next write,
     // we'll be holding the lock to this database file.
     SQLiteStatement lockStatement(database, "PRAGMA locking_mode=EXCLUSIVE;");
     if (lockStatement.prepare() != SQLITE_OK)
@@ -1226,21 +1261,18 @@ bool DatabaseTracker::deleteDatabaseFileIfEmpty(const String& path)
         return false;
     lockStatement.finalize();
 
-    // Every sqlite database has a sqlite_master table that contains the schema for the database.
-    // http://www.sqlite.org/faq.html#q7
-    SQLiteStatement readStatement(database, "SELECT * FROM sqlite_master LIMIT 1;");    
-    if (readStatement.prepare() != SQLITE_OK)
+    if (!database.executeCommand("BEGIN EXCLUSIVE TRANSACTION;"))
         return false;
-    // We shouldn't expect any result.
-    if (readStatement.step() != SQLITE_DONE)
+
+    // At this point, we hold the exclusive lock to this file.
+    // Check that the database doesn't contain any tables.
+    if (!database.executeCommand("SELECT name FROM sqlite_master WHERE type='table';"))
         return false;
-    readStatement.finalize();
-    
-    // At this point, we hold the exclusive lock to this file.  Double-check again to make sure
-    // it's still zero bytes.
-    if (!isZeroByteFile(path))
-        return false;
-    
+
+    database.executeCommand("COMMIT TRANSACTION;");
+
+    database.close();
+
     return SQLiteFileSystem::deleteDatabaseFile(path);
 }
 

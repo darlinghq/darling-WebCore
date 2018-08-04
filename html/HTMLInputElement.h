@@ -2,7 +2,7 @@
  * Copyright (C) 1999 Lars Knoll (knoll@kde.org)
  *           (C) 1999 Antti Koivisto (koivisto@kde.org)
  *           (C) 2000 Dirk Mueller (mueller@kde.org)
- * Copyright (C) 2004-2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Apple Inc. All rights reserved.
  * Copyright (C) 2012 Samsung Electronics. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
@@ -43,8 +43,8 @@ class Icon;
 class InputType;
 class ListAttributeTargetObserver;
 class RadioButtonGroups;
-class TextControlInnerTextElement;
 class URL;
+
 struct DateTimeChooserParameters;
 
 struct InputElementClickState {
@@ -213,6 +213,8 @@ public:
     void willDispatchEvent(Event&, InputElementClickState&);
     void didDispatchClickEvent(Event&, const InputElementClickState&);
 
+    void didBlur();
+
     int maxResults() const { return m_maxResults; }
 
     WEBCORE_EXPORT String defaultValue() const;
@@ -238,7 +240,7 @@ public:
     WEBCORE_EXPORT void setShowAutoFillButton(AutoFillButtonType);
 
     WEBCORE_EXPORT FileList* files();
-    WEBCORE_EXPORT void setFiles(PassRefPtr<FileList>);
+    WEBCORE_EXPORT void setFiles(RefPtr<FileList>&&);
 
 #if ENABLE(DRAG_SUPPORT)
     // Returns true if the given DragData has more than one dropped files.
@@ -246,9 +248,8 @@ public:
 #endif
 
     Icon* icon() const;
-#if PLATFORM(IOS)
     String displayString() const;
-#endif
+
     // These functions are used for rendering the input active during a
     // drag-and-drop operation.
     bool canReceiveDroppedFiles() const;
@@ -323,6 +324,17 @@ public:
 
     bool shouldTruncateText(const RenderStyle&) const;
 
+    ExceptionOr<int> selectionStartForBindings() const;
+    ExceptionOr<void> setSelectionStartForBindings(int);
+
+    ExceptionOr<int> selectionEndForBindings() const;
+    ExceptionOr<void> setSelectionEndForBindings(int);
+
+    ExceptionOr<String> selectionDirectionForBindings() const;
+    ExceptionOr<void> setSelectionDirectionForBindings(const String&);
+
+    ExceptionOr<void> setSelectionRangeForBindings(int start, int end, const String& direction);
+
 protected:
     HTMLInputElement(const QualifiedName&, Document&, HTMLFormElement*, bool createdByParser);
 
@@ -338,7 +350,7 @@ private:
     InsertionNotificationRequest insertedInto(ContainerNode&) final;
     void finishedInsertingSubtree() final;
     void removedFrom(ContainerNode&) final;
-    void didMoveToNewDocument(Document& oldDocument) final;
+    void didMoveToNewDocument(Document& oldDocument, Document& newDocument) final;
 
     bool hasCustomFocusLogic() const final;
     bool isKeyboardFocusable(KeyboardEvent&) const final;

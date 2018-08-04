@@ -29,6 +29,8 @@
 #include "BreakLines.h"
 #include "BreakingContext.h"
 #include "CharacterProperties.h"
+#include "DocumentMarker.h"
+#include "DocumentMarkerController.h"
 #include "EllipsisBox.h"
 #include "FloatQuad.h"
 #include "Frame.h"
@@ -41,6 +43,7 @@
 #include "RenderInline.h"
 #include "RenderLayer.h"
 #include "RenderView.h"
+#include "RenderedDocumentMarker.h"
 #include "Settings.h"
 #include "SimpleLineLayoutFunctions.h"
 #include "Text.h"
@@ -107,7 +110,7 @@ inline SecureTextTimer::SecureTextTimer(RenderText& renderer)
 inline void SecureTextTimer::restart(unsigned offsetAfterLastTypedCharacter)
 {
     m_offsetAfterLastTypedCharacter = offsetAfterLastTypedCharacter;
-    startOneShot(m_renderer.frame().settings().passwordEchoDurationInSeconds());
+    startOneShot(1_s * m_renderer.settings().passwordEchoDurationInSeconds());
 }
 
 inline unsigned SecureTextTimer::takeOffsetAfterLastTypedCharacter()
@@ -208,8 +211,8 @@ RenderText::RenderText(Document& document, const String& text)
 
 RenderText::~RenderText()
 {
-    if (m_originalTextDiffersFromRendered)
-        originalTextMap().remove(this);
+    // Do not add any code here. Add it to willBeDestroyed() instead.
+    ASSERT(!originalTextMap().contains(this));
 }
 
 const char* RenderText::renderName() const
@@ -257,6 +260,8 @@ void RenderText::styleDidChange(StyleDifference diff, const RenderStyle* oldStyl
     if (!oldStyle) {
         m_useBackslashAsYenSymbol = computeUseBackslashAsYenSymbol();
         needsResetText = m_useBackslashAsYenSymbol;
+        // It should really be computed in the c'tor, but during construction we don't have parent yet -and RenderText style == parent()->style()
+        m_canUseSimplifiedTextMeasuring = computeCanUseSimplifiedTextMeasuring();
     } else if (oldStyle->fontCascade().useBackslashAsYenSymbol() != newStyle.fontCascade().useBackslashAsYenSymbol()) {
         m_useBackslashAsYenSymbol = computeUseBackslashAsYenSymbol();
         needsResetText = true;
@@ -270,7 +275,7 @@ void RenderText::styleDidChange(StyleDifference diff, const RenderStyle* oldStyl
 
 void RenderText::removeAndDestroyTextBoxes()
 {
-    if (!documentBeingDestroyed())
+    if (!renderTreeBeingDestroyed())
         m_lineBoxes.removeAllFromParent(*this);
 #if !ASSERT_WITH_SECURITY_IMPLICATION_DISABLED
     else
@@ -284,6 +289,10 @@ void RenderText::willBeDestroyed()
     secureTextTimers().remove(this);
 
     removeAndDestroyTextBoxes();
+
+    if (m_originalTextDiffersFromRendered)
+        originalTextMap().remove(this);
+
     RenderObject::willBeDestroyed();
 }
 
@@ -420,25 +429,38 @@ void RenderText::absoluteQuads(Vector<FloatQuad>& quads, bool* wasFixed) const
 
 Vector<FloatQuad> RenderText::absoluteQuadsForRange(unsigned start, unsigned end, bool useSelectionHeight, bool* wasFixed) const
 {
-    const_cast<RenderText&>(*this).ensureLineBoxes();
-
     // Work around signed/unsigned issues. This function takes unsigneds, and is often passed UINT_MAX
-    // to mean "all the way to the end". InlineTextBox coordinates are unsigneds, so changing this 
-    // function to take ints causes various internal mismatches. But selectionRect takes ints, and 
-    // passing UINT_MAX to it causes trouble. Ideally we'd change selectionRect to take unsigneds, but 
+    // to mean "all the way to the end". InlineTextBox coordinates are unsigneds, so changing this
+    // function to take ints causes various internal mismatches. But selectionRect takes ints, and
+    // passing UINT_MAX to it causes trouble. Ideally we'd change selectionRect to take unsigneds, but
     // that would cause many ripple effects, so for now we'll just clamp our unsigned parameters to INT_MAX.
     ASSERT(end == UINT_MAX || end <= INT_MAX);
     ASSERT(start <= INT_MAX);
     start = std::min(start, static_cast<unsigned>(INT_MAX));
     end = std::min(end, static_cast<unsigned>(INT_MAX));
-    
+    if (simpleLineLayout() && !useSelectionHeight)
+        return collectAbsoluteQuadsForRange(*this, start, end, *simpleLineLayout(), wasFixed);
+    const_cast<RenderText&>(*this).ensureLineBoxes();
     return m_lineBoxes.absoluteQuadsForRange(*this, start, end, useSelectionHeight, wasFixed);
+}
+
+Position RenderText::positionForPoint(const LayoutPoint& point)
+{
+    if (simpleLineLayout() && parent()->firstChild() == parent()->lastChild()) {
+        auto offset = SimpleLineLayout::textOffsetForPoint(point, *this, *simpleLineLayout());
+        // Did not find a valid offset. Fall back to the normal line layout based Position.
+        if (offset == textLength())
+            return positionForPoint(point, nullptr).deepEquivalent();
+        auto position = Position(textNode(), offset);
+        ASSERT(position == positionForPoint(point, nullptr).deepEquivalent());
+        return position;
+    }
+    return positionForPoint(point, nullptr).deepEquivalent();
 }
 
 VisiblePosition RenderText::positionForPoint(const LayoutPoint& point, const RenderRegion*)
 {
     ensureLineBoxes();
-
     return m_lineBoxes.positionForPoint(*this, point);
 }
 
@@ -795,7 +817,8 @@ void RenderText::computePreferredLogicalWidths(float leadWidth, HashSet<const Fo
     const FontCascade& font = style.fontCascade(); // FIXME: This ignores first-line.
     float wordSpacing = font.wordSpacing();
     unsigned len = textLength();
-    LazyLineBreakIterator breakIterator(m_text, style.locale(), mapLineBreakToIteratorMode(style.lineBreak()));
+    auto iteratorMode = mapLineBreakToIteratorMode(style.lineBreak());
+    LazyLineBreakIterator breakIterator(m_text, style.locale(), iteratorMode);
     bool needsWordSpacing = false;
     bool ignoringSpaces = false;
     bool isSpace = false;
@@ -804,8 +827,6 @@ void RenderText::computePreferredLogicalWidths(float leadWidth, HashSet<const Fo
     std::optional<unsigned> nextBreakable;
     unsigned lastWordBoundary = 0;
 
-    // Non-zero only when kerning is enabled, in which case we measure words with their trailing
-    // space, then subtract its width.
     WordTrailingSpace wordTrailingSpace(style);
     // If automatic hyphenation is allowed, we keep track of the width of the widest word (or word
     // fragment) encountered so far, and only try hyphenating words that are wider.
@@ -832,7 +853,7 @@ void RenderText::computePreferredLogicalWidths(float leadWidth, HashSet<const Fo
     // word-break, but we support it as though it means break-all.
     bool breakAll = (style.wordBreak() == BreakAllWordBreak || style.wordBreak() == BreakWordBreak) && style.autoWrap();
     bool keepAllWords = style.wordBreak() == KeepAllWordBreak;
-    bool isLooseCJKMode = breakIterator.isLooseCJKMode();
+    bool canUseLineBreakShortcut = iteratorMode == LineBreakIteratorMode::Default;
 
     for (unsigned i = 0; i < len; i++) {
         UChar c = uncheckedCharacterAt(i);
@@ -878,7 +899,7 @@ void RenderText::computePreferredLogicalWidths(float leadWidth, HashSet<const Fo
             continue;
         }
 
-        bool hasBreak = breakAll || isBreakable(breakIterator, i, nextBreakable, breakNBSP, isLooseCJKMode, keepAllWords);
+        bool hasBreak = breakAll || isBreakable(breakIterator, i, nextBreakable, breakNBSP, canUseLineBreakShortcut, keepAllWords);
         bool betweenWords = true;
         unsigned j = i;
         while (c != '\n' && !isSpaceAccordingToStyle(c, style) && c != '\t' && (c != softHyphen || style.hyphens() == HyphensNone)) {
@@ -886,7 +907,7 @@ void RenderText::computePreferredLogicalWidths(float leadWidth, HashSet<const Fo
             if (j == len)
                 break;
             c = uncheckedCharacterAt(j);
-            if (isBreakable(breakIterator, j, nextBreakable, breakNBSP, isLooseCJKMode, keepAllWords) && characterAt(j - 1) != softHyphen)
+            if (isBreakable(breakIterator, j, nextBreakable, breakNBSP, canUseLineBreakShortcut, keepAllWords) && characterAt(j - 1) != softHyphen)
                 break;
             if (breakAll) {
                 betweenWords = false;
@@ -1049,6 +1070,30 @@ bool RenderText::containsOnlyWhitespace(unsigned from, unsigned len) const
     return currPos >= (from + len);
 }
 
+Vector<std::pair<unsigned, unsigned>> RenderText::draggedContentRangesBetweenOffsets(unsigned startOffset, unsigned endOffset) const
+{
+    if (!textNode())
+        return { };
+
+    auto markers = document().markers().markersFor(textNode(), DocumentMarker::DraggedContent);
+    if (markers.isEmpty())
+        return { };
+
+    Vector<std::pair<unsigned, unsigned>> draggedContentRanges;
+    for (auto* marker : markers) {
+        unsigned markerStart = std::max(marker->startOffset(), startOffset);
+        unsigned markerEnd = std::min(marker->endOffset(), endOffset);
+        if (markerStart >= markerEnd || markerStart > endOffset || markerEnd < startOffset)
+            continue;
+
+        std::pair<unsigned, unsigned> draggedContentRange;
+        draggedContentRange.first = markerStart;
+        draggedContentRange.second = markerEnd;
+        draggedContentRanges.append(draggedContentRange);
+    }
+    return draggedContentRanges;
+}
+
 IntPoint RenderText::firstRunLocation() const
 {
     if (auto* layout = simpleLineLayout())
@@ -1179,7 +1224,8 @@ void RenderText::setRenderedText(const String& text)
 
     m_isAllASCII = m_text.containsOnlyASCII();
     m_canUseSimpleFontCodePath = computeCanUseSimpleFontCodePath();
-
+    m_canUseSimplifiedTextMeasuring = computeCanUseSimplifiedTextMeasuring();
+    
     if (m_text != originalText) {
         originalTextMap().set(this, originalText);
         m_originalTextDiffersFromRendered = true;
@@ -1221,6 +1267,29 @@ void RenderText::secureText(UChar maskingCharacter)
         characters[revealedCharactersOffset] = characterToReveal;
 }
 
+bool RenderText::computeCanUseSimplifiedTextMeasuring() const
+{
+    if (!m_canUseSimpleFontCodePath)
+        return false;
+    
+    auto& font = style().fontCascade();
+    if (font.wordSpacing() || font.letterSpacing())
+        return false;
+
+    // Additional check on the font codepath.
+    TextRun run(m_text);
+    run.setCharacterScanForCodePath(false);
+    if (font.codePath(run) != FontCascade::Simple)
+        return false;
+
+    auto whitespaceIsCollapsed = style().collapseWhiteSpace();
+    for (unsigned i = 0; i < m_text.length(); ++i) {
+        if ((!whitespaceIsCollapsed && m_text[i] == '\t') || m_text[i] == noBreakSpace || m_text[i] >= HiraganaLetterSmallA)
+            return false;
+    }
+    return true;
+}
+
 void RenderText::setText(const String& text, bool force)
 {
     ASSERT(!text.isNull());
@@ -1243,7 +1312,7 @@ void RenderText::setText(const String& text, bool force)
         downcast<RenderBlockFlow>(*parent()).invalidateLineLayoutPath();
     
     if (AXObjectCache* cache = document().existingAXObjectCache())
-        cache->textChanged(this);
+        cache->deferTextChangedIfNeeded(textNode());
 }
 
 String RenderText::textWithoutConvertingBackslashToYenSymbol() const
@@ -1468,179 +1537,16 @@ int RenderText::previousOffset(int current) const
     if (isAllASCII() || m_text.is8Bit())
         return current - 1;
 
-    StringImpl* textImpl = m_text.impl();
-    UBreakIterator* iterator = cursorMovementIterator(StringView(textImpl->characters16(), textImpl->length()));
-    if (!iterator)
-        return current - 1;
-
-    long result = ubrk_preceding(iterator, current);
-    if (result == UBRK_DONE)
-        result = current - 1;
-
-
-    return result;
+    CachedTextBreakIterator iterator(m_text, TextBreakIterator::Mode::Caret, nullAtom());
+    return iterator.preceding(current).value_or(current - 1);
 }
-
-#if PLATFORM(COCOA) || PLATFORM(EFL) || PLATFORM(GTK)
-
-const UChar hangulChoseongStart = 0x1100;
-const UChar hangulChoseongEnd = 0x115F;
-const UChar hangulJungseongStart = 0x1160;
-const UChar hangulJungseongEnd = 0x11A2;
-const UChar hangulJongseongStart = 0x11A8;
-const UChar hangulJongseongEnd = 0x11F9;
-const UChar hangulSyllableStart = 0xAC00;
-const UChar hangulSyllableEnd = 0xD7AF;
-const UChar hangulJongseongCount = 28;
-
-enum class HangulState { L, V, T, LV, LVT, Break };
-
-static inline bool isHangulLVT(UChar character)
-{
-    return (character - hangulSyllableStart) % hangulJongseongCount;
-}
-
-static inline bool isMark(UChar32 character)
-{
-    return U_GET_GC_MASK(character) & U_GC_M_MASK;
-}
-
-static inline bool isRegionalIndicator(UChar32 character)
-{
-    // National flag emoji each consists of a pair of regional indicator symbols.
-    return 0x1F1E6 <= character && character <= 0x1F1FF;
-}
-
-static inline bool isInArmenianToLimbuRange(UChar32 character)
-{
-    return character >= 0x0530 && character < 0x1950;
-}
-
-#endif
 
 int RenderText::previousOffsetForBackwardDeletion(int current) const
 {
     ASSERT(!m_text.isNull());
-    StringImpl& text = *m_text.impl();
 
-    // FIXME: Unclear why this has so much handrolled code rather than using UBreakIterator.
-    // Also unclear why this is so different from advanceByCombiningCharacterSequence.
-
-    // FIXME: Seems like this fancier case could be used on all platforms now, no
-    // need for the #else case below.
-#if PLATFORM(COCOA) || PLATFORM(EFL) || PLATFORM(GTK)
-    bool sawRegionalIndicator = false;
-    bool sawEmojiGroupCandidate = false;
-    bool sawEmojiFitzpatrickModifier = false;
-    
-    while (current > 0) {
-        UChar32 character;
-        U16_PREV(text, 0, current, character);
-
-        if (sawEmojiGroupCandidate) {
-            sawEmojiGroupCandidate = false;
-            if (character == zeroWidthJoiner)
-                continue;
-            // We could have two emoji group candidates without a joiner in between.
-            // Those should not be treated as a group.
-            U16_FWD_1_UNSAFE(text, current);
-            break;
-        }
-
-        if (sawEmojiFitzpatrickModifier) {
-            if (isEmojiFitzpatrickModifier(character)) {
-                // Don't treat two emoji modifiers in a row as a group.
-                U16_FWD_1_UNSAFE(text, current);
-                break;
-            }
-            if (!isVariationSelector(character))
-                break;
-        }
-
-        if (sawRegionalIndicator) {
-            // We don't check if the pair of regional indicator symbols before current position can actually be combined
-            // into a flag, and just delete it. This may not agree with how the pair is rendered in edge cases,
-            // but is good enough in practice.
-            if (isRegionalIndicator(character))
-                break;
-            // Don't delete a preceding character that isn't a regional indicator symbol.
-            U16_FWD_1_UNSAFE(text, current);
-        }
-
-        // We don't combine characters in Armenian ... Limbu range for backward deletion.
-        if (isInArmenianToLimbuRange(character))
-            break;
-
-        if (isRegionalIndicator(character)) {
-            sawRegionalIndicator = true;
-            continue;
-        }
-        
-        if (isEmojiFitzpatrickModifier(character)) {
-            sawEmojiFitzpatrickModifier = true;
-            continue;
-        }
-
-        if (isEmojiGroupCandidate(character)) {
-            sawEmojiGroupCandidate = true;
-            continue;
-        }
-
-        // FIXME: Why are FF9E and FF9F special cased here?
-        if (!isMark(character) && character != 0xFF9E && character != 0xFF9F)
-            break;
-    }
-
-    if (current <= 0)
-        return current;
-
-    // Hangul
-    UChar character = text[current];
-    if ((character >= hangulChoseongStart && character <= hangulJongseongEnd) || (character >= hangulSyllableStart && character <= hangulSyllableEnd)) {
-        HangulState state;
-
-        if (character < hangulJungseongStart)
-            state = HangulState::L;
-        else if (character < hangulJongseongStart)
-            state = HangulState::V;
-        else if (character < hangulSyllableStart)
-            state = HangulState::T;
-        else
-            state = isHangulLVT(character) ? HangulState::LVT : HangulState::LV;
-
-        while (current > 0 && (character = text[current - 1]) >= hangulChoseongStart && character <= hangulSyllableEnd && (character <= hangulJongseongEnd || character >= hangulSyllableStart)) {
-            switch (state) {
-            case HangulState::V:
-                if (character <= hangulChoseongEnd)
-                    state = HangulState::L;
-                else if (character >= hangulSyllableStart && character <= hangulSyllableEnd && !isHangulLVT(character))
-                    state = HangulState::LV;
-                else if (character > hangulJungseongEnd)
-                    state = HangulState::Break;
-                break;
-            case HangulState::T:
-                if (character >= hangulJungseongStart && character <= hangulJungseongEnd)
-                    state = HangulState::V;
-                else if (character >= hangulSyllableStart && character <= hangulSyllableEnd)
-                    state = isHangulLVT(character) ? HangulState::LVT : HangulState::LV;
-                else if (character < hangulJungseongStart)
-                    state = HangulState::Break;
-                break;
-            default:
-                state = (character < hangulJungseongStart) ? HangulState::L : HangulState::Break;
-                break;
-            }
-            if (state == HangulState::Break)
-                break;
-            --current;
-        }
-    }
-
-    return current;
-#else
-    U16_BACK_1(text, 0, current);
-    return current;
-#endif
+    CachedTextBreakIterator iterator(m_text, TextBreakIterator::Mode::Delete, nullAtom());
+    return iterator.preceding(current).value_or(0);
 }
 
 int RenderText::nextOffset(int current) const
@@ -1648,16 +1554,8 @@ int RenderText::nextOffset(int current) const
     if (isAllASCII() || m_text.is8Bit())
         return current + 1;
 
-    StringImpl* textImpl = m_text.impl();
-    UBreakIterator* iterator = cursorMovementIterator(StringView(textImpl->characters16(), textImpl->length()));
-    if (!iterator)
-        return current + 1;
-
-    long result = ubrk_following(iterator, current);
-    if (result == UBRK_DONE)
-        result = current + 1;
-
-    return result;
+    CachedTextBreakIterator iterator(m_text, TextBreakIterator::Mode::Caret, nullAtom());
+    return iterator.following(current).value_or(current + 1);
 }
 
 bool RenderText::computeCanUseSimpleFontCodePath() const

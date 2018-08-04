@@ -54,7 +54,7 @@ TextureCacheCV::TextureCacheCV(GraphicsContext3D& context, RetainPtr<TextureCach
 {
 }
 
-RetainPtr<TextureCacheCV::TextureType> TextureCacheCV::textureFromImage(CVImageBufferRef image, GC3Denum outputTarget, GC3Dint level, GC3Denum internalFormat, GC3Denum format, GC3Denum type)
+RetainPtr<TextureCacheCV::TextureType> TextureCacheCV::textureFromImage(CVPixelBufferRef image, GC3Denum outputTarget, GC3Dint level, GC3Denum internalFormat, GC3Denum format, GC3Denum type)
 {
     TextureType bareVideoTexture = nullptr;
 #if PLATFORM(IOS)
@@ -75,6 +75,9 @@ RetainPtr<TextureCacheCV::TextureType> TextureCacheCV::textureFromImage(CVImageB
 
     auto weakThis = m_weakPtrFactory.createWeakPtr();
     dispatch_async(dispatch_get_main_queue(), [weakThis] {
+        if (!weakThis)
+            return;
+        
         if (auto cache = weakThis->m_cache.get())
 #if PLATFORM(IOS)
             CVOpenGLESTextureCacheFlush(cache, 0);

@@ -30,16 +30,14 @@
 #import "GraphicsLayerCA.h"
 #import "PlatformCALayer.h"
 #import <QuartzCore/QuartzCore.h>
+#import "QuartzCoreSPI.h"
+#import <wtf/SetForScope.h>
 
 #if PLATFORM(IOS)
 #import "WKGraphics.h"
 #import "WAKWindow.h"
 #import "WebCoreThread.h"
 #endif
-
-@interface CALayer(WebCoreCALayerPrivate)
-- (void)reloadValueForKeyPath:(NSString *)keyPath;
-@end
 
 using namespace WebCore;
 
@@ -56,13 +54,21 @@ using namespace WebCore;
     PlatformCALayer* layer = PlatformCALayer::platformCALayer(self);
     if (layer) {
         PlatformCALayer::RepaintRectList rectsToPaint = PlatformCALayer::collectRectsToPaint(context, layer);
-        PlatformCALayer::drawLayerContents(context, layer, rectsToPaint);
+        PlatformCALayer::drawLayerContents(context, layer, rectsToPaint, self.isRenderingInContext ? GraphicsLayerPaintSnapshotting : GraphicsLayerPaintNormal);
     }
 }
 
 @end // implementation WebLayer
 
 @implementation WebSimpleLayer
+
+@synthesize isRenderingInContext = _isRenderingInContext;
+
+- (void)renderInContext:(CGContextRef)context
+{
+    SetForScope<BOOL> change(_isRenderingInContext, YES);
+    [super renderInContext:context];
+}
 
 - (id<CAAction>)actionForKey:(NSString *)key
 {
@@ -128,7 +134,7 @@ using namespace WebCore;
         graphicsContext.setIsAcceleratedContext(layer->acceleratesDrawing());
 
         FloatRect clipBounds = CGContextGetClipBoundingBox(context);
-        layer->owner()->platformCALayerPaintContents(layer, graphicsContext, clipBounds);
+        layer->owner()->platformCALayerPaintContents(layer, graphicsContext, clipBounds, self.isRenderingInContext ? GraphicsLayerPaintSnapshotting : GraphicsLayerPaintNormal);
     }
 }
 

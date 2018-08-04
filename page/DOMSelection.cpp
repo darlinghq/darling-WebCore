@@ -32,12 +32,12 @@
 #include "DOMSelection.h"
 
 #include "Document.h"
+#include "Editing.h"
 #include "ExceptionCode.h"
 #include "Frame.h"
 #include "FrameSelection.h"
 #include "Range.h"
 #include "TextIterator.h"
-#include "htmlediting.h"
 
 namespace WebCore {
 
@@ -304,7 +304,11 @@ ExceptionOr<Ref<Range>> DOMSelection::getRangeAt(unsigned index)
         return Range::create(shadowAncestor->document(), container, offset, container, offset);
     }
 
-    return m_frame->selection().selection().firstRange().releaseNonNull();
+    auto firstRange = m_frame->selection().selection().firstRange();
+    ASSERT(firstRange);
+    if (!firstRange)
+        return Exception { INDEX_SIZE_ERR };
+    return firstRange.releaseNonNull();
 }
 
 void DOMSelection::removeAllRanges()
@@ -390,9 +394,11 @@ bool DOMSelection::containsNode(Node& node, bool allowPartial) const
 
     Ref<Node> protectedNode(node);
     auto selectedRange = selection.selection().toNormalizedRange();
+    if (!selectedRange)
+        return false;
 
     ContainerNode* parentNode = node.parentNode();
-    if (!parentNode || !parentNode->inDocument())
+    if (!parentNode || !parentNode->isConnected())
         return false;
     unsigned nodeIndex = node.computeNodeIndex();
 
