@@ -25,15 +25,13 @@
 
 #pragma once
 
-#if ENABLE(MEDIA_STREAM)
-
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
 class CaptureDevice {
 public:
-    enum class DeviceType { Unknown, Audio, Video };
+    enum class DeviceType { Unknown, Microphone, Speaker, Camera, Screen, Window };
 
     CaptureDevice(const String& persistentId, DeviceType type, const String& label, const String& groupId = emptyString())
         : m_persistentId(persistentId)
@@ -46,28 +44,119 @@ public:
     CaptureDevice() = default;
 
     const String& persistentId() const { return m_persistentId; }
-    void setPersistentId(const String& id) { m_persistentId = id; }
 
-    const String& label() const { return m_label; }
-    void setLabel(const String& label) { m_label = label; }
+    const String& label() const
+    {
+        static NeverDestroyed<String> airPods(MAKE_STATIC_STRING_IMPL("AirPods"));
 
+        if ((m_type == DeviceType::Microphone || m_type == DeviceType::Speaker) && m_label.contains(airPods))
+            return airPods;
+
+        return m_label;
+    }
+
+    void setGroupId(const String& groupId) { m_groupId = groupId; }
     const String& groupId() const { return m_groupId; }
-    void setGroupId(const String& id) { m_groupId = id; }
 
     DeviceType type() const { return m_type; }
-    void setType(DeviceType type) { m_type = type; }
 
     bool enabled() const { return m_enabled; }
     void setEnabled(bool enabled) { m_enabled = enabled; }
 
-private:
+    bool isDefault() const { return m_default; }
+    void setIsDefault(bool isDefault) { m_default = isDefault; }
+
+    bool isMockDevice() const { return m_isMockDevice; }
+    void setIsMockDevice(bool isMockDevice) { m_isMockDevice = isMockDevice; }
+
+    explicit operator bool() const { return m_type != DeviceType::Unknown; }
+
+#if ENABLE(MEDIA_STREAM)
+    template<class Encoder>
+    void encode(Encoder& encoder) const
+    {
+        encoder << m_persistentId;
+        encoder << m_label;
+        encoder << m_groupId;
+        encoder << m_enabled;
+        encoder << m_default;
+        encoder << m_type;
+        encoder << m_isMockDevice;
+    }
+
+    template <class Decoder>
+    static Optional<CaptureDevice> decode(Decoder& decoder)
+    {
+        Optional<String> persistentId;
+        decoder >> persistentId;
+        if (!persistentId)
+            return WTF::nullopt;
+
+        Optional<String> label;
+        decoder >> label;
+        if (!label)
+            return WTF::nullopt;
+
+        Optional<String> groupId;
+        decoder >> groupId;
+        if (!groupId)
+            return WTF::nullopt;
+
+        Optional<bool> enabled;
+        decoder >> enabled;
+        if (!enabled)
+            return WTF::nullopt;
+
+        Optional<bool> isDefault;
+        decoder >> isDefault;
+        if (!isDefault)
+            return WTF::nullopt;
+
+        Optional<CaptureDevice::DeviceType> type;
+        decoder >> type;
+        if (!type)
+            return WTF::nullopt;
+
+        Optional<bool> isMockDevice;
+        decoder >> isMockDevice;
+        if (!isMockDevice)
+            return WTF::nullopt;
+
+        Optional<CaptureDevice> device = {{ WTFMove(*persistentId), WTFMove(*type), WTFMove(*label), WTFMove(*groupId) }};
+        device->setEnabled(*enabled);
+        device->setIsDefault(*isDefault);
+        device->setIsMockDevice(*isMockDevice);
+        return device;
+    }
+#endif
+
+protected:
     String m_persistentId;
     DeviceType m_type { DeviceType::Unknown };
     String m_label;
     String m_groupId;
     bool m_enabled { false };
+    bool m_default { false };
+    bool m_isMockDevice { false };
 };
 
 } // namespace WebCore
 
-#endif // ENABLE(MEDIA_STREAM)
+#if ENABLE(MEDIA_STREAM)
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::CaptureDevice::DeviceType> {
+    using values = EnumValues<
+        WebCore::CaptureDevice::DeviceType,
+        WebCore::CaptureDevice::DeviceType::Unknown,
+        WebCore::CaptureDevice::DeviceType::Microphone,
+        WebCore::CaptureDevice::DeviceType::Speaker,
+        WebCore::CaptureDevice::DeviceType::Camera,
+        WebCore::CaptureDevice::DeviceType::Screen,
+        WebCore::CaptureDevice::DeviceType::Window
+    >;
+};
+
+} // namespace WTF
+#endif
+

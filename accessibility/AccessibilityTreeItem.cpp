@@ -41,13 +41,16 @@ AccessibilityTreeItem::AccessibilityTreeItem(RenderObject* renderer)
 {
 }
     
-AccessibilityTreeItem::~AccessibilityTreeItem()
-{
-}
+AccessibilityTreeItem::~AccessibilityTreeItem() = default;
     
 Ref<AccessibilityTreeItem> AccessibilityTreeItem::create(RenderObject* renderer)
 {
     return adoptRef(*new AccessibilityTreeItem(renderer));
+}
+
+bool AccessibilityTreeItem::supportsCheckedState() const
+{
+    return hasAttribute(aria_checkedAttr);
 }
 
 AccessibilityRole AccessibilityTreeItem::determineAccessibilityRole()

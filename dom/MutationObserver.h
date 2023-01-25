@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2011 Google Inc. All rights reserved.
+ * Copyright (C) 2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -31,23 +32,27 @@
 #pragma once
 
 #include "ExceptionOr.h"
+#include "GCReachableRef.h"
 #include <wtf/Forward.h>
 #include <wtf/HashSet.h>
+#include <wtf/IsoMalloc.h>
 #include <wtf/Vector.h>
 
 namespace WebCore {
 
+class Document;
 class HTMLSlotElement;
 class MutationCallback;
 class MutationObserverRegistration;
 class MutationRecord;
 class Node;
+class WindowEventLoop;
 
 using MutationObserverOptions = unsigned char;
 using MutationRecordDeliveryOptions = unsigned char;
 
-class MutationObserver : public RefCounted<MutationObserver> {
-    friend class MutationObserverMicrotask;
+class MutationObserver final : public RefCounted<MutationObserver> {
+    WTF_MAKE_ISO_ALLOCATED(MutationObserver);
 public:
     enum MutationType {
         ChildList = 1 << 0,
@@ -73,37 +78,46 @@ public:
 
     struct Init {
         bool childList;
-        std::optional<bool> attributes;
-        std::optional<bool> characterData;
+        Optional<bool> attributes;
+        Optional<bool> characterData;
         bool subtree;
-        std::optional<bool> attributeOldValue;
-        std::optional<bool> characterDataOldValue;
-        std::optional<Vector<String>> attributeFilter;
+        Optional<bool> attributeOldValue;
+        Optional<bool> characterDataOldValue;
+        Optional<Vector<String>> attributeFilter;
     };
 
     ExceptionOr<void> observe(Node&, const Init&);
-    Vector<Ref<MutationRecord>> takeRecords();
+    
+    struct TakenRecords {
+        Vector<Ref<MutationRecord>> records;
+        HashSet<GCReachableRef<Node>> pendingTargets;
+    };
+    TakenRecords takeRecords();
     void disconnect();
 
     void observationStarted(MutationObserverRegistration&);
     void observationEnded(MutationObserverRegistration&);
     void enqueueMutationRecord(Ref<MutationRecord>&&);
-    void setHasTransientRegistration();
+    void setHasTransientRegistration(Document&);
     bool canDeliver();
 
     HashSet<Node*> observedNodes() const;
 
+    MutationCallback& callback() const { return m_callback.get(); }
+
     static void enqueueSlotChangeEvent(HTMLSlotElement&);
+
+    static void notifyMutationObservers(WindowEventLoop&);
 
 private:
     explicit MutationObserver(Ref<MutationCallback>&&);
     void deliver();
 
-    static void notifyMutationObservers();
     static bool validateOptions(MutationObserverOptions);
 
     Ref<MutationCallback> m_callback;
     Vector<Ref<MutationRecord>> m_records;
+    HashSet<GCReachableRef<Node>> m_pendingTargets;
     HashSet<MutationObserverRegistration*> m_registrations;
     unsigned m_priority;
 };

@@ -25,8 +25,6 @@
 
 #pragma once
 
-#if USE(REQUEST_ANIMATION_FRAME_DISPLAY_MONITOR)
-
 #include "PlatformScreen.h"
 #include <wtf/Forward.h>
 #include <wtf/Optional.h>
@@ -56,9 +54,7 @@ public:
 
 private:
     bool m_scheduled { false };
-    std::optional<PlatformDisplayID> m_displayID;
+    Optional<PlatformDisplayID> m_displayID;
 };
 
 }
-
-#endif // USE(REQUEST_ANIMATION_FRAME_DISPLAY_MONITOR)

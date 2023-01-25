@@ -38,21 +38,16 @@ AccessibilitySVGRoot::AccessibilitySVGRoot(RenderObject* renderer)
 {
 }
 
-AccessibilitySVGRoot::~AccessibilitySVGRoot()
-{
-}
+AccessibilitySVGRoot::~AccessibilitySVGRoot() = default;
 
 Ref<AccessibilitySVGRoot> AccessibilitySVGRoot::create(RenderObject* renderer)
 {
     return adoptRef(*new AccessibilitySVGRoot(renderer));
 }
 
-void AccessibilitySVGRoot::setParent(AccessibilityRenderObject *parent)
+void AccessibilitySVGRoot::setParent(AccessibilityRenderObject* parent)
 {
-    if (parent)
-        m_parent = parent->createWeakPtr();
-    else
-        m_parent = nullptr;
+    m_parent = makeWeakPtr(parent);
 }
     
 AccessibilityObject* AccessibilitySVGRoot::parentObject() const
@@ -65,5 +60,52 @@ AccessibilityObject* AccessibilitySVGRoot::parentObject() const
     return AccessibilitySVGElement::parentObject();
 }
 
-    
+AccessibilityRole AccessibilitySVGRoot::roleValue() const
+{
+    AccessibilityRole ariaRole = ariaRoleAttribute();
+    if (ariaRole != AccessibilityRole::Unknown)
+        return ariaRole;
+
+    return AccessibilityRole::Group;
+}
+
+bool AccessibilitySVGRoot::hasAccessibleContent() const
+{
+    auto* rootElement = this->element();
+    if (!rootElement)
+        return false;
+
+    auto isAccessibleSVGElement = [] (const Element& element) -> bool {
+        if (!is<SVGElement>(element))
+            return false;
+
+        // The presence of an SVGTitle or SVGDesc element is enough to deem the SVG hierarchy as accessible.
+        if (is<SVGTitleElement>(element)
+            || is<SVGDescElement>(element))
+            return true;
+
+        // Text content is accessible.
+        if (downcast<SVGElement>(element).isTextContent())
+            return true;
+
+        // If the role or aria-label attributes are specified, this is accessible.
+        if (!element.attributeWithoutSynchronization(roleAttr).isEmpty()
+            || !element.attributeWithoutSynchronization(aria_labelAttr).isEmpty())
+            return true;
+
+        return false;
+    };
+
+    if (isAccessibleSVGElement(*rootElement))
+        return true;
+
+    // This SVG hierarchy is accessible if any of its descendants is accessible.
+    for (const auto& descendant : descendantsOfType<SVGElement>(*rootElement)) {
+        if (isAccessibleSVGElement(descendant))
+            return true;
+    }
+
+    return false;
+}
+
 } // namespace WebCore

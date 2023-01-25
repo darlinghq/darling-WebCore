@@ -32,7 +32,8 @@
 
 #include "FormState.h"
 #include "FrameLoaderTypes.h"
-#include "URL.h"
+#include <wtf/URL.h>
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
@@ -40,16 +41,16 @@ class Event;
 class FormData;
 class FrameLoadRequest;
 
-class FormSubmission : public RefCounted<FormSubmission> {
+class FormSubmission : public RefCounted<FormSubmission>, public CanMakeWeakPtr<FormSubmission> {
 public:
-    enum class Method { Get, Post };
+    enum class Method : bool { Get, Post };
 
     class Attributes {
     public:
         Method method() const { return m_method; }
         static Method parseMethodType(const String&);
         void updateMethodType(const String&);
-        static ASCIILiteral methodString(Method method) { return ASCIILiteral { method == Method::Post ? "post" : "get" }; }
+        static ASCIILiteral methodString(Method method) { return method == Method::Post ? "post"_s : "get"_s; }
 
         const String& action() const { return m_action; }
         void parseAction(const String&);
@@ -70,7 +71,7 @@ public:
         bool m_isMultiPartForm { false };
         String m_action;
         String m_target;
-        String m_encodingType { ASCIILiteral { "application/x-www-form-urlencoded" } };
+        String m_encodingType { "application/x-www-form-urlencoded"_s };
         String m_acceptCharset;
     };
 
@@ -83,7 +84,8 @@ public:
     const URL& action() const { return m_action; }
     const String& target() const { return m_target; }
     const String& contentType() const { return m_contentType; }
-    FormState& state() const { return m_formState; }
+    FormState& state() const { return *m_formState; }
+    Ref<FormState> takeState() { return m_formState.releaseNonNull(); }
     FormData& data() const { return m_formData; }
     const String boundary() const { return m_boundary; }
     LockHistory lockHistory() const { return m_lockHistory; }
@@ -95,15 +97,19 @@ public:
     void setReferrer(const String& referrer) { m_referrer = referrer; }
     void setOrigin(const String& origin) { m_origin = origin; }
 
+    void cancel() { m_wasCancelled = true; }
+    bool wasCancelled() const { return m_wasCancelled; }
+
 private:
     FormSubmission(Method, const URL& action, const String& target, const String& contentType, Ref<FormState>&&, Ref<FormData>&&, const String& boundary, LockHistory, Event*);
 
     // FIXME: Hold an instance of Attributes instead of individual members.
     Method m_method;
+    bool m_wasCancelled { false };
     URL m_action;
     String m_target;
     String m_contentType;
-    Ref<FormState> m_formState;
+    RefPtr<FormState> m_formState;
     Ref<FormData> m_formData;
     String m_boundary;
     LockHistory m_lockHistory;

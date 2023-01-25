@@ -25,7 +25,6 @@
 #include "FontPlatformData.h"
 #include "OpenTypeUtilities.h"
 #include "SharedBuffer.h"
-
 #include <cairo-win32.h>
 #include <wtf/RetainPtr.h>
 #include <wtf/text/Base64.h>
@@ -35,18 +34,18 @@ namespace WebCore {
 
 FontCustomPlatformData::~FontCustomPlatformData()
 {
-    if (m_fontReference)
-        RemoveFontMemResourceEx(m_fontReference);
+    if (fontReference)
+        RemoveFontMemResourceEx(fontReference);
 }
 
-FontPlatformData FontCustomPlatformData::fontPlatformData(const FontDescription& fontDescription, bool bold, bool italic)
+FontPlatformData FontCustomPlatformData::fontPlatformData(const FontDescription& fontDescription, bool bold, bool italic, const FontFeatureSettings&, FontSelectionSpecifiedCapabilities)
 {
     int size = fontDescription.computedPixelSize();
     FontRenderingMode renderingMode = fontDescription.renderingMode();
 
     LOGFONT logFont;
     memset(&logFont, 0, sizeof(LOGFONT));
-    wcsncpy(logFont.lfFaceName, m_name.charactersWithNullTermination().data(), LF_FACESIZE - 1);
+    wcsncpy(logFont.lfFaceName, name.wideCharacters().data(), LF_FACESIZE - 1);
 
     logFont.lfHeight = -size;
     if (renderingMode == FontRenderingMode::Normal)
@@ -84,7 +83,7 @@ static String createUniqueFontName()
     return fontName;
 }
 
-std::unique_ptr<FontCustomPlatformData> createFontCustomPlatformData(SharedBuffer& buffer)
+std::unique_ptr<FontCustomPlatformData> createFontCustomPlatformData(SharedBuffer& buffer, const String&)
 {
     String fontName = createUniqueFontName();
     HANDLE fontReference = renameAndActivateFont(buffer, fontName);
@@ -92,13 +91,16 @@ std::unique_ptr<FontCustomPlatformData> createFontCustomPlatformData(SharedBuffe
     if (!fontReference)
         return nullptr;
 
-    return std::make_unique<FontCustomPlatformData>(fontReference, fontName);
+    return makeUnique<FontCustomPlatformData>(fontReference, fontName);
 }
 
 bool FontCustomPlatformData::supportsFormat(const String& format)
 {
     return equalLettersIgnoringASCIICase(format, "truetype")
         || equalLettersIgnoringASCIICase(format, "opentype")
+#if USE(WOFF2)
+        || equalLettersIgnoringASCIICase(format, "woff2")
+#endif
         || equalLettersIgnoringASCIICase(format, "woff");
 }
 

@@ -28,6 +28,7 @@ class HTMLInputElement;
 class MouseEvent;
 
 class RenderSlider final : public RenderFlexibleBox {
+    WTF_MAKE_ISO_ALLOCATED(RenderSlider);
 public:
     static const int defaultTrackLength;
 
@@ -37,6 +38,8 @@ public:
     HTMLInputElement& element() const;
 
     bool inDragMode() const;
+
+    double valueRatio() const;
 
 private:
     const char* renderName() const override { return "RenderSlider"; }

@@ -54,7 +54,7 @@ void NFA::debugPrintDot() const
             for (unsigned actionIndex = node.actionStart; actionIndex < node.actionEnd; ++actionIndex) {
                 if (!isFirst)
                     dataLogF(", ");
-                dataLogF("%llu", actions[actionIndex]);
+                dataLogF("%" PRIu64, actions[actionIndex]);
                 isFirst = false;
             }
             dataLogF(")");
@@ -71,7 +71,7 @@ void NFA::debugPrintDot() const
     for (unsigned i = 0; i < nodes.size(); ++i) {
         const auto& node = nodes[i];
 
-        HashMap<uint32_t, Vector<uint32_t>, DefaultHash<unsigned>::Hash, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> transitionsPerTarget;
+        HashMap<uint32_t, Vector<uint32_t>, DefaultHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> transitionsPerTarget;
 
         for (uint32_t transitionIndex = node.rangesStart; transitionIndex < node.rangesEnd; ++transitionIndex) {
             const ImmutableCharRange& range = transitions[transitionIndex];

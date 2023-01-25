@@ -23,6 +23,7 @@
 
 #if USE(GSTREAMER_GL)
 
+#include "FloatRect.h"
 #include "GLContext.h"
 #include "ImageOrientation.h"
 #include "TextureMapperShaderProgram.h"
@@ -35,18 +36,19 @@ VideoTextureCopierGStreamer::VideoTextureCopierGStreamer(ColorConversion colorCo
     ASSERT(previousContext);
     PlatformDisplay::sharedDisplayForCompositing().sharingGLContext()->makeContextCurrent();
 
-    m_context3D = GraphicsContext3D::createForCurrentGLContext();
+    glGenFramebuffers(1, &m_framebuffer);
+    glGenTextures(1, &m_resultTexture);
 
-    m_shaderProgram = TextureMapperShaderProgram::create(*m_context3D, TextureMapperShaderProgram::Texture);
-
-    m_framebuffer = m_context3D->createFramebuffer();
-
-    m_resultTexture = m_context3D->createTexture();
+#if !USE(OPENGL_ES)
+    // For OpenGL > 3.2 we need to have a VAO.
+    if (GLContext::current()->version() >= 320)
+        glGenVertexArrays(1, &m_vao);
+#endif
 
     static const GLfloat vertices[] = { 0, 0, 1, 0, 1, 1, 0, 1 };
-    m_vbo = m_context3D->createBuffer();
-    m_context3D->bindBuffer(GraphicsContext3D::ARRAY_BUFFER, m_vbo);
-    m_context3D->bufferData(GraphicsContext3D::ARRAY_BUFFER, sizeof(GC3Dfloat) * 8, vertices, GraphicsContext3D::STATIC_DRAW);
+    glGenBuffers(1, &m_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(GLfloat) * 8, vertices, GL_STATIC_DRAW);
 
     updateColorConversionMatrix(colorConversion);
     updateTextureSpaceMatrix();
@@ -59,11 +61,14 @@ VideoTextureCopierGStreamer::~VideoTextureCopierGStreamer()
     GLContext* previousContext = GLContext::current();
     PlatformDisplay::sharedDisplayForCompositing().sharingGLContext()->makeContextCurrent();
 
-    m_context3D->deleteFramebuffer(m_framebuffer);
-    m_context3D->deleteBuffer(m_vbo);
-    m_context3D->deleteTexture(m_resultTexture);
+    glDeleteFramebuffers(1, &m_framebuffer);
+    glDeleteBuffers(1, &m_vbo);
+    glDeleteTextures(1, &m_resultTexture);
+#if !USE(OPENGL_ES)
+    if (m_vao)
+        glDeleteVertexArrays(1, &m_vao);
+#endif
     m_shaderProgram = nullptr;
-    m_context3D = nullptr;
 
     if (previousContext)
         previousContext->makeContextCurrent();
@@ -78,6 +83,9 @@ void VideoTextureCopierGStreamer::updateColorConversionMatrix(ColorConversion co
     case ColorConversion::ConvertARGBToRGBA:
         m_colorConversionMatrix.setMatrix(0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0);
         break;
+    case ColorConversion::NoConvert:
+        m_colorConversionMatrix.makeIdentity();
+        break;
     default:
         RELEASE_ASSERT_NOT_REACHED();
     }
@@ -88,17 +96,17 @@ void VideoTextureCopierGStreamer::updateTextureSpaceMatrix()
     m_textureSpaceMatrix.makeIdentity();
 
     switch (m_orientation) {
-    case DefaultImageOrientation:
+    case ImageOrientation::OriginTopLeft:
         break;
-    case OriginRightTop:
+    case ImageOrientation::OriginRightTop:
         m_textureSpaceMatrix.rotate(-90);
         m_textureSpaceMatrix.translate(-1, 0);
         break;
-    case OriginBottomRight:
+    case ImageOrientation::OriginBottomRight:
         m_textureSpaceMatrix.rotate(180);
         m_textureSpaceMatrix.translate(-1, -1);
         break;
-    case OriginLeftBottom:
+    case ImageOrientation::OriginLeftBottom:
         m_textureSpaceMatrix.rotate(-270);
         m_textureSpaceMatrix.translate(0, -1);
         break;
@@ -128,9 +136,9 @@ void VideoTextureCopierGStreamer::updateTransformationMatrix()
         -1, 1, -(farValue + nearValue) / (farValue - nearValue), 1);
 }
 
-bool VideoTextureCopierGStreamer::copyVideoTextureToPlatformTexture(Platform3DObject inputTexture, IntSize& frameSize, Platform3DObject outputTexture, GC3Denum outputTarget, GC3Dint level, GC3Denum internalFormat, GC3Denum format, GC3Denum type, bool flipY, ImageOrientation& sourceOrientation)
+bool VideoTextureCopierGStreamer::copyVideoTextureToPlatformTexture(TextureMapperPlatformLayerBuffer& inputTexture, IntSize& frameSize, GLuint outputTexture, GLenum outputTarget, GLint level, GLenum internalFormat, GLenum format, GLenum type, bool flipY, ImageOrientation sourceOrientation)
 {
-    if (!m_shaderProgram || !m_framebuffer || !m_vbo || frameSize.isEmpty())
+    if (!m_framebuffer || !m_vbo || frameSize.isEmpty())
         return false;
 
     if (m_size != frameSize) {
@@ -149,61 +157,140 @@ bool VideoTextureCopierGStreamer::copyVideoTextureToPlatformTexture(Platform3DOb
     ASSERT(previousContext);
     PlatformDisplay::sharedDisplayForCompositing().sharingGLContext()->makeContextCurrent();
 
+    // Determine what shader program to use and create it if necessary.
+    using Buffer = TextureMapperPlatformLayerBuffer;
+    TextureMapperShaderProgram::Options options;
+    WTF::switchOn(inputTexture.textureVariant(),
+        [&](const Buffer::RGBTexture&) { options = TextureMapperShaderProgram::TextureRGB; },
+        [&](const Buffer::YUVTexture& texture) {
+            switch (texture.numberOfPlanes) {
+            case 1:
+                ASSERT(texture.yuvPlane[0] == texture.yuvPlane[1] && texture.yuvPlane[1] == texture.yuvPlane[2]);
+                ASSERT(texture.yuvPlaneOffset[0] == 2 && texture.yuvPlaneOffset[1] == 1 && !texture.yuvPlaneOffset[2]);
+                options = TextureMapperShaderProgram::TexturePackedYUV;
+                break;
+            case 2:
+                ASSERT(!texture.yuvPlaneOffset[0]);
+                options = texture.yuvPlaneOffset[1] ? TextureMapperShaderProgram::TextureNV21 : TextureMapperShaderProgram::TextureNV12;
+                break;
+            case 3:
+                ASSERT(!texture.yuvPlaneOffset[0] && !texture.yuvPlaneOffset[1] && !texture.yuvPlaneOffset[2]);
+                options = TextureMapperShaderProgram::TextureYUV;
+                break;
+            }
+        },
+        [&](const Buffer::ExternalOESTexture&) {
+            options = TextureMapperShaderProgram::TextureExternalOES;
+        }
+    );
+
+    if (options != m_shaderOptions) {
+        m_shaderProgram = TextureMapperShaderProgram::create(options);
+        m_shaderOptions = options;
+    }
+    if (!m_shaderProgram) {
+        previousContext->makeContextCurrent();
+        return false;
+    }
+
     // Save previous bound framebuffer, texture and viewport.
-    GC3Dint boundFramebuffer = 0;
-    GC3Dint boundTexture = 0;
-    GC3Dint previousViewport[4] = { 0, 0, 0, 0};
-    m_context3D->getIntegerv(GraphicsContext3D::FRAMEBUFFER_BINDING, &boundFramebuffer);
-    m_context3D->getIntegerv(GraphicsContext3D::TEXTURE_BINDING_2D, &boundTexture);
-    m_context3D->getIntegerv(GraphicsContext3D::VIEWPORT, previousViewport);
+    GLint boundFramebuffer = 0;
+    GLint boundTexture = 0;
+    GLint previousViewport[4] = { 0, 0, 0, 0};
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFramebuffer);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &boundTexture);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
 
     // Use our own output texture if we are not given one.
     if (!outputTexture)
         outputTexture = m_resultTexture;
 
     // Set proper parameters to the output texture and allocate uninitialized memory for it.
-    m_context3D->bindTexture(outputTarget, outputTexture);
-    m_context3D->texParameteri(GraphicsContext3D::TEXTURE_2D, GraphicsContext3D::TEXTURE_MIN_FILTER, GraphicsContext3D::LINEAR);
-    m_context3D->texParameterf(GraphicsContext3D::TEXTURE_2D, GraphicsContext3D::TEXTURE_WRAP_S, GraphicsContext3D::CLAMP_TO_EDGE);
-    m_context3D->texParameterf(GraphicsContext3D::TEXTURE_2D, GraphicsContext3D::TEXTURE_WRAP_T, GraphicsContext3D::CLAMP_TO_EDGE);
-    m_context3D->texImage2DDirect(outputTarget, level, internalFormat, m_size.width(), m_size.height(), 0, format, type, nullptr);
+    glBindTexture(outputTarget, outputTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(outputTarget, level, internalFormat, m_size.width(), m_size.height(), 0, format, type, nullptr);
 
     // Bind framebuffer to paint and attach the destination texture to it.
-    m_context3D->bindFramebuffer(GraphicsContext3D::FRAMEBUFFER, m_framebuffer);
-    m_context3D->framebufferTexture2D(GraphicsContext3D::FRAMEBUFFER, GraphicsContext3D::COLOR_ATTACHMENT0, GL_TEXTURE_2D, outputTexture, 0);
-
-    // Set proper wrap parameter to the source texture.
-    m_context3D->bindTexture(GL_TEXTURE_2D, inputTexture);
-    m_context3D->texParameteri(GraphicsContext3D::TEXTURE_2D, GraphicsContext3D::TEXTURE_MIN_FILTER, GraphicsContext3D::LINEAR);
-    m_context3D->texParameterf(GraphicsContext3D::TEXTURE_2D, GraphicsContext3D::TEXTURE_WRAP_S, GraphicsContext3D::CLAMP_TO_EDGE);
-    m_context3D->texParameterf(GraphicsContext3D::TEXTURE_2D, GraphicsContext3D::TEXTURE_WRAP_T, GraphicsContext3D::CLAMP_TO_EDGE);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, outputTexture, 0);
 
     // Set the viewport.
-    m_context3D->viewport(0, 0, m_size.width(), m_size.height());
+    glViewport(0, 0, m_size.width(), m_size.height());
 
     // Set program parameters.
-    m_context3D->useProgram(m_shaderProgram->programID());
-    m_context3D->uniform1i(m_shaderProgram->samplerLocation(), 0);
+    glUseProgram(m_shaderProgram->programID());
+
+    WTF::switchOn(inputTexture.textureVariant(),
+        [&](const Buffer::RGBTexture& texture) {
+            glUniform1i(m_shaderProgram->samplerLocation(), 0);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texture.id);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        },
+        [&](const Buffer::YUVTexture& texture) {
+            switch (texture.numberOfPlanes) {
+            case 1:
+                glUniform1i(m_shaderProgram->samplerLocation(), texture.yuvPlane[0]);
+                break;
+            case 2:
+                glUniform1i(m_shaderProgram->samplerYLocation(), texture.yuvPlane[0]);
+                glUniform1i(m_shaderProgram->samplerULocation(), texture.yuvPlane[1]);
+                break;
+            case 3:
+                glUniform1i(m_shaderProgram->samplerYLocation(), texture.yuvPlane[0]);
+                glUniform1i(m_shaderProgram->samplerULocation(), texture.yuvPlane[1]);
+                glUniform1i(m_shaderProgram->samplerVLocation(), texture.yuvPlane[2]);
+                break;
+            }
+            glUniformMatrix3fv(m_shaderProgram->yuvToRgbLocation(), 1, GL_FALSE, static_cast<const GLfloat *>(&texture.yuvToRgbMatrix[0]));
+
+            for (int i = texture.numberOfPlanes - 1; i >= 0; --i) {
+                glActiveTexture(GL_TEXTURE0 + i);
+                glBindTexture(GL_TEXTURE_2D, texture.planes[i]);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            }
+        },
+        [&](const Buffer::ExternalOESTexture& texture) {
+            glUniform1i(m_shaderProgram->externalOESTextureLocation(), 0);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture.id);
+            glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameterf(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameterf(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        });
+
     m_shaderProgram->setMatrix(m_shaderProgram->modelViewMatrixLocation(), m_modelViewMatrix);
     m_shaderProgram->setMatrix(m_shaderProgram->projectionMatrixLocation(), m_projectionMatrix);
     m_shaderProgram->setMatrix(m_shaderProgram->textureSpaceMatrixLocation(), m_textureSpaceMatrix);
     m_shaderProgram->setMatrix(m_shaderProgram->textureColorSpaceMatrixLocation(), m_colorConversionMatrix);
 
     // Perform the copy.
-    m_context3D->enableVertexAttribArray(m_shaderProgram->vertexLocation());
-    m_context3D->bindBuffer(GraphicsContext3D::ARRAY_BUFFER, m_vbo);
-    m_context3D->vertexAttribPointer(m_shaderProgram->vertexLocation(), 2, GraphicsContext3D::FLOAT, false, 0, 0);
-    m_context3D->drawArrays(GraphicsContext3D::TRIANGLE_FAN, 0, 4);
-    m_context3D->bindBuffer(GraphicsContext3D::ARRAY_BUFFER, 0);
-    m_context3D->disableVertexAttribArray(m_shaderProgram->vertexLocation());
-    m_context3D->useProgram(0);
+#if !USE(OPENGL_ES)
+    if (GLContext::current()->version() >= 320 && m_vao)
+        glBindVertexArray(m_vao);
+#endif
+    glEnableVertexAttribArray(m_shaderProgram->vertexLocation());
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glVertexAttribPointer(m_shaderProgram->vertexLocation(), 2, GL_FLOAT, false, 0, 0);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glDisableVertexAttribArray(m_shaderProgram->vertexLocation());
+    glUseProgram(0);
 
     // Restore previous bindings and viewport.
-    m_context3D->bindFramebuffer(GraphicsContext3D::FRAMEBUFFER, boundFramebuffer);
-    m_context3D->bindTexture(outputTarget, boundTexture);
-    m_context3D->viewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+    glBindFramebuffer(GL_FRAMEBUFFER, boundFramebuffer);
+    glBindTexture(outputTarget, boundTexture);
+    glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
 
-    bool ok = (m_context3D->getError() == GraphicsContext3D::NO_ERROR);
+    bool ok = (glGetError() == GL_NO_ERROR);
 
     // Restore previous context.
     previousContext->makeContextCurrent();

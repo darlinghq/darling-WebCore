@@ -1,15 +1,17 @@
-list(APPEND WebCore_INCLUDE_DIRECTORIES
+list(APPEND WebCore_PRIVATE_INCLUDE_DIRECTORIES
     "${WEBCORE_DIR}/platform/image-decoders"
     "${WEBCORE_DIR}/platform/image-decoders/bmp"
     "${WEBCORE_DIR}/platform/image-decoders/gif"
     "${WEBCORE_DIR}/platform/image-decoders/ico"
     "${WEBCORE_DIR}/platform/image-decoders/jpeg"
+    "${WEBCORE_DIR}/platform/image-decoders/jpeg2000"
     "${WEBCORE_DIR}/platform/image-decoders/png"
     "${WEBCORE_DIR}/platform/image-decoders/webp"
 )
 
 list(APPEND WebCore_SOURCES
-    platform/image-decoders/ImageDecoder.cpp
+    platform/image-decoders/ScalableImageDecoder.cpp
+    platform/image-decoders/ScalableImageDecoderFrame.cpp
 
     platform/image-decoders/bmp/BMPImageDecoder.cpp
     platform/image-decoders/bmp/BMPImageReader.cpp
@@ -21,35 +23,26 @@ list(APPEND WebCore_SOURCES
 
     platform/image-decoders/jpeg/JPEGImageDecoder.cpp
 
+    platform/image-decoders/jpeg2000/JPEG2000ImageDecoder.cpp
+
     platform/image-decoders/png/PNGImageDecoder.cpp
 
     platform/image-decoders/webp/WEBPImageDecoder.cpp
 )
 
-if (JPEG_FOUND)
-    list(APPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES
-        ${JPEG_INCLUDE_DIR}
-    )
-    list(APPEND WebCore_LIBRARIES
-        ${JPEG_LIBRARIES}
-    )
+list(APPEND WebCore_LIBRARIES
+    JPEG::JPEG
+    PNG::PNG
+)
+
+if (OpenJPEG_FOUND)
+    list(APPEND WebCore_LIBRARIES OpenJPEG::OpenJPEG)
 endif ()
 
-if (PNG_FOUND)
-    list(APPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES
-        ${PNG_INCLUDE_DIRS}
-    )
+if (WebP_FOUND)
     list(APPEND WebCore_LIBRARIES
-        ${PNG_LIBRARIES}
-    )
-endif ()
-
-if (WEBP_FOUND)
-    list(APPEND WebCore_SYSTEM_INCLUDE_DIRECTORIES
-        ${WEBP_INCLUDE_DIRS}
-    )
-    list(APPEND WebCore_LIBRARIES
-        ${WEBP_LIBRARIES}
+        WebP::demux
+        WebP::libwebp
     )
 endif ()
 

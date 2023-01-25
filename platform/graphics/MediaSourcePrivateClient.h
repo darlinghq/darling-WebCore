@@ -29,6 +29,7 @@
 #if ENABLE(MEDIA_SOURCE)
 
 #include "PlatformTimeRanges.h"
+#include <wtf/Logger.h>
 #include <wtf/RefCounted.h>
 
 namespace WebCore {
@@ -37,14 +38,20 @@ class MediaSourcePrivate;
 
 class MediaSourcePrivateClient : public RefCounted<MediaSourcePrivateClient> {
 public:
-    virtual ~MediaSourcePrivateClient() { }
+    virtual ~MediaSourcePrivateClient() = default;
 
     virtual void setPrivateAndOpen(Ref<MediaSourcePrivate>&&) = 0;
     virtual MediaTime duration() const = 0;
-    virtual void durationChanged(const MediaTime&) = 0;
     virtual std::unique_ptr<PlatformTimeRanges> buffered() const = 0;
     virtual void seekToTime(const MediaTime&) = 0;
     virtual void monitorSourceBuffers() = 0;
+
+#if !RELEASE_LOG_DISABLED
+    virtual void setLogIdentifier(const void*) = 0;
+#endif
+
+    enum class RendererType { Audio, Video };
+    virtual void failedToCreateRenderer(RendererType) = 0;
 };
 
 }

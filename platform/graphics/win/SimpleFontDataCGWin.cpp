@@ -31,16 +31,15 @@
 
 #if USE(CG)
 
-#include "CoreTextSPIWin.h"
 #include "FloatRect.h"
 #include "FontCache.h"
+#include "FontCascade.h"
 #include "FontDescription.h"
 #include "GlyphPage.h"
 #include "HWndDC.h"
 #include "OpenTypeCG.h"
-#include <ApplicationServices/ApplicationServices.h>
-#include <WebKitSystemInterface/WebKitSystemInterface.h>
 #include <mlang.h>
+#include <pal/spi/win/CoreTextSPIWin.h>
 #include <unicode/uchar.h>
 #include <unicode/unorm.h>
 #include <winsock2.h>
@@ -49,8 +48,6 @@
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
-
-using namespace std;
 
 void Font::platformInit()
 {
@@ -115,25 +112,6 @@ void Font::platformInit()
     m_fontMetrics.setUnitsPerEm(unitsPerEm);
 }
 
-FloatRect Font::platformBoundsForGlyph(Glyph glyph) const
-{
-    if (!platformData().size())
-        return FloatRect();
-
-    if (m_platformData.useGDI())
-        return boundsForGDIGlyph(glyph);
-
-    CGRect box;
-    CGFontGetGlyphBBoxes(m_platformData.cgFont(), &glyph, 1, &box);
-    float pointSize = m_platformData.size();
-    CGFloat scale = pointSize / fontMetrics().unitsPerEm();
-    FloatRect boundingBox = CGRectApplyAffineTransform(box, CGAffineTransformMakeScale(scale, -scale));
-    if (m_syntheticBoldOffset)
-        boundingBox.setWidth(boundingBox.width() + m_syntheticBoldOffset);
-
-    return boundingBox;
-}
-
 float Font::platformWidthForGlyph(Glyph glyph) const
 {
     if (!platformData().size())
@@ -148,7 +126,7 @@ float Font::platformWidthForGlyph(Glyph glyph) const
     CGAffineTransform m = CGAffineTransformMakeScale(pointSize, pointSize);
  
     bool isPrinterFont = false;
-    wkGetGlyphAdvances(font, m, m_platformData.isSystemFont(), isPrinterFont, glyph, advance);
+    FontCascade::getPlatformGlyphAdvances(font, m, m_platformData.isSystemFont(), isPrinterFont, glyph, advance);
 
     return advance.width + m_syntheticBoldOffset;
 }

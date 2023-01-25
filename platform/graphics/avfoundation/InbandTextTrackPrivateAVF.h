@@ -26,7 +26,7 @@
 #ifndef InbandTextTrackPrivateAVF_h
 #define InbandTextTrackPrivateAVF_h
 
-#if ENABLE(VIDEO) && (USE(AVFOUNDATION) || PLATFORM(IOS))
+#if ENABLE(VIDEO) && (USE(AVFOUNDATION) || PLATFORM(IOS_FAMILY))
 
 #include "InbandTextTrackPrivate.h"
 #include "InbandTextTrackPrivateClient.h"
@@ -81,18 +81,23 @@ public:
 protected:
     InbandTextTrackPrivateAVF(AVFInbandTrackParent*, CueFormat);
 
-    void processCueAttributes(CFAttributedStringRef, GenericCueData&);
+    Ref<InbandGenericCue> processCueAttributes(CFAttributedStringRef);
     void processAttributedStrings(CFArrayRef, const MediaTime&);
     void processNativeSamples(CFArrayRef, const MediaTime&);
     void removeCompletedCues();
 
+    Vector<char> m_sampleInputBuffer;
+
+private:
+#if !RELEASE_LOG_DISABLED
+    const char* logClassName() const final { return "InbandTextTrackPrivateAVF"; }
+#endif
+
     MediaTime m_currentCueStartTime;
     MediaTime m_currentCueEndTime;
 
-    Vector<RefPtr<GenericCueData>> m_cues;
+    Vector<Ref<InbandGenericCue>> m_cues;
     AVFInbandTrackParent* m_owner;
-
-    Vector<char> m_sampleInputBuffer;
 
     enum PendingCueStatus {
         None,
@@ -109,6 +114,6 @@ protected:
 
 } // namespace WebCore
 
-#endif //  ENABLE(VIDEO) && (USE(AVFOUNDATION) || PLATFORM(IOS))
+#endif //  ENABLE(VIDEO) && (USE(AVFOUNDATION) || PLATFORM(IOS_FAMILY))
 
 #endif // InbandTextTrackPrivateAVF_h

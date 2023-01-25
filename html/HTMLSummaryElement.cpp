@@ -32,8 +32,11 @@
 #include "RenderBlockFlow.h"
 #include "ShadowRoot.h"
 #include "SlotAssignment.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(HTMLSummaryElement);
 
 using namespace HTMLNames;
 
@@ -44,13 +47,13 @@ private:
         didChangeSlot(SlotAssignment::defaultSlotName(), shadowRoot);
     }
 
-    const AtomicString& slotNameForHostChild(const Node&) const override { return SlotAssignment::defaultSlotName(); }
+    const AtomString& slotNameForHostChild(const Node&) const override { return SlotAssignment::defaultSlotName(); }
 };
 
 Ref<HTMLSummaryElement> HTMLSummaryElement::create(const QualifiedName& tagName, Document& document)
 {
     Ref<HTMLSummaryElement> summary = adoptRef(*new HTMLSummaryElement(tagName, document));
-    summary->addShadowRoot(ShadowRoot::create(document, std::make_unique<SummarySlotElement>()));
+    summary->addShadowRoot(ShadowRoot::create(document, makeUnique<SummarySlotElement>()));
     return summary;
 }
 
@@ -65,13 +68,13 @@ RenderPtr<RenderElement> HTMLSummaryElement::createElementRenderer(RenderStyle&&
     return createRenderer<RenderBlockFlow>(*this, WTFMove(style));
 }
 
-void HTMLSummaryElement::didAddUserAgentShadowRoot(ShadowRoot* root)
+void HTMLSummaryElement::didAddUserAgentShadowRoot(ShadowRoot& root)
 {
-    root->appendChild(DetailsMarkerControl::create(document()));
-    root->appendChild(HTMLSlotElement::create(slotTag, document()));
+    root.appendChild(DetailsMarkerControl::create(document()));
+    root.appendChild(HTMLSlotElement::create(slotTag, document()));
 }
 
-HTMLDetailsElement* HTMLSummaryElement::detailsElement() const
+RefPtr<HTMLDetailsElement> HTMLSummaryElement::detailsElement() const
 {
     auto* parent = parentElement();
     if (parent && is<HTMLDetailsElement>(*parent))
@@ -85,22 +88,23 @@ HTMLDetailsElement* HTMLSummaryElement::detailsElement() const
 
 bool HTMLSummaryElement::isActiveSummary() const
 {
-    HTMLDetailsElement* details = detailsElement();
+    RefPtr<HTMLDetailsElement> details = detailsElement();
     if (!details)
         return false;
     return details->isActiveSummary(*this);
 }
 
-static bool isClickableControl(Node* node)
+static bool isClickableControl(EventTarget* target)
 {
-    ASSERT(node);
-    if (!is<Element>(*node))
+    if (!is<Element>(target))
         return false;
-    Element& element = downcast<Element>(*node);
-    if (is<HTMLFormControlElement>(element))
-        return true;
-    Element* host = element.shadowHost();
-    return host && is<HTMLFormControlElement>(host);
+    auto& element = downcast<Element>(*target);
+    return is<HTMLFormControlElement>(element) || is<HTMLFormControlElement>(element.shadowHost());
+}
+
+int HTMLSummaryElement::defaultTabIndex() const
+{
+    return isActiveSummary() ? 0 : -1;
 }
 
 bool HTMLSummaryElement::supportsFocus() const
@@ -111,8 +115,8 @@ bool HTMLSummaryElement::supportsFocus() const
 void HTMLSummaryElement::defaultEventHandler(Event& event)
 {
     if (isActiveSummary() && renderer()) {
-        if (event.type() == eventNames().DOMActivateEvent && !isClickableControl(event.target()->toNode())) {
-            if (HTMLDetailsElement* details = detailsElement())
+        if (event.type() == eventNames().DOMActivateEvent && !isClickableControl(event.target())) {
+            if (RefPtr<HTMLDetailsElement> details = detailsElement())
                 details->toggleOpen();
             event.setDefaultHandled();
             return;

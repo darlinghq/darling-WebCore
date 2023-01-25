@@ -24,9 +24,12 @@
 #include "config.h"
 #include "PluginData.h"
 
+#include "Document.h"
+#include "Frame.h"
 #include "LocalizedStrings.h"
 #include "Page.h"
 #include "PluginInfoProvider.h"
+#include <wtf/Optional.h>
 
 namespace WebCore {
 
@@ -36,17 +39,30 @@ PluginData::PluginData(Page& page)
     initPlugins();
 }
 
-Vector<PluginInfo> PluginData::webVisiblePlugins() const
+void PluginData::initPlugins()
 {
-    Vector<PluginInfo> plugins;
-    m_page.pluginInfoProvider().getWebVisiblePluginInfo(m_page, plugins);
-    return plugins;
+    ASSERT(m_plugins.isEmpty());
+    m_plugins = m_page.pluginInfoProvider().pluginInfo(m_page, m_supportedPluginIdentifiers);
+}
+
+const Vector<PluginInfo>& PluginData::webVisiblePlugins() const
+{
+    auto documentURL = m_page.mainFrame().document() ? m_page.mainFrame().document()->url() : URL { };
+    if (!documentURL.isNull() && !protocolHostAndPortAreEqual(m_cachedVisiblePlugins.pageURL, documentURL)) {
+        m_cachedVisiblePlugins.pageURL = WTFMove(documentURL);
+        m_cachedVisiblePlugins.pluginList = WTF::nullopt;
+    }
+
+    if (!m_cachedVisiblePlugins.pluginList)
+        m_cachedVisiblePlugins.pluginList = m_page.pluginInfoProvider().webVisiblePluginInfo(m_page, m_cachedVisiblePlugins.pageURL);
+
+    return *m_cachedVisiblePlugins.pluginList;
 }
 
 #if PLATFORM(COCOA)
-static inline bool isBuiltInPDFPlugIn(const PluginInfo& plugIn)
+static inline bool isBuiltInPDFPlugIn(const PluginInfo& plugin)
 {
-    return plugIn.name == builtInPDFPluginName();
+    return equalLettersIgnoringASCIICase(plugin.bundleIdentifier, "com.apple.webkit.builtinpdfplugin");
 }
 #else
 static inline bool isBuiltInPDFPlugIn(const PluginInfo&)
@@ -71,110 +87,72 @@ static bool shouldBePubliclyVisible(const PluginInfo& plugin)
         || isBuiltInPDFPlugIn(plugin);
 }
 
-Vector<PluginInfo> PluginData::publiclyVisiblePlugins() const
+std::pair<Vector<PluginInfo>, Vector<PluginInfo>> PluginData::publiclyVisiblePluginsAndAdditionalWebVisiblePlugins() const
 {
+    auto plugins = webVisiblePlugins();
+
     if (m_page.showAllPlugins())
-        return webVisiblePlugins();
-    
-    Vector<PluginInfo> allPlugins;
-    m_page.pluginInfoProvider().getWebVisiblePluginInfo(m_page, allPlugins);
+        return { plugins, { } };
 
-    Vector<PluginInfo> plugins;
-    for (auto&& plugin : allPlugins) {
-        if (shouldBePubliclyVisible(plugin))
-            plugins.append(WTFMove(plugin));
-    }
-
-    std::sort(plugins.begin(), plugins.end(), [](const PluginInfo& a, const PluginInfo& b) {
-        return codePointCompareLessThan(a.name, b.name);
+    Vector<PluginInfo> additionalWebVisiblePlugins;
+    plugins.removeAllMatching([&](auto& plugin) {
+        if (!shouldBePubliclyVisible(plugin)) {
+            additionalWebVisiblePlugins.append(plugin);
+            return true;
+        }
+        return false;
     });
-    return plugins;
+
+    return { plugins, additionalWebVisiblePlugins };
 }
 
-void PluginData::getWebVisibleMimesAndPluginIndices(Vector<MimeClassInfo>& mimes, Vector<size_t>& mimePluginIndices) const
+Vector<MimeClassInfo> PluginData::webVisibleMimeTypes() const
 {
-    getMimesAndPluginIndiciesForPlugins(webVisiblePlugins(), mimes, mimePluginIndices);
+    Vector<MimeClassInfo> result;
+    for (auto& plugin : webVisiblePlugins())
+        result.appendVector(plugin.mimes);
+    return result;
 }
 
-void PluginData::getMimesAndPluginIndices(Vector<MimeClassInfo>& mimes, Vector<size_t>& mimePluginIndices) const
+static bool supportsMimeTypeForPlugins(const String& mimeType, const PluginData::AllowedPluginTypes allowedPluginTypes, const Vector<PluginInfo>& plugins)
 {
-    getMimesAndPluginIndiciesForPlugins(plugins(), mimes, mimePluginIndices);
-}
-
-void PluginData::getMimesAndPluginIndiciesForPlugins(const Vector<PluginInfo>& plugins, Vector<MimeClassInfo>& mimes, Vector<size_t>& mimePluginIndices) const
-{
-    ASSERT_ARG(mimes, mimes.isEmpty());
-    ASSERT_ARG(mimePluginIndices, mimePluginIndices.isEmpty());
-
-    for (unsigned i = 0; i < plugins.size(); ++i) {
-        const PluginInfo& plugin = plugins[i];
-        for (auto& mime : plugin.mimes) {
-            mimes.append(mime);
-            mimePluginIndices.append(i);
+    for (auto& plugin : plugins) {
+        for (auto& type : plugin.mimes) {
+            if (type.type == mimeType && (allowedPluginTypes == PluginData::AllPlugins || plugin.isApplicationPlugin))
+                return true;
         }
     }
-}
-
-bool PluginData::supportsWebVisibleMimeType(const String& mimeType, const AllowedPluginTypes allowedPluginTypes) const
-{
-    Vector<MimeClassInfo> mimes;
-    Vector<size_t> mimePluginIndices;
-    const Vector<PluginInfo>& plugins = webVisiblePlugins();
-    getWebVisibleMimesAndPluginIndices(mimes, mimePluginIndices);
-
-    for (unsigned i = 0; i < mimes.size(); ++i) {
-        if (mimes[i].type == mimeType && (allowedPluginTypes == AllPlugins || plugins[mimePluginIndices[i]].isApplicationPlugin))
-            return true;
-    }
     return false;
-}
-
-bool PluginData::getPluginInfoForWebVisibleMimeType(const String& mimeType, PluginInfo& pluginInfoRef) const
-{
-    Vector<MimeClassInfo> mimes;
-    Vector<size_t> mimePluginIndices;
-    const Vector<PluginInfo>& plugins = webVisiblePlugins();
-    getWebVisibleMimesAndPluginIndices(mimes, mimePluginIndices);
-
-    for (unsigned i = 0; i < mimes.size(); ++i) {
-        const MimeClassInfo& info = mimes[i];
-
-        if (info.type == mimeType) {
-            pluginInfoRef = plugins[mimePluginIndices[i]];
-            return true;
-        }
-    }
-
-    return false;
-}
-
-String PluginData::pluginFileForWebVisibleMimeType(const String& mimeType) const
-{
-    PluginInfo info;
-    if (getPluginInfoForWebVisibleMimeType(mimeType, info))
-        return info.file;
-    return String();
 }
 
 bool PluginData::supportsMimeType(const String& mimeType, const AllowedPluginTypes allowedPluginTypes) const
 {
-    Vector<MimeClassInfo> mimes;
-    Vector<size_t> mimePluginIndices;
-    const Vector<PluginInfo>& plugins = this->plugins();
-    getMimesAndPluginIndices(mimes, mimePluginIndices);
-
-    for (unsigned i = 0; i < mimes.size(); ++i) {
-        if (mimes[i].type == mimeType && (allowedPluginTypes == AllPlugins || plugins[mimePluginIndices[i]].isApplicationPlugin))
-            return true;
-    }
-    return false;
+    return supportsMimeTypeForPlugins(mimeType, allowedPluginTypes, plugins());
 }
 
-void PluginData::initPlugins()
+bool PluginData::supportsWebVisibleMimeType(const String& mimeType, const AllowedPluginTypes allowedPluginTypes) const
 {
-    ASSERT(m_plugins.isEmpty());
+    return supportsMimeTypeForPlugins(mimeType, allowedPluginTypes, webVisiblePlugins());
+}
 
-    m_page.pluginInfoProvider().getPluginInfo(m_page, m_plugins);
+bool PluginData::supportsWebVisibleMimeTypeForURL(const String& mimeType, const AllowedPluginTypes allowedPluginTypes, const URL& url) const
+{
+    if (!protocolHostAndPortAreEqual(m_cachedVisiblePlugins.pageURL, url))
+        m_cachedVisiblePlugins = { url, m_page.pluginInfoProvider().webVisiblePluginInfo(m_page, url) };
+    if (!m_cachedVisiblePlugins.pluginList)
+        return false;
+    return supportsMimeTypeForPlugins(mimeType, allowedPluginTypes, *m_cachedVisiblePlugins.pluginList);
+}
+
+String PluginData::pluginFileForWebVisibleMimeType(const String& mimeType) const
+{
+    for (auto& plugin : webVisiblePlugins()) {
+        for (auto& type : plugin.mimes) {
+            if (type.type == mimeType)
+                return plugin.file;
+        }
+    }
+    return { };
 }
 
 } // namespace WebCore

@@ -25,11 +25,12 @@
 
 #pragma once
 
-#include "MainFrame.h"
+#include "Frame.h"
 
 namespace WebCore {
 
 class NavigationDisabler {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     NavigationDisabler(Frame* frame)
         : m_frame(frame)

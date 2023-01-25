@@ -41,6 +41,7 @@ class StyledElement;
 class Text;
 
 class AccessibilityUndoReplacedText {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     AccessibilityUndoReplacedText() { }
     void configureRangeDeletedByReapplyWithStartingSelection(const VisibleSelection&);
@@ -71,7 +72,7 @@ public:
     void reapply() override;
     EditAction editingAction() const override { return m_editAction; }
     void append(SimpleEditCommand*);
-    bool wasCreateLinkCommand() const { return m_editAction == EditActionCreateLink; }
+    bool wasCreateLinkCommand() const { return m_editAction == EditAction::CreateLink; }
 
     const VisibleSelection& startingSelection() const { return m_startingSelection; }
     const VisibleSelection& endingSelection() const { return m_endingSelection; }
@@ -87,6 +88,9 @@ public:
 
 private:
     EditCommandComposition(Document&, const VisibleSelection& startingSelection, const VisibleSelection& endingSelection, EditAction);
+
+    String label() const final;
+    void didRemoveFromUndoManager() final { }
 
     RefPtr<Document> m_document;
     VisibleSelection m_startingSelection;
@@ -122,7 +126,7 @@ public:
     virtual RefPtr<DataTransfer> inputEventDataTransfer() const;
 
 protected:
-    explicit CompositeEditCommand(Document&, EditAction = EditActionUnspecified);
+    explicit CompositeEditCommand(Document&, EditAction = EditAction::Unspecified);
 
     // If willApplyCommand returns false, we won't proceed with applying the command.
     virtual bool willApplyCommand();
@@ -136,8 +140,8 @@ protected:
     void appendNode(Ref<Node>&&, Ref<ContainerNode>&& parent);
     void applyCommandToComposite(Ref<EditCommand>&&);
     void applyCommandToComposite(Ref<CompositeEditCommand>&&, const VisibleSelection&);
-    void applyStyle(const EditingStyle*, EditAction = EditActionChangeAttributes);
-    void applyStyle(const EditingStyle*, const Position& start, const Position& end, EditAction = EditActionChangeAttributes);
+    void applyStyle(const EditingStyle*, EditAction = EditAction::ChangeAttributes);
+    void applyStyle(const EditingStyle*, const Position& start, const Position& end, EditAction = EditAction::ChangeAttributes);
     void applyStyledElement(Ref<Element>&&);
     void removeStyledElement(Ref<Element>&&);
     void deleteSelection(bool smartDelete = false, bool mergeBlocksAfterDelete = true, bool replace = false, bool expandForSpecialElements = true, bool sanitizeMarkup = true);
@@ -149,6 +153,7 @@ protected:
     void insertNodeAt(Ref<Node>&&, const Position&);
     void insertNodeAtTabSpanPosition(Ref<Node>&&, const Position&);
     void insertNodeBefore(Ref<Node>&&, Node& refChild, ShouldAssumeContentIsAlwaysEditable = DoNotAssumeContentIsAlwaysEditable);
+    void insertParagraphSeparatorAtPosition(const Position&, bool useDefaultParagraphElement = false, bool pasteBlockqutoeIntoUnquotedArea = false);
     void insertParagraphSeparator(bool useDefaultParagraphElement = false, bool pasteBlockqutoeIntoUnquotedArea = false);
     void insertLineBreak();
     void insertTextIntoNode(Text&, unsigned offset, const String& text);
@@ -172,7 +177,7 @@ protected:
     Position replaceSelectedTextInNode(const String&);
     void replaceTextInNodePreservingMarkers(Text&, unsigned offset, unsigned count, const String& replacementText);
     Position positionOutsideTabSpan(const Position&);
-    void setNodeAttribute(Element&, const QualifiedName& attribute, const AtomicString& value);
+    void setNodeAttribute(Element&, const QualifiedName& attribute, const AtomString& value);
     void splitElement(Element&, Node& atChild);
     void splitTextNode(Text&, unsigned offset);
     void splitTextNodeContainingElement(Text&, unsigned offset);
@@ -199,7 +204,7 @@ protected:
     void cloneParagraphUnderNewElement(const Position& start, const Position& end, Node* outerNode, Element* blockElement);
     void cleanupAfterDeletion(VisiblePosition destination = VisiblePosition());
     
-    std::optional<VisibleSelection> shouldBreakOutOfEmptyListItem() const;
+    Optional<VisibleSelection> shouldBreakOutOfEmptyListItem() const;
     bool breakOutOfEmptyListItem();
     bool breakOutOfEmptyMailBlockquotedParagraph();
     

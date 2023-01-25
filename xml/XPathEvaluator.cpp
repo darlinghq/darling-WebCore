@@ -27,7 +27,6 @@
 #include "config.h"
 #include "XPathEvaluator.h"
 
-#include "ExceptionCode.h"
 #include "NativeXPathNSResolver.h"
 #include "XPathExpression.h"
 #include "XPathResult.h"
@@ -42,15 +41,15 @@ ExceptionOr<Ref<XPathExpression>> XPathEvaluator::createExpression(const String&
     return XPathExpression::createExpression(expression, WTFMove(resolver));
 }
 
-Ref<XPathNSResolver> XPathEvaluator::createNSResolver(Node* nodeResolver)
+Ref<XPathNSResolver> XPathEvaluator::createNSResolver(Node& nodeResolver)
 {
     return NativeXPathNSResolver::create(nodeResolver);
 }
 
-ExceptionOr<Ref<XPathResult>> XPathEvaluator::evaluate(const String& expression, Node* contextNode, RefPtr<XPathNSResolver>&& resolver, unsigned short type, XPathResult* result)
+ExceptionOr<Ref<XPathResult>> XPathEvaluator::evaluate(const String& expression, Node& contextNode, RefPtr<XPathNSResolver>&& resolver, unsigned short type, XPathResult* result)
 {
     if (!isValidContextNode(contextNode))
-        return Exception { NOT_SUPPORTED_ERR };
+        return Exception { NotSupportedError };
 
     auto createResult = createExpression(expression, WTFMove(resolver));
     if (createResult.hasException())

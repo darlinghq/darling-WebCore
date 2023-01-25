@@ -25,24 +25,33 @@
 
 #pragma once
 
-#if ENABLE(WEB_TIMING)
-
 #include "PerformanceEntry.h"
 #include <wtf/text/WTFString.h>
 
+namespace JSC {
+class JSGlobalObject;
+class JSValue;
+}
+
 namespace WebCore {
+
+class SerializedScriptValue;
+class ScriptExecutionContext;
 
 class PerformanceMark final : public PerformanceEntry {
 public:
-    static Ref<PerformanceMark> create(const String& name, double startTime) { return adoptRef(*new PerformanceMark(name, startTime)); }
-    
-private:
-    PerformanceMark(const String& name, double startTime)
-        : PerformanceEntry(PerformanceEntry::Type::Mark, name, ASCIILiteral("mark"), startTime, startTime)
-    {
-    }
+    static ExceptionOr<Ref<PerformanceMark>> create(JSC::JSGlobalObject&, ScriptExecutionContext&, const String& name, Optional<PerformanceMarkOptions>&&);
 
-    ~PerformanceMark() { }
+    JSC::JSValue detail(JSC::JSGlobalObject&);
+
+private:
+    PerformanceMark(const String& name, double startTime, Ref<SerializedScriptValue>&&);
+    ~PerformanceMark();
+
+    Type type() const final { return Type::Mark; }
+    ASCIILiteral entryType() const final { return "mark"_s; }
+
+    Ref<SerializedScriptValue> m_serializedDetail;
 };
 
 } // namespace WebCore
@@ -50,5 +59,3 @@ private:
 SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::PerformanceMark)
     static bool isType(const WebCore::PerformanceEntry& entry) { return entry.isMark(); }
 SPECIALIZE_TYPE_TRAITS_END()
-
-#endif // ENABLE(WEB_TIMING)

@@ -33,11 +33,12 @@
 namespace WebCore {
 
 class CPUMonitor {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     using ExceededCPULimitHandler = WTF::Function<void(double)>;
     WEBCORE_EXPORT CPUMonitor(Seconds checkInterval, ExceededCPULimitHandler&&);
 
-    WEBCORE_EXPORT void setCPULimit(std::optional<double>);
+    WEBCORE_EXPORT void setCPULimit(const Optional<double>&);
 
 private:
     void timerFired();
@@ -45,8 +46,8 @@ private:
     Seconds m_checkInterval;
     ExceededCPULimitHandler m_exceededCPULimitHandler;
     Timer m_timer;
-    std::optional<double> m_cpuLimit;
-    std::optional<CPUTime> m_lastCPUTime;
+    Optional<double> m_cpuLimit;
+    Optional<CPUTime> m_lastCPUTime;
 };
 
 } // namespace WebCore

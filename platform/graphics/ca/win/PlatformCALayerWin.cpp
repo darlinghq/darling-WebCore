@@ -30,6 +30,7 @@
 #if USE(CA)
 
 #include "AbstractCACFLayerTreeHost.h"
+#include "ColorSerialization.h"
 #include "FontCascade.h"
 #include "GDIUtilities.h"
 #include "GraphicsContext.h"
@@ -37,11 +38,8 @@
 #include "PlatformCALayerWinInternal.h"
 #include "TextRun.h"
 #include "TileController.h"
-#include "WebCoreHeaderDetection.h"
 #include "WebTiledBackingLayerWin.h"
 #include <QuartzCore/CoreAnimationCF.h>
-#include <WebKitSystemInterface/WebKitSystemInterface.h>
-#include <wtf/CurrentTime.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/StringBuilder.h>
 
@@ -75,7 +73,10 @@ static CFStringRef toCACFFilterType(PlatformCALayer::FilterType type)
 static AbstractCACFLayerTreeHost* layerTreeHostForLayer(const PlatformCALayer* layer)
 {
     // We need the AbstractCACFLayerTreeHost associated with this layer, which is stored in the UserData of the CACFContext
-    void* userData = wkCACFLayerGetContextUserData(layer->platformLayer());
+    void* userData = nullptr;
+    if (CACFContextRef context = CACFLayerGetContext(layer->platformLayer()))
+        userData = CACFContextGetUserData(context);
+
     if (!userData)
         return nullptr;
 
@@ -92,7 +93,7 @@ static PlatformCALayerWinInternal* intern(void* layer)
     return static_cast<PlatformCALayerWinInternal*>(CACFLayerGetUserData(static_cast<CACFLayerRef>(layer)));
 }
 
-PlatformCALayer* PlatformCALayer::platformCALayer(void* platformLayer)
+RefPtr<PlatformCALayer> PlatformCALayer::platformCALayerForLayer(void* platformLayer)
 {
     if (!platformLayer)
         return nullptr;
@@ -101,7 +102,7 @@ PlatformCALayer* PlatformCALayer::platformCALayer(void* platformLayer)
     return layerIntern ? layerIntern->owner() : nullptr;
 }
 
-PlatformCALayer::RepaintRectList PlatformCALayer::collectRectsToPaint(CGContextRef, PlatformCALayer*)
+PlatformCALayer::RepaintRectList PlatformCALayer::collectRectsToPaint(GraphicsContext&, PlatformCALayer*)
 {
     // FIXME: We should actually collect rects to use instead of defaulting to Windows'
     // normal drawing path.
@@ -109,9 +110,9 @@ PlatformCALayer::RepaintRectList PlatformCALayer::collectRectsToPaint(CGContextR
     return dirtyRects;
 }
 
-void PlatformCALayer::drawLayerContents(CGContextRef context, WebCore::PlatformCALayer* platformCALayer, RepaintRectList&, GraphicsLayerPaintBehavior)
+void PlatformCALayer::drawLayerContents(GraphicsContext& context, WebCore::PlatformCALayer* platformCALayer, RepaintRectList&, GraphicsLayerPaintBehavior)
 {
-    intern(platformCALayer)->displayCallback(platformCALayer->platformLayer(), context);
+    intern(platformCALayer)->displayCallback(platformCALayer->platformLayer(), context.platformContext());
 }
 
 CGRect PlatformCALayer::frameForLayer(const PlatformLayer* tileLayer)
@@ -127,14 +128,13 @@ static void displayCallback(CACFLayerRef caLayer, CGContextRef context)
 
 static void layoutSublayersProc(CACFLayerRef caLayer) 
 {
-    PlatformCALayer* layer = PlatformCALayer::platformCALayer(caLayer);
+    auto layer = PlatformCALayer::platformCALayerForLayer(caLayer);
     if (layer && layer->owner())
-        layer->owner()->platformCALayerLayoutSublayersOfLayer(layer);
+        layer->owner()->platformCALayerLayoutSublayersOfLayer(layer.get());
 }
 
 PlatformCALayerWin::PlatformCALayerWin(LayerType layerType, PlatformLayer* layer, PlatformCALayerClient* owner)
     : PlatformCALayer(layer ? LayerTypeCustom : layerType, owner)
-    , m_customAppearance(GraphicsLayer::NoCustomAppearance)
 {
     if (layer) {
         m_layer = layer;
@@ -153,7 +153,7 @@ PlatformCALayerWin::PlatformCALayerWin(LayerType layerType, PlatformLayer* layer
     if (usesTiledBackingLayer()) {
         intern = new WebTiledBackingLayerWin(this);
         TileController* tileController = reinterpret_cast<WebTiledBackingLayerWin*>(intern)->createTileController(this);
-        m_customSublayers = std::make_unique<PlatformCALayerList>(tileController->containerLayers());
+        m_customSublayers = makeUnique<PlatformCALayerList>(tileController->containerLayers());
     } else
         intern = new PlatformCALayerWinInternal(this);
 
@@ -209,7 +209,7 @@ PlatformCALayer* PlatformCALayerWin::rootLayer() const
     return host ? host->rootLayer() : nullptr;
 }
 
-void PlatformCALayerWin::animationStarted(const String& animationKey, CFTimeInterval beginTime)
+void PlatformCALayerWin::animationStarted(const String& animationKey, MonotonicTime beginTime)
 {
     // Update start time for any animation not yet started
     CFTimeInterval cacfBeginTime = currentTimeToMediaTime(beginTime);
@@ -267,7 +267,7 @@ void PlatformCALayerWin::setNeedsLayout()
 
 PlatformCALayer* PlatformCALayerWin::superlayer() const
 {
-    return platformCALayer(CACFLayerGetSuperlayer(m_layer.get()));
+    return platformCALayerForLayer(CACFLayerGetSuperlayer(m_layer.get())).get();
 }
 
 void PlatformCALayerWin::removeFromSuperlayer()
@@ -537,6 +537,11 @@ void PlatformCALayerWin::setSupportsSubpixelAntialiasedText(bool)
 {
 }
 
+bool PlatformCALayerWin::hasContents() const
+{
+    return !!CACFLayerGetContents(m_layer.get());
+}
+
 CFTypeRef PlatformCALayerWin::contents() const
 {
     return CACFLayerGetContents(m_layer.get());
@@ -572,13 +577,7 @@ Color PlatformCALayerWin::backgroundColor() const
 
 void PlatformCALayerWin::setBackgroundColor(const Color& value)
 {
-    CGFloat components[4];
-    value.getRGBA(components[0], components[1], components[2], components[3]);
-
-    RetainPtr<CGColorSpaceRef> colorSpace = adoptCF(CGColorSpaceCreateDeviceRGB());
-    RetainPtr<CGColorRef> color = adoptCF(CGColorCreate(colorSpace.get(), components));
-
-    CACFLayerSetBackgroundColor(m_layer.get(), color.get());
+    CACFLayerSetBackgroundColor(m_layer.get(), cachedCGColor(value));
     setNeedsCommit();
 }
 
@@ -672,7 +671,7 @@ void PlatformCALayerWin::setShapeRoundedRect(const FloatRoundedRect&)
 WindRule PlatformCALayerWin::shapeWindRule() const
 {
     // FIXME: implement.
-    return RULE_NONZERO;
+    return WindRule::NonZero;
 }
 
 void PlatformCALayerWin::setShapeWindRule(WindRule)
@@ -700,37 +699,37 @@ static void printIndent(StringBuilder& builder, int indent)
 static void printTransform(StringBuilder& builder, const CATransform3D& transform)
 {
     builder.append('[');
-    builder.appendNumber(transform.m11);
+    builder.append(FormattedNumber::fixedPrecision(transform.m11));
     builder.append(' ');
-    builder.appendNumber(transform.m12);
+    builder.append(FormattedNumber::fixedPrecision(transform.m12));
     builder.append(' ');
-    builder.appendNumber(transform.m13);
+    builder.append(FormattedNumber::fixedPrecision(transform.m13));
     builder.append(' ');
-    builder.appendNumber(transform.m14);
+    builder.append(FormattedNumber::fixedPrecision(transform.m14));
     builder.append("; ");
-    builder.appendNumber(transform.m21);
+    builder.append(FormattedNumber::fixedPrecision(transform.m21));
     builder.append(' ');
-    builder.appendNumber(transform.m22);
+    builder.append(FormattedNumber::fixedPrecision(transform.m22));
     builder.append(' ');
-    builder.appendNumber(transform.m23);
+    builder.append(FormattedNumber::fixedPrecision(transform.m23));
     builder.append(' ');
-    builder.appendNumber(transform.m24);
+    builder.append(FormattedNumber::fixedPrecision(transform.m24));
     builder.append("; ");
-    builder.appendNumber(transform.m31);
+    builder.append(FormattedNumber::fixedPrecision(transform.m31));
     builder.append(' ');
-    builder.appendNumber(transform.m32);
+    builder.append(FormattedNumber::fixedPrecision(transform.m32));
     builder.append(' ');
-    builder.appendNumber(transform.m33);
+    builder.append(FormattedNumber::fixedPrecision(transform.m33));
     builder.append(' ');
-    builder.appendNumber(transform.m34);
+    builder.append(FormattedNumber::fixedPrecision(transform.m34));
     builder.append("; ");
-    builder.appendNumber(transform.m41);
+    builder.append(FormattedNumber::fixedPrecision(transform.m41));
     builder.append(' ');
-    builder.appendNumber(transform.m42);
+    builder.append(FormattedNumber::fixedPrecision(transform.m42));
     builder.append(' ');
-    builder.appendNumber(transform.m43);
+    builder.append(FormattedNumber::fixedPrecision(transform.m43));
     builder.append(' ');
-    builder.appendNumber(transform.m44);
+    builder.append(FormattedNumber::fixedPrecision(transform.m44));
     builder.append(']');
 }
 
@@ -742,11 +741,7 @@ static void printColor(StringBuilder& builder, int indent, const String& label, 
 
     builder.append('\n');
     printIndent(builder, indent);
-    builder.append('(');
-    builder.append(label);
-    builder.append(' ');
-    builder.append(layerColor.nameForRenderTreeAsText());
-    builder.append(')');
+    builder.append('(', label, ' ', serializationForRenderTreeAsText(layerColor), ')');
 }
 
 static void printLayer(StringBuilder& builder, const PlatformCALayer* layer, int indent)
@@ -773,32 +768,32 @@ static void printLayer(StringBuilder& builder, const PlatformCALayer* layer, int
     case PlatformCALayer::LayerTypeShapeLayer: layerTypeName = "shape-layer"; break;
     case PlatformCALayer::LayerTypeLightSystemBackdropLayer: layerTypeName = "light-system-backdrop-layer"; break;
     case PlatformCALayer::LayerTypeDarkSystemBackdropLayer: layerTypeName = "dark-system-backdrop-layer"; break;
-    case PlatformCALayer::LayerTypeScrollingLayer: layerTypeName = "scrolling-layer"; break;
+    case PlatformCALayer::LayerTypeScrollContainerLayer: layerTypeName = "scroll-container-layer"; break;
     case PlatformCALayer::LayerTypeCustom: layerTypeName = "custom-layer"; break;
     }
 
     builder.append("(");
     builder.append(layerTypeName);
     builder.append(" [");
-    builder.appendNumber(layerPosition.x());
+    builder.append(FormattedNumber::fixedPrecision(layerPosition.x()));
     builder.append(' ');
-    builder.appendNumber(layerPosition.y());
+    builder.append(FormattedNumber::fixedPrecision(layerPosition.y()));
     builder.append(' ');
-    builder.appendNumber(layerPosition.z());
+    builder.append(FormattedNumber::fixedPrecision(layerPosition.z()));
     builder.append("] [");
-    builder.appendNumber(layerBounds.x());
+    builder.append(FormattedNumber::fixedPrecision(layerBounds.x()));
     builder.append(' ');
-    builder.appendNumber(layerBounds.y());
+    builder.append(FormattedNumber::fixedPrecision(layerBounds.y()));
     builder.append(' ');
-    builder.appendNumber(layerBounds.width());
+    builder.append(FormattedNumber::fixedPrecision(layerBounds.width()));
     builder.append(' ');
-    builder.appendNumber(layerBounds.height());
+    builder.append(FormattedNumber::fixedPrecision(layerBounds.height()));
     builder.append("] [");
-    builder.appendNumber(layerAnchorPoint.x());
+    builder.append(FormattedNumber::fixedPrecision(layerAnchorPoint.x()));
     builder.append(' ');
-    builder.appendNumber(layerAnchorPoint.y());
+    builder.append(FormattedNumber::fixedPrecision(layerAnchorPoint.y()));
     builder.append(' ');
-    builder.appendNumber(layerAnchorPoint.z());
+    builder.append(FormattedNumber::fixedPrecision(layerAnchorPoint.z()));
     builder.append("] superlayer=");
     builder.appendNumber(reinterpret_cast<unsigned long long>(layer->superlayer()));
 
@@ -817,7 +812,7 @@ static void printLayer(StringBuilder& builder, const PlatformCALayer* layer, int
         builder.append('\n');
         printIndent(builder, indent + 1);
         builder.append("(borderWidth ");
-        builder.appendNumber(borderWidth);
+        builder.append(FormattedNumber::fixedPrecision(borderWidth));
         builder.append(')');
     }
 
@@ -846,7 +841,7 @@ static void printLayer(StringBuilder& builder, const PlatformCALayer* layer, int
         builder.append('\n');
         printIndent(builder, indent + 1);
         builder.append("(opacity ");
-        builder.appendNumber(layerOpacity);
+        builder.append(FormattedNumber::fixedPrecision(layerOpacity));
         builder.append(')');
     }
 
@@ -922,15 +917,15 @@ String PlatformCALayerWin::layerTreeAsString() const
 
     StringBuilder builder;
     builder.append("\n\n** Render tree at time ");
-    builder.appendNumber(monotonicallyIncreasingTime());
+    builder.append(FormattedNumber::fixedPrecision(MonotonicTime::now().secondsSinceEpoch().seconds()));
     builder.append(" (bounds ");
-    builder.appendNumber(rootBounds.origin.x);
+    builder.append(FormattedNumber::fixedPrecision(rootBounds.origin.x));
     builder.append(", ");
-    builder.appendNumber(rootBounds.origin.y);
+    builder.append(FormattedNumber::fixedPrecision(rootBounds.origin.y));
     builder.append(' ');
-    builder.appendNumber(rootBounds.size.width);
+    builder.append(FormattedNumber::fixedPrecision(rootBounds.size.width));
     builder.append('x');
-    builder.appendNumber(rootBounds.size.height);
+    builder.append(FormattedNumber::fixedPrecision(rootBounds.size.height));
     builder.append(") **\n\n");
 
     // Print layer tree from the root
@@ -965,7 +960,7 @@ void PlatformCALayerWin::drawTextAtPoint(CGContextRef context, CGFloat x, CGFloa
 
     desc.setComputedSize(scale.width * fontSize);
 
-    FontCascade font = FontCascade(desc, 0, 0);
+    FontCascade font = FontCascade(WTFMove(desc), 0, 0);
     font.update(nullptr);
 
     GraphicsContext cg(context);

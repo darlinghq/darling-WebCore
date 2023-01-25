@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 Google Inc. All rights reserved.
- * Copyright (C) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2015-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -38,47 +38,42 @@
 #include "CSSPropertyNames.h"
 #include "Chrome.h"
 #include "Color.h"
-#include "ElementChildIterator.h"
+#include "ColorSerialization.h"
 #include "Event.h"
 #include "HTMLDataListElement.h"
 #include "HTMLDivElement.h"
 #include "HTMLInputElement.h"
 #include "HTMLOptionElement.h"
 #include "InputTypeNames.h"
-#include "RenderObject.h"
 #include "RenderView.h"
 #include "ScopedEventQueue.h"
-#include "ScriptController.h"
 #include "ShadowRoot.h"
+#include "UserGestureIndicator.h"
 
 namespace WebCore {
 
 using namespace HTMLNames;
 
-static bool isValidSimpleColorString(const String& value)
+// https://html.spec.whatwg.org/multipage/infrastructure.html#valid-simple-colour
+static bool isValidSimpleColor(StringView string)
 {
-    // See https://html.spec.whatwg.org/multipage/infrastructure.html#valid-simple-colour
-
-    if (value.isEmpty())
+    if (string.length() != 7)
         return false;
-    if (value[0] != '#')
+    if (string[0] != '#')
         return false;
-    if (value.length() != 7)
-        return false;
-    if (value.is8Bit()) {
-        const LChar* characters = value.characters8();
-        for (unsigned i = 1, length = value.length(); i < length; ++i) {
-            if (!isASCIIHexDigit(characters[i]))
-                return false;
-        }
-    } else {
-        const UChar* characters = value.characters16();
-        for (unsigned i = 1, length = value.length(); i < length; ++i) {
-            if (!isASCIIHexDigit(characters[i]))
-                return false;
-        }
+    for (unsigned i = 1; i < 7; ++i) {
+        if (!isASCIIHexDigit(string[i]))
+            return false;
     }
     return true;
+}
+
+// https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#rules-for-parsing-simple-colour-values
+static Optional<SRGBA<uint8_t>> parseSimpleColorValue(StringView string)
+{
+    if (!isValidSimpleColor(string))
+        return WTF::nullopt;
+    return { { toASCIIHexValue(string[1], string[2]), toASCIIHexValue(string[3], string[4]), toASCIIHexValue(string[5], string[6]) } };
 }
 
 ColorInputType::~ColorInputType()
@@ -86,12 +81,31 @@ ColorInputType::~ColorInputType()
     endColorChooser();
 }
 
-bool ColorInputType::isColorControl() const
+bool ColorInputType::isMouseFocusable() const
 {
-    return true;
+    ASSERT(element());
+    return element()->isTextFormControlFocusable();
 }
 
-const AtomicString& ColorInputType::formControlType() const
+bool ColorInputType::isKeyboardFocusable(KeyboardEvent*) const
+{
+    ASSERT(element());
+#if PLATFORM(IOS_FAMILY)
+    if (element()->isReadOnly())
+        return false;
+
+    return element()->isTextFormControlFocusable();
+#else
+    return false;
+#endif
+}
+
+bool ColorInputType::isPresentingAttachedView() const
+{
+    return !!m_chooser;
+}
+
+const AtomString& ColorInputType::formControlType() const
 {
     return InputTypeNames::color();
 }
@@ -103,12 +117,12 @@ bool ColorInputType::supportsRequired() const
 
 String ColorInputType::fallbackValue() const
 {
-    return ASCIILiteral("#000000");
+    return "#000000"_s;
 }
 
 String ColorInputType::sanitizeValue(const String& proposedValue) const
 {
-    if (!isValidSimpleColorString(proposedValue))
+    if (!isValidSimpleColor(proposedValue))
         return fallbackValue();
 
     return proposedValue.convertToASCIILowercase();
@@ -116,21 +130,26 @@ String ColorInputType::sanitizeValue(const String& proposedValue) const
 
 Color ColorInputType::valueAsColor() const
 {
-    return Color(element().value());
+    ASSERT(element());
+    return parseSimpleColorValue(element()->value()).value();
 }
 
-void ColorInputType::createShadowSubtree()
+void ColorInputType::createShadowSubtreeAndUpdateInnerTextElementEditability(ContainerNode::ChildChange::Source source, bool)
 {
-    ASSERT(element().shadowRoot());
+    ASSERT(element());
+    ASSERT(element()->shadowRoot());
 
-    Document& document = element().document();
+    static MainThreadNeverDestroyed<const AtomString> webkitColorSwatchName("-webkit-color-swatch", AtomString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> webkitColorSwatchWrapperName("-webkit-color-swatch-wrapper", AtomString::ConstructFromLiteral);
+
+    Document& document = element()->document();
     auto wrapperElement = HTMLDivElement::create(document);
-    wrapperElement->setPseudo(AtomicString("-webkit-color-swatch-wrapper", AtomicString::ConstructFromLiteral));
+    wrapperElement->setPseudo(webkitColorSwatchWrapperName);
     auto colorSwatch = HTMLDivElement::create(document);
-    colorSwatch->setPseudo(AtomicString("-webkit-color-swatch", AtomicString::ConstructFromLiteral));
-    wrapperElement->appendChild(colorSwatch);
-    element().userAgentShadowRoot()->appendChild(wrapperElement);
-    
+    colorSwatch->setPseudo(webkitColorSwatchName);
+    wrapperElement->appendChild(source, colorSwatch);
+    element()->userAgentShadowRoot()->appendChild(source, wrapperElement);
+
     updateColorSwatch();
 }
 
@@ -148,10 +167,11 @@ void ColorInputType::setValue(const String& value, bool valueChanged, TextFieldE
 
 void ColorInputType::handleDOMActivateEvent(Event& event)
 {
-    if (element().isDisabledFormControl() || !element().renderer())
+    ASSERT(element());
+    if (element()->isDisabledFormControl() || !element()->renderer())
         return;
 
-    if (!ScriptController::processingUserGesture())
+    if (!UserGestureIndicator::processingUserGesture())
         return;
 
     if (Chrome* chrome = this->chrome()) {
@@ -169,14 +189,19 @@ void ColorInputType::detach()
     endColorChooser();
 }
 
+void ColorInputType::elementDidBlur()
+{
+    endColorChooser();
+}
+
 bool ColorInputType::shouldRespectListAttribute()
 {
-    return InputType::themeSupportsDataListUI(this);
+    return true;
 }
 
 bool ColorInputType::typeMismatchFor(const String& value) const
 {
-    return !isValidSimpleColorString(value);
+    return !isValidSimpleColor(value);
 }
 
 bool ColorInputType::shouldResetOnDocumentActivation()
@@ -186,17 +211,20 @@ bool ColorInputType::shouldResetOnDocumentActivation()
 
 void ColorInputType::didChooseColor(const Color& color)
 {
-    if (element().isDisabledFormControl() || color == valueAsColor())
+    ASSERT(element());
+    if (element()->isDisabledFormControl() || color == valueAsColor())
         return;
     EventQueueScope scope;
-    element().setValueFromRenderer(color.serialized());
+    element()->setValueFromRenderer(serializationForHTML(color));
     updateColorSwatch();
-    element().dispatchFormControlChangeEvent();
+    element()->dispatchFormControlChangeEvent();
 }
 
 void ColorInputType::didEndChooser()
 {
     m_chooser = nullptr;
+    if (element()->renderer())
+        element()->renderer()->repaint();
 }
 
 void ColorInputType::endColorChooser()
@@ -207,16 +235,18 @@ void ColorInputType::endColorChooser()
 
 void ColorInputType::updateColorSwatch()
 {
-    HTMLElement* colorSwatch = shadowColorSwatch();
+    RefPtr<HTMLElement> colorSwatch = shadowColorSwatch();
     if (!colorSwatch)
         return;
 
-    colorSwatch->setInlineStyleProperty(CSSPropertyBackgroundColor, element().value(), false);
+    ASSERT(element());
+    colorSwatch->setInlineStyleProperty(CSSPropertyBackgroundColor, element()->value(), false);
 }
 
 HTMLElement* ColorInputType::shadowColorSwatch() const
 {
-    ShadowRoot* shadow = element().userAgentShadowRoot();
+    ASSERT(element());
+    RefPtr<ShadowRoot> shadow = element()->userAgentShadowRoot();
     if (!shadow)
         return nullptr;
 
@@ -229,46 +259,31 @@ HTMLElement* ColorInputType::shadowColorSwatch() const
 
 IntRect ColorInputType::elementRectRelativeToRootView() const
 {
-    if (!element().renderer())
+    ASSERT(element());
+    if (!element()->renderer())
         return IntRect();
-    return element().document().view()->contentsToRootView(element().renderer()->absoluteBoundingBoxRect());
+    return element()->document().view()->contentsToRootView(element()->renderer()->absoluteBoundingBoxRect());
 }
 
-Color ColorInputType::currentColor()
-{
-    return valueAsColor();
-}
-
-bool ColorInputType::shouldShowSuggestions() const
-{
-#if ENABLE(DATALIST_ELEMENT)
-    return element().hasAttributeWithoutSynchronization(listAttr);
-#else
-    return false;
-#endif
-}
-
-Vector<Color> ColorInputType::suggestions() const
+Vector<Color> ColorInputType::suggestedColors() const
 {
     Vector<Color> suggestions;
 #if ENABLE(DATALIST_ELEMENT)
-    if (auto* dataList = element().dataList()) {
-        Ref<HTMLCollection> options = dataList->options();
-        unsigned length = options->length();
-        suggestions.reserveInitialCapacity(length);
-        for (unsigned i = 0; i != length; ++i) {
-            auto value = downcast<HTMLOptionElement>(*options->item(i)).value();
-            if (isValidSimpleColorString(value))
-                suggestions.uncheckedAppend(Color(value));
+    ASSERT(element());
+    if (auto dataList = element()->dataList()) {
+        for (auto& option : dataList->suggestions()) {
+            if (auto color = parseSimpleColorValue(option.value()))
+                suggestions.append(*color);
         }
     }
 #endif
     return suggestions;
 }
 
-void ColorInputType::selectColor(const Color& color)
+void ColorInputType::selectColor(StringView string)
 {
-    didChooseColor(color);
+    if (auto color = parseSimpleColorValue(string))
+        didChooseColor(color.value());
 }
 
 } // namespace WebCore

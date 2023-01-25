@@ -37,43 +37,58 @@
 namespace WebCore {
 
 class ScrollingStateFixedNode;
-class ScrollingStateScrollingNode;
+class ScrollingTreeFrameScrollingNode;
+class ScrollingTreeScrollingNode;
 
-class ScrollingTreeNode : public RefCounted<ScrollingTreeNode> {
+class ScrollingTreeNode : public ThreadSafeRefCounted<ScrollingTreeNode> {
+    WTF_MAKE_FAST_ALLOCATED;
+    friend class ScrollingTree;
 public:
     virtual ~ScrollingTreeNode();
 
     ScrollingNodeType nodeType() const { return m_nodeType; }
     ScrollingNodeID scrollingNodeID() const { return m_nodeID; }
     
-    bool isFixedNode() const { return nodeType() == FixedNode; }
-    bool isStickyNode() const { return nodeType() == StickyNode; }
-    bool isScrollingNode() const { return nodeType() == FrameScrollingNode || nodeType() == OverflowScrollingNode; }
-    bool isFrameScrollingNode() const { return nodeType() == FrameScrollingNode; }
-    bool isOverflowScrollingNode() const { return nodeType() == OverflowScrollingNode; }
+    bool isFixedNode() const { return nodeType() == ScrollingNodeType::Fixed; }
+    bool isStickyNode() const { return nodeType() == ScrollingNodeType::Sticky; }
+    bool isPositionedNode() const { return nodeType() == ScrollingNodeType::Positioned; }
+    bool isScrollingNode() const { return isFrameScrollingNode() || isOverflowScrollingNode(); }
+    bool isFrameScrollingNode() const { return nodeType() == ScrollingNodeType::MainFrame || nodeType() == ScrollingNodeType::Subframe; }
+    bool isFrameHostingNode() const { return nodeType() == ScrollingNodeType::FrameHosting; }
+    bool isOverflowScrollingNode() const { return nodeType() == ScrollingNodeType::Overflow; }
+    bool isOverflowScrollProxyNode() const { return nodeType() == ScrollingNodeType::OverflowProxy; }
 
     virtual void commitStateBeforeChildren(const ScrollingStateNode&) = 0;
     virtual void commitStateAfterChildren(const ScrollingStateNode&) { }
-
-    virtual void updateLayersAfterAncestorChange(const ScrollingTreeNode& changedNode, const FloatRect& fixedPositionRect, const FloatSize& cumulativeDelta) = 0;
+    virtual void didCompleteCommitForNode() { }
+    
+    virtual void willBeDestroyed() { }
 
     ScrollingTreeNode* parent() const { return m_parent; }
     void setParent(ScrollingTreeNode* parent) { m_parent = parent; }
+    
+    WEBCORE_EXPORT bool isRootNode() const;
 
-    Vector<RefPtr<ScrollingTreeNode>>* children() { return m_children.get(); }
+    const Vector<Ref<ScrollingTreeNode>>& children() const { return m_children; }
 
     void appendChild(Ref<ScrollingTreeNode>&&);
     void removeChild(ScrollingTreeNode&);
+    void removeAllChildren();
 
-    WEBCORE_EXPORT void dump(TextStream&, ScrollingStateTreeAsTextBehavior) const;
+    WEBCORE_EXPORT ScrollingTreeFrameScrollingNode* enclosingFrameNodeIncludingSelf();
+    WEBCORE_EXPORT ScrollingTreeScrollingNode* enclosingScrollingNodeIncludingSelf();
+
+    WEBCORE_EXPORT void dump(WTF::TextStream&, ScrollingStateTreeAsTextBehavior) const;
 
 protected:
     ScrollingTreeNode(ScrollingTree&, ScrollingNodeType, ScrollingNodeID);
     ScrollingTree& scrollingTree() const { return m_scrollingTree; }
 
-    std::unique_ptr<Vector<RefPtr<ScrollingTreeNode>>> m_children;
+    virtual void applyLayerPositions() = 0;
 
-    WEBCORE_EXPORT virtual void dumpProperties(TextStream&, ScrollingStateTreeAsTextBehavior) const;
+    WEBCORE_EXPORT virtual void dumpProperties(WTF::TextStream&, ScrollingStateTreeAsTextBehavior) const;
+
+    Vector<Ref<ScrollingTreeNode>> m_children;
 
 private:
     ScrollingTree& m_scrollingTree;
@@ -81,7 +96,7 @@ private:
     const ScrollingNodeType m_nodeType;
     const ScrollingNodeID m_nodeID;
 
-    ScrollingTreeNode* m_parent;
+    ScrollingTreeNode* m_parent { nullptr };
 };
 
 } // namespace WebCore

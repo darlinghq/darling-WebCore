@@ -30,8 +30,6 @@
 
 #pragma once
 
-#if ENABLE(WEB_SOCKETS)
-
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -60,7 +58,7 @@ struct WebSocketFrame {
     static bool needsExtendedLengthField(size_t payloadLength);
     static ParseFrameResult parseFrame(char* data, size_t dataLength, WebSocketFrame&, const char*& frameEnd, String& errorString); // May modify part of data to unmask the frame.
 
-    WebSocketFrame(OpCode = OpCodeInvalid, bool final = false, bool compress = false, bool masked = false, const char* payload = nullptr, size_t payloadLength = 0);
+    WEBCORE_EXPORT WebSocketFrame(OpCode = OpCodeInvalid, bool final = false, bool compress = false, bool masked = false, const char* payload = nullptr, size_t payloadLength = 0);
     void makeFrameData(Vector<char>& frameData);
 
     OpCode opCode;
@@ -74,5 +72,3 @@ struct WebSocketFrame {
 };
 
 } // namespace WebCore
-
-#endif // ENABLE(WEB_SOCKETS)

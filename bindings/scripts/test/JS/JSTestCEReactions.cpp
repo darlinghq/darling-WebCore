@@ -21,7 +21,9 @@
 #include "config.h"
 #include "JSTestCEReactions.h"
 
+#include "ActiveDOMObject.h"
 #include "CustomElementReactionQueue.h"
+#include "DOMIsoSubspaces.h"
 #include "HTMLNames.h"
 #include "JSDOMAttribute.h"
 #include "JSDOMBinding.h"
@@ -33,30 +35,43 @@
 #include "JSDOMOperation.h"
 #include "JSDOMWrapperCache.h"
 #include "JSTestCEReactionsStringifier.h"
-#include <runtime/FunctionPrototype.h>
-#include <runtime/JSCInlines.h>
+#include "ScriptExecutionContext.h"
+#include "WebCoreJSClientData.h"
+#include <JavaScriptCore/FunctionPrototype.h>
+#include <JavaScriptCore/HeapAnalyzer.h>
+#include <JavaScriptCore/JSCInlines.h>
+#include <JavaScriptCore/JSDestructibleObjectHeapCellType.h>
+#include <JavaScriptCore/SubspaceInlines.h>
 #include <wtf/GetPtr.h>
+#include <wtf/PointerPreparations.h>
+#include <wtf/URL.h>
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
 // Functions
 
-JSC::EncodedJSValue JSC_HOST_CALL jsTestCEReactionsPrototypeFunctionMethodWithCEReactions(JSC::ExecState*);
+static JSC_DECLARE_HOST_FUNCTION(jsTestCEReactionsPrototypeFunction_methodWithCEReactions);
+static JSC_DECLARE_HOST_FUNCTION(jsTestCEReactionsPrototypeFunction_methodWithCEReactionsNotNeeded);
 
 // Attributes
 
-JSC::EncodedJSValue jsTestCEReactionsConstructor(JSC::ExecState*, JSC::EncodedJSValue, JSC::PropertyName);
-bool setJSTestCEReactionsConstructor(JSC::ExecState*, JSC::EncodedJSValue, JSC::EncodedJSValue);
-JSC::EncodedJSValue jsTestCEReactionsAttributeWithCEReactions(JSC::ExecState*, JSC::EncodedJSValue, JSC::PropertyName);
-bool setJSTestCEReactionsAttributeWithCEReactions(JSC::ExecState*, JSC::EncodedJSValue, JSC::EncodedJSValue);
-JSC::EncodedJSValue jsTestCEReactionsReflectAttributeWithCEReactions(JSC::ExecState*, JSC::EncodedJSValue, JSC::PropertyName);
-bool setJSTestCEReactionsReflectAttributeWithCEReactions(JSC::ExecState*, JSC::EncodedJSValue, JSC::EncodedJSValue);
-JSC::EncodedJSValue jsTestCEReactionsStringifierAttribute(JSC::ExecState*, JSC::EncodedJSValue, JSC::PropertyName);
-bool setJSTestCEReactionsStringifierAttribute(JSC::ExecState*, JSC::EncodedJSValue, JSC::EncodedJSValue);
+static JSC_DECLARE_CUSTOM_GETTER(jsTestCEReactionsConstructor);
+static JSC_DECLARE_CUSTOM_GETTER(jsTestCEReactions_attributeWithCEReactions);
+static JSC_DECLARE_CUSTOM_SETTER(setJSTestCEReactions_attributeWithCEReactions);
+static JSC_DECLARE_CUSTOM_GETTER(jsTestCEReactions_reflectAttributeWithCEReactions);
+static JSC_DECLARE_CUSTOM_SETTER(setJSTestCEReactions_reflectAttributeWithCEReactions);
+static JSC_DECLARE_CUSTOM_GETTER(jsTestCEReactions_stringifierAttribute);
+static JSC_DECLARE_CUSTOM_SETTER(setJSTestCEReactions_stringifierAttribute);
+static JSC_DECLARE_CUSTOM_GETTER(jsTestCEReactions_attributeWithCEReactionsNotNeeded);
+static JSC_DECLARE_CUSTOM_SETTER(setJSTestCEReactions_attributeWithCEReactionsNotNeeded);
+static JSC_DECLARE_CUSTOM_GETTER(jsTestCEReactions_reflectAttributeWithCEReactionsNotNeeded);
+static JSC_DECLARE_CUSTOM_SETTER(setJSTestCEReactions_reflectAttributeWithCEReactionsNotNeeded);
+static JSC_DECLARE_CUSTOM_GETTER(jsTestCEReactions_stringifierAttributeNotNeeded);
+static JSC_DECLARE_CUSTOM_SETTER(setJSTestCEReactions_stringifierAttributeNotNeeded);
 
-class JSTestCEReactionsPrototype : public JSC::JSNonFinalObject {
+class JSTestCEReactionsPrototype final : public JSC::JSNonFinalObject {
 public:
     using Base = JSC::JSNonFinalObject;
     static JSTestCEReactionsPrototype* create(JSC::VM& vm, JSDOMGlobalObject* globalObject, JSC::Structure* structure)
@@ -67,6 +82,12 @@ public:
     }
 
     DECLARE_INFO;
+    template<typename CellType, JSC::SubspaceAccess>
+    static JSC::IsoSubspace* subspaceFor(JSC::VM& vm)
+    {
+        STATIC_ASSERT_ISO_SUBSPACE_SHARABLE(JSTestCEReactionsPrototype, Base);
+        return &vm.plainObjectSpace;
+    }
     static JSC::Structure* createStructure(JSC::VM& vm, JSC::JSGlobalObject* globalObject, JSC::JSValue prototype)
     {
         return JSC::Structure::create(vm, globalObject, prototype, JSC::TypeInfo(JSC::ObjectType, StructureFlags), info());
@@ -80,41 +101,47 @@ private:
 
     void finishCreation(JSC::VM&);
 };
+STATIC_ASSERT_ISO_SUBSPACE_SHARABLE(JSTestCEReactionsPrototype, JSTestCEReactionsPrototype::Base);
 
-using JSTestCEReactionsConstructor = JSDOMConstructorNotConstructable<JSTestCEReactions>;
+using JSTestCEReactionsDOMConstructor = JSDOMConstructorNotConstructable<JSTestCEReactions>;
 
-template<> JSValue JSTestCEReactionsConstructor::prototypeForStructure(JSC::VM& vm, const JSDOMGlobalObject& globalObject)
+template<> JSValue JSTestCEReactionsDOMConstructor::prototypeForStructure(JSC::VM& vm, const JSDOMGlobalObject& globalObject)
 {
     UNUSED_PARAM(vm);
     return globalObject.functionPrototype();
 }
 
-template<> void JSTestCEReactionsConstructor::initializeProperties(VM& vm, JSDOMGlobalObject& globalObject)
+template<> void JSTestCEReactionsDOMConstructor::initializeProperties(VM& vm, JSDOMGlobalObject& globalObject)
 {
-    putDirect(vm, vm.propertyNames->prototype, JSTestCEReactions::prototype(vm, globalObject), DontDelete | ReadOnly | DontEnum);
-    putDirect(vm, vm.propertyNames->name, jsNontrivialString(&vm, String(ASCIILiteral("TestCEReactions"))), ReadOnly | DontEnum);
-    putDirect(vm, vm.propertyNames->length, jsNumber(0), ReadOnly | DontEnum);
+    putDirect(vm, vm.propertyNames->prototype, JSTestCEReactions::prototype(vm, globalObject), JSC::PropertyAttribute::DontDelete | JSC::PropertyAttribute::ReadOnly | JSC::PropertyAttribute::DontEnum);
+    putDirect(vm, vm.propertyNames->name, jsNontrivialString(vm, "TestCEReactions"_s), JSC::PropertyAttribute::ReadOnly | JSC::PropertyAttribute::DontEnum);
+    putDirect(vm, vm.propertyNames->length, jsNumber(0), JSC::PropertyAttribute::ReadOnly | JSC::PropertyAttribute::DontEnum);
 }
 
-template<> const ClassInfo JSTestCEReactionsConstructor::s_info = { "TestCEReactions", &Base::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(JSTestCEReactionsConstructor) };
+template<> const ClassInfo JSTestCEReactionsDOMConstructor::s_info = { "TestCEReactions", &Base::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(JSTestCEReactionsDOMConstructor) };
 
 /* Hash table for prototype */
 
 static const HashTableValue JSTestCEReactionsPrototypeTableValues[] =
 {
-    { "constructor", DontEnum, NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactionsConstructor), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactionsConstructor) } },
-    { "attributeWithCEReactions", CustomAccessor, NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactionsAttributeWithCEReactions), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactionsAttributeWithCEReactions) } },
-    { "reflectAttributeWithCEReactions", CustomAccessor, NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactionsReflectAttributeWithCEReactions), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactionsReflectAttributeWithCEReactions) } },
-    { "stringifierAttribute", CustomAccessor, NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactionsStringifierAttribute), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactionsStringifierAttribute) } },
-    { "methodWithCEReactions", JSC::Function, NoIntrinsic, { (intptr_t)static_cast<NativeFunction>(jsTestCEReactionsPrototypeFunctionMethodWithCEReactions), (intptr_t) (0) } },
+    { "constructor", static_cast<unsigned>(JSC::PropertyAttribute::DontEnum), NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactionsConstructor), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(0) } },
+    { "attributeWithCEReactions", static_cast<unsigned>(JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactions_attributeWithCEReactions), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactions_attributeWithCEReactions) } },
+    { "reflectAttributeWithCEReactions", static_cast<unsigned>(JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactions_reflectAttributeWithCEReactions), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactions_reflectAttributeWithCEReactions) } },
+    { "stringifierAttribute", static_cast<unsigned>(JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactions_stringifierAttribute), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactions_stringifierAttribute) } },
+    { "attributeWithCEReactionsNotNeeded", static_cast<unsigned>(JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactions_attributeWithCEReactionsNotNeeded), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactions_attributeWithCEReactionsNotNeeded) } },
+    { "reflectAttributeWithCEReactionsNotNeeded", static_cast<unsigned>(JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactions_reflectAttributeWithCEReactionsNotNeeded), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactions_reflectAttributeWithCEReactionsNotNeeded) } },
+    { "stringifierAttributeNotNeeded", static_cast<unsigned>(JSC::PropertyAttribute::CustomAccessor | JSC::PropertyAttribute::DOMAttribute), NoIntrinsic, { (intptr_t)static_cast<PropertySlot::GetValueFunc>(jsTestCEReactions_stringifierAttributeNotNeeded), (intptr_t) static_cast<PutPropertySlot::PutValueFunc>(setJSTestCEReactions_stringifierAttributeNotNeeded) } },
+    { "methodWithCEReactions", static_cast<unsigned>(JSC::PropertyAttribute::Function), NoIntrinsic, { (intptr_t)static_cast<RawNativeFunction>(jsTestCEReactionsPrototypeFunction_methodWithCEReactions), (intptr_t) (0) } },
+    { "methodWithCEReactionsNotNeeded", static_cast<unsigned>(JSC::PropertyAttribute::Function), NoIntrinsic, { (intptr_t)static_cast<RawNativeFunction>(jsTestCEReactionsPrototypeFunction_methodWithCEReactionsNotNeeded), (intptr_t) (0) } },
 };
 
-const ClassInfo JSTestCEReactionsPrototype::s_info = { "TestCEReactionsPrototype", &Base::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(JSTestCEReactionsPrototype) };
+const ClassInfo JSTestCEReactionsPrototype::s_info = { "TestCEReactions", &Base::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(JSTestCEReactionsPrototype) };
 
 void JSTestCEReactionsPrototype::finishCreation(VM& vm)
 {
     Base::finishCreation(vm);
-    reifyStaticProperties(vm, JSTestCEReactionsPrototypeTableValues, *this);
+    reifyStaticProperties(vm, JSTestCEReactions::info(), JSTestCEReactionsPrototypeTableValues, *this);
+    JSC_TO_STRING_TAG_WITHOUT_TRANSITION();
 }
 
 const ClassInfo JSTestCEReactions::s_info = { "TestCEReactions", &Base::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(JSTestCEReactions) };
@@ -128,6 +155,8 @@ void JSTestCEReactions::finishCreation(VM& vm)
 {
     Base::finishCreation(vm);
     ASSERT(inherits(vm, info()));
+
+    static_assert(!std::is_base_of<ActiveDOMObject, TestCEReactions>::value, "Interface is not marked as [ActiveDOMObject] even though implementation class subclasses ActiveDOMObject.");
 
 }
 
@@ -143,7 +172,7 @@ JSObject* JSTestCEReactions::prototype(VM& vm, JSDOMGlobalObject& globalObject)
 
 JSValue JSTestCEReactions::getConstructor(VM& vm, const JSGlobalObject* globalObject)
 {
-    return getDOMConstructor<JSTestCEReactionsConstructor>(vm, *jsCast<const JSDOMGlobalObject*>(globalObject));
+    return getDOMConstructor<JSTestCEReactionsDOMConstructor>(vm, *jsCast<const JSDOMGlobalObject*>(globalObject));
 }
 
 void JSTestCEReactions::destroy(JSC::JSCell* cell)
@@ -152,157 +181,297 @@ void JSTestCEReactions::destroy(JSC::JSCell* cell)
     thisObject->JSTestCEReactions::~JSTestCEReactions();
 }
 
-template<> inline JSTestCEReactions* IDLAttribute<JSTestCEReactions>::cast(ExecState& state, EncodedJSValue thisValue)
+template<> inline JSTestCEReactions* IDLAttribute<JSTestCEReactions>::cast(JSGlobalObject& lexicalGlobalObject, EncodedJSValue thisValue)
 {
-    return jsDynamicDowncast<JSTestCEReactions*>(state.vm(), JSValue::decode(thisValue));
+    return jsDynamicCast<JSTestCEReactions*>(JSC::getVM(&lexicalGlobalObject), JSValue::decode(thisValue));
 }
 
-template<> inline JSTestCEReactions* IDLOperation<JSTestCEReactions>::cast(ExecState& state)
+template<> inline JSTestCEReactions* IDLOperation<JSTestCEReactions>::cast(JSGlobalObject& lexicalGlobalObject, CallFrame& callFrame)
 {
-    return jsDynamicDowncast<JSTestCEReactions*>(state.vm(), state.thisValue());
+    return jsDynamicCast<JSTestCEReactions*>(JSC::getVM(&lexicalGlobalObject), callFrame.thisValue());
 }
 
-EncodedJSValue jsTestCEReactionsConstructor(ExecState* state, EncodedJSValue thisValue, PropertyName)
+JSC_DEFINE_CUSTOM_GETTER(jsTestCEReactionsConstructor, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, PropertyName))
 {
-    VM& vm = state->vm();
+    VM& vm = JSC::getVM(lexicalGlobalObject);
     auto throwScope = DECLARE_THROW_SCOPE(vm);
-    auto* prototype = jsDynamicDowncast<JSTestCEReactionsPrototype*>(vm, JSValue::decode(thisValue));
+    auto* prototype = jsDynamicCast<JSTestCEReactionsPrototype*>(vm, JSValue::decode(thisValue));
     if (UNLIKELY(!prototype))
-        return throwVMTypeError(state, throwScope);
-    return JSValue::encode(JSTestCEReactions::getConstructor(state->vm(), prototype->globalObject()));
+        return throwVMTypeError(lexicalGlobalObject, throwScope);
+    return JSValue::encode(JSTestCEReactions::getConstructor(JSC::getVM(lexicalGlobalObject), prototype->globalObject()));
 }
 
-bool setJSTestCEReactionsConstructor(ExecState* state, EncodedJSValue thisValue, EncodedJSValue encodedValue)
+static inline JSValue jsTestCEReactions_attributeWithCEReactionsGetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject)
 {
-    VM& vm = state->vm();
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
     auto throwScope = DECLARE_THROW_SCOPE(vm);
-    auto* prototype = jsDynamicDowncast<JSTestCEReactionsPrototype*>(vm, JSValue::decode(thisValue));
-    if (UNLIKELY(!prototype)) {
-        throwVMTypeError(state, throwScope);
-        return false;
-    }
-    // Shadowing a built-in constructor
-    return prototype->putDirect(state->vm(), state->propertyNames().constructor, JSValue::decode(encodedValue));
-}
-
-static inline JSValue jsTestCEReactionsAttributeWithCEReactionsGetter(ExecState& state, JSTestCEReactions& thisObject, ThrowScope& throwScope)
-{
-    UNUSED_PARAM(throwScope);
-    UNUSED_PARAM(state);
     auto& impl = thisObject.wrapped();
-    JSValue result = toJS<IDLDOMString>(state, impl.attributeWithCEReactions());
-    return result;
+    RELEASE_AND_RETURN(throwScope, (toJS<IDLDOMString>(lexicalGlobalObject, throwScope, impl.attributeWithCEReactions())));
 }
 
-EncodedJSValue jsTestCEReactionsAttributeWithCEReactions(ExecState* state, EncodedJSValue thisValue, PropertyName)
+JSC_DEFINE_CUSTOM_GETTER(jsTestCEReactions_attributeWithCEReactions, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, PropertyName))
 {
-    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactionsAttributeWithCEReactionsGetter>(*state, thisValue, "attributeWithCEReactions");
+    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactions_attributeWithCEReactionsGetter, CastedThisErrorBehavior::Assert>(*lexicalGlobalObject, thisValue, "attributeWithCEReactions");
 }
 
-static inline bool setJSTestCEReactionsAttributeWithCEReactionsSetter(ExecState& state, JSTestCEReactions& thisObject, JSValue value, ThrowScope& throwScope)
+static inline bool setJSTestCEReactions_attributeWithCEReactionsSetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject, JSValue value)
 {
-    UNUSED_PARAM(state);
-    UNUSED_PARAM(throwScope);
-    CustomElementReactionStack customElementReactionStack;
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    CustomElementReactionStack customElementReactionStack(lexicalGlobalObject);
     auto& impl = thisObject.wrapped();
-    auto nativeValue = convert<IDLDOMString>(state, value);
+    auto nativeValue = convert<IDLDOMString>(lexicalGlobalObject, value);
     RETURN_IF_EXCEPTION(throwScope, false);
-    impl.setAttributeWithCEReactions(WTFMove(nativeValue));
+    AttributeSetter::call(lexicalGlobalObject, throwScope, [&] {
+        return impl.setAttributeWithCEReactions(WTFMove(nativeValue));
+    });
     return true;
 }
 
-bool setJSTestCEReactionsAttributeWithCEReactions(ExecState* state, EncodedJSValue thisValue, EncodedJSValue encodedValue)
+JSC_DEFINE_CUSTOM_SETTER(setJSTestCEReactions_attributeWithCEReactions, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue))
 {
-    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactionsAttributeWithCEReactionsSetter>(*state, thisValue, encodedValue, "attributeWithCEReactions");
+    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactions_attributeWithCEReactionsSetter>(*lexicalGlobalObject, thisValue, encodedValue, "attributeWithCEReactions");
 }
 
-static inline JSValue jsTestCEReactionsReflectAttributeWithCEReactionsGetter(ExecState& state, JSTestCEReactions& thisObject, ThrowScope& throwScope)
+static inline JSValue jsTestCEReactions_reflectAttributeWithCEReactionsGetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject)
 {
-    UNUSED_PARAM(throwScope);
-    UNUSED_PARAM(state);
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
     auto& impl = thisObject.wrapped();
-    JSValue result = toJS<IDLDOMString>(state, impl.attributeWithoutSynchronization(WebCore::HTMLNames::reflectattributewithcereactionsAttr));
-    return result;
+    RELEASE_AND_RETURN(throwScope, (toJS<IDLDOMString>(lexicalGlobalObject, throwScope, impl.attributeWithoutSynchronization(WebCore::HTMLNames::reflectattributewithcereactionsAttr))));
 }
 
-EncodedJSValue jsTestCEReactionsReflectAttributeWithCEReactions(ExecState* state, EncodedJSValue thisValue, PropertyName)
+JSC_DEFINE_CUSTOM_GETTER(jsTestCEReactions_reflectAttributeWithCEReactions, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, PropertyName))
 {
-    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactionsReflectAttributeWithCEReactionsGetter>(*state, thisValue, "reflectAttributeWithCEReactions");
+    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactions_reflectAttributeWithCEReactionsGetter, CastedThisErrorBehavior::Assert>(*lexicalGlobalObject, thisValue, "reflectAttributeWithCEReactions");
 }
 
-static inline bool setJSTestCEReactionsReflectAttributeWithCEReactionsSetter(ExecState& state, JSTestCEReactions& thisObject, JSValue value, ThrowScope& throwScope)
+static inline bool setJSTestCEReactions_reflectAttributeWithCEReactionsSetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject, JSValue value)
 {
-    UNUSED_PARAM(state);
-    UNUSED_PARAM(throwScope);
-    CustomElementReactionStack customElementReactionStack;
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    CustomElementReactionStack customElementReactionStack(lexicalGlobalObject);
     auto& impl = thisObject.wrapped();
-    auto nativeValue = convert<IDLDOMString>(state, value);
+    auto nativeValue = convert<IDLDOMString>(lexicalGlobalObject, value);
     RETURN_IF_EXCEPTION(throwScope, false);
-    impl.setAttributeWithoutSynchronization(WebCore::HTMLNames::reflectattributewithcereactionsAttr, WTFMove(nativeValue));
+    AttributeSetter::call(lexicalGlobalObject, throwScope, [&] {
+        return impl.setAttributeWithoutSynchronization(WebCore::HTMLNames::reflectattributewithcereactionsAttr, WTFMove(nativeValue));
+    });
     return true;
 }
 
-bool setJSTestCEReactionsReflectAttributeWithCEReactions(ExecState* state, EncodedJSValue thisValue, EncodedJSValue encodedValue)
+JSC_DEFINE_CUSTOM_SETTER(setJSTestCEReactions_reflectAttributeWithCEReactions, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue))
 {
-    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactionsReflectAttributeWithCEReactionsSetter>(*state, thisValue, encodedValue, "reflectAttributeWithCEReactions");
+    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactions_reflectAttributeWithCEReactionsSetter>(*lexicalGlobalObject, thisValue, encodedValue, "reflectAttributeWithCEReactions");
 }
 
-static inline JSValue jsTestCEReactionsStringifierAttributeGetter(ExecState& state, JSTestCEReactions& thisObject, ThrowScope& throwScope)
+static inline JSValue jsTestCEReactions_stringifierAttributeGetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject)
 {
-    UNUSED_PARAM(throwScope);
-    UNUSED_PARAM(state);
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
     auto& impl = thisObject.wrapped();
-    JSValue result = toJS<IDLInterface<TestCEReactionsStringifier>>(state, *thisObject.globalObject(), impl.stringifierAttribute());
-    return result;
+    RELEASE_AND_RETURN(throwScope, (toJS<IDLInterface<TestCEReactionsStringifier>>(lexicalGlobalObject, *thisObject.globalObject(), throwScope, impl.stringifierAttribute())));
 }
 
-EncodedJSValue jsTestCEReactionsStringifierAttribute(ExecState* state, EncodedJSValue thisValue, PropertyName)
+JSC_DEFINE_CUSTOM_GETTER(jsTestCEReactions_stringifierAttribute, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, PropertyName))
 {
-    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactionsStringifierAttributeGetter>(*state, thisValue, "stringifierAttribute");
+    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactions_stringifierAttributeGetter, CastedThisErrorBehavior::Assert>(*lexicalGlobalObject, thisValue, "stringifierAttribute");
 }
 
-static inline bool setJSTestCEReactionsStringifierAttributeSetter(ExecState& state, JSTestCEReactions& thisObject, JSValue value, ThrowScope& throwScope)
+static inline bool setJSTestCEReactions_stringifierAttributeSetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject, JSValue value)
 {
-    UNUSED_PARAM(state);
-    UNUSED_PARAM(throwScope);
-    auto id = Identifier::fromString(&state.vm(), reinterpret_cast<const LChar*>("stringifierAttribute"), strlen("stringifierAttribute"));
-    auto valueToForwardTo = thisObject.get(&state, id);
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    auto id = Identifier::fromString(vm, reinterpret_cast<const LChar*>("stringifierAttribute"), strlen("stringifierAttribute"));
+    auto valueToForwardTo = thisObject.get(&lexicalGlobalObject, id);
     RETURN_IF_EXCEPTION(throwScope, false);
     if (UNLIKELY(!valueToForwardTo.isObject())) {
-        throwTypeError(&state, throwScope);
+        throwTypeError(&lexicalGlobalObject, throwScope);
         return false;
     }
-    auto forwardId = Identifier::fromString(&state.vm(), reinterpret_cast<const LChar*>("value"), strlen("value"));
+    auto forwardId = Identifier::fromString(vm, reinterpret_cast<const LChar*>("value"), strlen("value"));
     PutPropertySlot slot(valueToForwardTo, false);
-    asObject(valueToForwardTo)->methodTable(state.vm())->put(asObject(valueToForwardTo), &state, forwardId, value, slot);
+    asObject(valueToForwardTo)->methodTable(vm)->put(asObject(valueToForwardTo), &lexicalGlobalObject, forwardId, value, slot);
     RETURN_IF_EXCEPTION(throwScope, false);
     return true;
 }
 
-bool setJSTestCEReactionsStringifierAttribute(ExecState* state, EncodedJSValue thisValue, EncodedJSValue encodedValue)
+JSC_DEFINE_CUSTOM_SETTER(setJSTestCEReactions_stringifierAttribute, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue))
 {
-    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactionsStringifierAttributeSetter>(*state, thisValue, encodedValue, "stringifierAttribute");
+    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactions_stringifierAttributeSetter>(*lexicalGlobalObject, thisValue, encodedValue, "stringifierAttribute");
 }
 
-static inline JSC::EncodedJSValue jsTestCEReactionsPrototypeFunctionMethodWithCEReactionsBody(JSC::ExecState* state, typename IDLOperation<JSTestCEReactions>::ClassParameter castedThis, JSC::ThrowScope& throwScope)
+static inline JSValue jsTestCEReactions_attributeWithCEReactionsNotNeededGetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject)
 {
-    UNUSED_PARAM(state);
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    auto& impl = thisObject.wrapped();
+    RELEASE_AND_RETURN(throwScope, (toJS<IDLDOMString>(lexicalGlobalObject, throwScope, impl.attributeWithCEReactionsNotNeeded())));
+}
+
+JSC_DEFINE_CUSTOM_GETTER(jsTestCEReactions_attributeWithCEReactionsNotNeeded, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, PropertyName))
+{
+    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactions_attributeWithCEReactionsNotNeededGetter, CastedThisErrorBehavior::Assert>(*lexicalGlobalObject, thisValue, "attributeWithCEReactionsNotNeeded");
+}
+
+static inline bool setJSTestCEReactions_attributeWithCEReactionsNotNeededSetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject, JSValue value)
+{
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    CustomElementReactionDisallowedScope customElementReactionDisallowedScope;
+    auto& impl = thisObject.wrapped();
+    auto nativeValue = convert<IDLDOMString>(lexicalGlobalObject, value);
+    RETURN_IF_EXCEPTION(throwScope, false);
+    AttributeSetter::call(lexicalGlobalObject, throwScope, [&] {
+        return impl.setAttributeWithCEReactionsNotNeeded(WTFMove(nativeValue));
+    });
+    return true;
+}
+
+JSC_DEFINE_CUSTOM_SETTER(setJSTestCEReactions_attributeWithCEReactionsNotNeeded, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue))
+{
+    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactions_attributeWithCEReactionsNotNeededSetter>(*lexicalGlobalObject, thisValue, encodedValue, "attributeWithCEReactionsNotNeeded");
+}
+
+static inline JSValue jsTestCEReactions_reflectAttributeWithCEReactionsNotNeededGetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject)
+{
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    auto& impl = thisObject.wrapped();
+    RELEASE_AND_RETURN(throwScope, (toJS<IDLDOMString>(lexicalGlobalObject, throwScope, impl.attributeWithoutSynchronization(WebCore::HTMLNames::reflectattributewithcereactionsnotneededAttr))));
+}
+
+JSC_DEFINE_CUSTOM_GETTER(jsTestCEReactions_reflectAttributeWithCEReactionsNotNeeded, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, PropertyName))
+{
+    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactions_reflectAttributeWithCEReactionsNotNeededGetter, CastedThisErrorBehavior::Assert>(*lexicalGlobalObject, thisValue, "reflectAttributeWithCEReactionsNotNeeded");
+}
+
+static inline bool setJSTestCEReactions_reflectAttributeWithCEReactionsNotNeededSetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject, JSValue value)
+{
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    CustomElementReactionDisallowedScope customElementReactionDisallowedScope;
+    auto& impl = thisObject.wrapped();
+    auto nativeValue = convert<IDLDOMString>(lexicalGlobalObject, value);
+    RETURN_IF_EXCEPTION(throwScope, false);
+    AttributeSetter::call(lexicalGlobalObject, throwScope, [&] {
+        return impl.setAttributeWithoutSynchronization(WebCore::HTMLNames::reflectattributewithcereactionsnotneededAttr, WTFMove(nativeValue));
+    });
+    return true;
+}
+
+JSC_DEFINE_CUSTOM_SETTER(setJSTestCEReactions_reflectAttributeWithCEReactionsNotNeeded, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue))
+{
+    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactions_reflectAttributeWithCEReactionsNotNeededSetter>(*lexicalGlobalObject, thisValue, encodedValue, "reflectAttributeWithCEReactionsNotNeeded");
+}
+
+static inline JSValue jsTestCEReactions_stringifierAttributeNotNeededGetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject)
+{
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    auto& impl = thisObject.wrapped();
+    RELEASE_AND_RETURN(throwScope, (toJS<IDLInterface<TestCEReactionsStringifier>>(lexicalGlobalObject, *thisObject.globalObject(), throwScope, impl.stringifierAttributeNotNeeded())));
+}
+
+JSC_DEFINE_CUSTOM_GETTER(jsTestCEReactions_stringifierAttributeNotNeeded, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, PropertyName))
+{
+    return IDLAttribute<JSTestCEReactions>::get<jsTestCEReactions_stringifierAttributeNotNeededGetter, CastedThisErrorBehavior::Assert>(*lexicalGlobalObject, thisValue, "stringifierAttributeNotNeeded");
+}
+
+static inline bool setJSTestCEReactions_stringifierAttributeNotNeededSetter(JSGlobalObject& lexicalGlobalObject, JSTestCEReactions& thisObject, JSValue value)
+{
+    auto& vm = JSC::getVM(&lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    auto id = Identifier::fromString(vm, reinterpret_cast<const LChar*>("stringifierAttributeNotNeeded"), strlen("stringifierAttributeNotNeeded"));
+    auto valueToForwardTo = thisObject.get(&lexicalGlobalObject, id);
+    RETURN_IF_EXCEPTION(throwScope, false);
+    if (UNLIKELY(!valueToForwardTo.isObject())) {
+        throwTypeError(&lexicalGlobalObject, throwScope);
+        return false;
+    }
+    auto forwardId = Identifier::fromString(vm, reinterpret_cast<const LChar*>("valueWithoutReactions"), strlen("valueWithoutReactions"));
+    PutPropertySlot slot(valueToForwardTo, false);
+    asObject(valueToForwardTo)->methodTable(vm)->put(asObject(valueToForwardTo), &lexicalGlobalObject, forwardId, value, slot);
+    RETURN_IF_EXCEPTION(throwScope, false);
+    return true;
+}
+
+JSC_DEFINE_CUSTOM_SETTER(setJSTestCEReactions_stringifierAttributeNotNeeded, (JSGlobalObject* lexicalGlobalObject, EncodedJSValue thisValue, EncodedJSValue encodedValue))
+{
+    return IDLAttribute<JSTestCEReactions>::set<setJSTestCEReactions_stringifierAttributeNotNeededSetter>(*lexicalGlobalObject, thisValue, encodedValue, "stringifierAttributeNotNeeded");
+}
+
+static inline JSC::EncodedJSValue jsTestCEReactionsPrototypeFunction_methodWithCEReactionsBody(JSC::JSGlobalObject* lexicalGlobalObject, JSC::CallFrame* callFrame, typename IDLOperation<JSTestCEReactions>::ClassParameter castedThis)
+{
+    auto& vm = JSC::getVM(lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
     UNUSED_PARAM(throwScope);
-    CustomElementReactionStack customElementReactionStack;
+    UNUSED_PARAM(callFrame);
+    CustomElementReactionStack customElementReactionStack(*lexicalGlobalObject);
     auto& impl = castedThis->wrapped();
+    throwScope.release();
     impl.methodWithCEReactions();
     return JSValue::encode(jsUndefined());
 }
 
-EncodedJSValue JSC_HOST_CALL jsTestCEReactionsPrototypeFunctionMethodWithCEReactions(ExecState* state)
+JSC_DEFINE_HOST_FUNCTION(jsTestCEReactionsPrototypeFunction_methodWithCEReactions, (JSGlobalObject* lexicalGlobalObject, CallFrame* callFrame))
 {
-    return IDLOperation<JSTestCEReactions>::call<jsTestCEReactionsPrototypeFunctionMethodWithCEReactionsBody>(*state, "methodWithCEReactions");
+    return IDLOperation<JSTestCEReactions>::call<jsTestCEReactionsPrototypeFunction_methodWithCEReactionsBody>(*lexicalGlobalObject, *callFrame, "methodWithCEReactions");
 }
 
-bool JSTestCEReactionsOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, SlotVisitor& visitor)
+static inline JSC::EncodedJSValue jsTestCEReactionsPrototypeFunction_methodWithCEReactionsNotNeededBody(JSC::JSGlobalObject* lexicalGlobalObject, JSC::CallFrame* callFrame, typename IDLOperation<JSTestCEReactions>::ClassParameter castedThis)
+{
+    auto& vm = JSC::getVM(lexicalGlobalObject);
+    auto throwScope = DECLARE_THROW_SCOPE(vm);
+    UNUSED_PARAM(throwScope);
+    UNUSED_PARAM(callFrame);
+    CustomElementReactionDisallowedScope customElementReactionDisallowedScope;
+    auto& impl = castedThis->wrapped();
+    throwScope.release();
+    impl.methodWithCEReactionsNotNeeded();
+    return JSValue::encode(jsUndefined());
+}
+
+JSC_DEFINE_HOST_FUNCTION(jsTestCEReactionsPrototypeFunction_methodWithCEReactionsNotNeeded, (JSGlobalObject* lexicalGlobalObject, CallFrame* callFrame))
+{
+    return IDLOperation<JSTestCEReactions>::call<jsTestCEReactionsPrototypeFunction_methodWithCEReactionsNotNeededBody>(*lexicalGlobalObject, *callFrame, "methodWithCEReactionsNotNeeded");
+}
+
+JSC::IsoSubspace* JSTestCEReactions::subspaceForImpl(JSC::VM& vm)
+{
+    auto& clientData = *static_cast<JSVMClientData*>(vm.clientData);
+    auto& spaces = clientData.subspaces();
+    if (auto* space = spaces.m_subspaceForTestCEReactions.get())
+        return space;
+    static_assert(std::is_base_of_v<JSC::JSDestructibleObject, JSTestCEReactions> || !JSTestCEReactions::needsDestruction);
+    if constexpr (std::is_base_of_v<JSC::JSDestructibleObject, JSTestCEReactions>)
+        spaces.m_subspaceForTestCEReactions = makeUnique<IsoSubspace> ISO_SUBSPACE_INIT(vm.heap, vm.destructibleObjectHeapCellType.get(), JSTestCEReactions);
+    else
+        spaces.m_subspaceForTestCEReactions = makeUnique<IsoSubspace> ISO_SUBSPACE_INIT(vm.heap, vm.cellHeapCellType.get(), JSTestCEReactions);
+    auto* space = spaces.m_subspaceForTestCEReactions.get();
+IGNORE_WARNINGS_BEGIN("unreachable-code")
+IGNORE_WARNINGS_BEGIN("tautological-compare")
+    if (&JSTestCEReactions::visitOutputConstraints != &JSC::JSCell::visitOutputConstraints)
+        clientData.outputConstraintSpaces().append(space);
+IGNORE_WARNINGS_END
+IGNORE_WARNINGS_END
+    return space;
+}
+
+void JSTestCEReactions::analyzeHeap(JSCell* cell, HeapAnalyzer& analyzer)
+{
+    auto* thisObject = jsCast<JSTestCEReactions*>(cell);
+    analyzer.setWrappedObjectForCell(cell, &thisObject->wrapped());
+    if (thisObject->scriptExecutionContext())
+        analyzer.setLabelForCell(cell, "url " + thisObject->scriptExecutionContext()->url().string());
+    Base::analyzeHeap(cell, analyzer);
+}
+
+bool JSTestCEReactionsOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, SlotVisitor& visitor, const char** reason)
 {
     UNUSED_PARAM(handle);
     UNUSED_PARAM(visitor);
+    UNUSED_PARAM(reason);
     return false;
 }
 
@@ -322,13 +491,13 @@ extern "C" { extern void* _ZTVN7WebCore15TestCEReactionsE[]; }
 #endif
 #endif
 
-JSC::JSValue toJSNewlyCreated(JSC::ExecState*, JSDOMGlobalObject* globalObject, Ref<TestCEReactions>&& impl)
+JSC::JSValue toJSNewlyCreated(JSC::JSGlobalObject*, JSDOMGlobalObject* globalObject, Ref<TestCEReactions>&& impl)
 {
 
 #if ENABLE(BINDING_INTEGRITY)
-    void* actualVTablePointer = *(reinterpret_cast<void**>(impl.ptr()));
+    const void* actualVTablePointer = getVTablePointer(impl.ptr());
 #if PLATFORM(WIN)
-    void* expectedVTablePointer = reinterpret_cast<void*>(__identifier("??_7TestCEReactions@WebCore@@6B@"));
+    void* expectedVTablePointer = __identifier("??_7TestCEReactions@WebCore@@6B@");
 #else
     void* expectedVTablePointer = &_ZTVN7WebCore15TestCEReactionsE[2];
 #endif
@@ -346,14 +515,14 @@ JSC::JSValue toJSNewlyCreated(JSC::ExecState*, JSDOMGlobalObject* globalObject, 
     return createWrapper<TestCEReactions>(globalObject, WTFMove(impl));
 }
 
-JSC::JSValue toJS(JSC::ExecState* state, JSDOMGlobalObject* globalObject, TestCEReactions& impl)
+JSC::JSValue toJS(JSC::JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject* globalObject, TestCEReactions& impl)
 {
-    return wrap(state, globalObject, impl);
+    return wrap(lexicalGlobalObject, globalObject, impl);
 }
 
 TestCEReactions* JSTestCEReactions::toWrapped(JSC::VM& vm, JSC::JSValue value)
 {
-    if (auto* wrapper = jsDynamicDowncast<JSTestCEReactions*>(vm, value))
+    if (auto* wrapper = jsDynamicCast<JSTestCEReactions*>(vm, value))
         return &wrapper->wrapped();
     return nullptr;
 }

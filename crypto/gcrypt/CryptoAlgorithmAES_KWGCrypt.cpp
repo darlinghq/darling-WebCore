@@ -27,43 +27,41 @@
 #include "config.h"
 #include "CryptoAlgorithmAES_KW.h"
 
-#if ENABLE(SUBTLE_CRYPTO)
+#if ENABLE(WEB_CRYPTO)
 
 #include "CryptoKeyAES.h"
-#include "ExceptionCode.h"
-#include "NotImplemented.h"
 #include <pal/crypto/gcrypt/Handle.h>
 #include <pal/crypto/gcrypt/Utilities.h>
 
 namespace WebCore {
 
-static std::optional<Vector<uint8_t>> gcryptWrapKey(const Vector<uint8_t>& key, const Vector<uint8_t>& data)
+static Optional<Vector<uint8_t>> gcryptWrapKey(const Vector<uint8_t>& key, const Vector<uint8_t>& data)
 {
     // Determine the AES algorithm for the given key size.
     auto algorithm = PAL::GCrypt::aesAlgorithmForKeySize(key.size() * 8);
     if (!algorithm)
-        return std::nullopt;
+        return WTF::nullopt;
 
     // Create a new GCrypt cipher object for the AES algorithm and the AES-Wrap cipher mode.
     PAL::GCrypt::Handle<gcry_cipher_hd_t> handle;
     gcry_error_t error = gcry_cipher_open(&handle, *algorithm, GCRY_CIPHER_MODE_AESWRAP, 0);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Use the given key for this cipher object.
     error = gcry_cipher_setkey(handle, key.data(), key.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Finalize the cipher object before performing the encryption.
     error = gcry_cipher_final(handle);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Perform the encryption. The provided output buffer must be 64 bits larger than the input buffer.
@@ -71,39 +69,39 @@ static std::optional<Vector<uint8_t>> gcryptWrapKey(const Vector<uint8_t>& key, 
     error = gcry_cipher_encrypt(handle, output.data(), output.size(), data.data(), data.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     return output;
 }
 
-static std::optional<Vector<uint8_t>> gcryptUnwrapKey(const Vector<uint8_t>& key, const Vector<uint8_t>& data)
+static Optional<Vector<uint8_t>> gcryptUnwrapKey(const Vector<uint8_t>& key, const Vector<uint8_t>& data)
 {
     // Determine the AES algorithm for the given key size.
     auto algorithm = PAL::GCrypt::aesAlgorithmForKeySize(key.size() * 8);
     if (!algorithm)
-        return std::nullopt;
+        return WTF::nullopt;
 
     // Create a new GCrypt cipher object for the AES algorithm and the AES-Wrap cipher mode.
     PAL::GCrypt::Handle<gcry_cipher_hd_t> handle;
     gcry_error_t error = gcry_cipher_open(&handle, *algorithm, GCRY_CIPHER_MODE_AESWRAP, 0);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Use the given key for this cipher object.
     error = gcry_cipher_setkey(handle, key.data(), key.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Finalize the cipher object before performing the encryption.
     error = gcry_cipher_final(handle);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Perform the decryption. The output buffer may be specified 64 bits shorter than the input buffer.
@@ -111,48 +109,28 @@ static std::optional<Vector<uint8_t>> gcryptUnwrapKey(const Vector<uint8_t>& key
     error = gcry_cipher_decrypt(handle, output.data(), output.size(), data.data(), data.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     return output;
 }
 
-void CryptoAlgorithmAES_KW::platformWrapKey(Ref<CryptoKey>&& key, Vector<uint8_t>&& data, VectorCallback&& callback, ExceptionCallback&& exceptionCallback)
+ExceptionOr<Vector<uint8_t>> CryptoAlgorithmAES_KW::platformWrapKey(const CryptoKeyAES& key, const Vector<uint8_t>& data)
 {
-    auto& aesKey = downcast<CryptoKeyAES>(key.get());
-    auto output = gcryptWrapKey(aesKey.key(), data);
-    if (!output) {
-        exceptionCallback(OperationError);
-        return;
-    }
-
-    callback(*output);
+    auto output = gcryptWrapKey(key.key(), data);
+    if (!output)
+        return Exception { OperationError };
+    return WTFMove(*output);
 }
 
-void CryptoAlgorithmAES_KW::platformUnwrapKey(Ref<CryptoKey>&& key, Vector<uint8_t>&& data, VectorCallback&& callback, ExceptionCallback&& exceptionCallback)
+ExceptionOr<Vector<uint8_t>> CryptoAlgorithmAES_KW::platformUnwrapKey(const CryptoKeyAES& key, const Vector<uint8_t>& data)
 {
-    auto& aesKey = downcast<CryptoKeyAES>(key.get());
-    auto output = gcryptUnwrapKey(aesKey.key(), data);
-    if (!output) {
-        exceptionCallback(OperationError);
-        return;
-    }
-
-    callback(*output);
-}
-
-ExceptionOr<void> CryptoAlgorithmAES_KW::platformEncrypt(const CryptoKeyAES&, const CryptoOperationData&, VectorCallback&&, VoidCallback&&)
-{
-    notImplemented();
-    return Exception { NOT_SUPPORTED_ERR };
-}
-
-ExceptionOr<void> CryptoAlgorithmAES_KW::platformDecrypt(const CryptoKeyAES&, const CryptoOperationData&, VectorCallback&&, VoidCallback&&)
-{
-    notImplemented();
-    return Exception { NOT_SUPPORTED_ERR };
+    auto output = gcryptUnwrapKey(key.key(), data);
+    if (!output)
+        return Exception { OperationError };
+    return WTFMove(*output);
 }
 
 } // namespace WebCore
 
-#endif // ENABLE(SUBTLE_CRYPTO)
+#endif // ENABLE(WEB_CRYPTO)

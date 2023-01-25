@@ -23,20 +23,23 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "Logging.h"
+#import "config.h"
+#import "Logging.h"
 
-#include <wtf/text/WTFString.h>
+#import <wtf/text/WTFString.h>
 
 #if !LOG_DISABLED || !RELEASE_LOG_DISABLED
 
 namespace WebCore {
 
-static NSString * const defaultsDomain = @"WebCoreLogging";
-
 String logLevelString()
 {
+#if !LOG_DISABLED
+    static NSString * const defaultsDomain = @"WebCoreLogging";
     return [[NSUserDefaults standardUserDefaults] stringForKey:defaultsDomain];
+#else
+    return String();
+#endif
 }
 
 }

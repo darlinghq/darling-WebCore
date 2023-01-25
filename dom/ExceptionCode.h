@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2006, 2007, 2015 Apple Inc. All rights reserved.
+ *  Copyright (C) 2006-2020 Apple Inc. All rights reserved.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -18,49 +18,35 @@
 
 #pragma once
 
+#include <wtf/EnumTraits.h>
+
 namespace WebCore {
 
-// The DOM standards use unsigned short for exception codes.
-// In our DOM implementation we use int instead, and use different
-// numerical ranges for different types of DOM exception, so that
-// an exception of any type can be expressed with a single integer.
-using ExceptionCode = int;
-
-// Some of these are considered historical since they have been
-// changed or removed from the specifications.
-enum {
-    INDEX_SIZE_ERR = 1,
-    HIERARCHY_REQUEST_ERR = 3,
-    WRONG_DOCUMENT_ERR = 4,
-    INVALID_CHARACTER_ERR = 5,
-    NO_MODIFICATION_ALLOWED_ERR = 7,
-    NOT_FOUND_ERR = 8,
-    NOT_SUPPORTED_ERR = 9,
-    INUSE_ATTRIBUTE_ERR = 10, // Historical. Only used in setAttributeNode etc which have been removed from the DOM specs.
-
-    // Introduced in DOM Level 2:
-    INVALID_STATE_ERR = 11,
-    SYNTAX_ERR = 12,
-    INVALID_MODIFICATION_ERR = 13,
-    NAMESPACE_ERR = 14,
-    INVALID_ACCESS_ERR = 15,
-
-    // Introduced in DOM Level 3:
-    TYPE_MISMATCH_ERR = 17, // Historical; use TypeError instead
-
-    // XMLHttpRequest extension:
-    SECURITY_ERR = 18,
-
-    // Others introduced in HTML5:
-    NETWORK_ERR = 19,
-    ABORT_ERR = 20,
-    URL_MISMATCH_ERR = 21,
-    QUOTA_EXCEEDED_ERR = 22,
-    TIMEOUT_ERR = 23,
-    INVALID_NODE_TYPE_ERR = 24,
-    DATA_CLONE_ERR = 25,
-
-    // Others introduced in https://heycam.github.io/webidl/#idl-exceptions
+enum ExceptionCode {
+    // DOMException error names (https://heycam.github.io/webidl/#idl-DOMException-error-names).
+    // Those need to be kept in sync with the array in DOMException.cpp.
+    IndexSizeError, // Deprecated. Use RangeError instead.
+    HierarchyRequestError,
+    WrongDocumentError,
+    InvalidCharacterError,
+    NoModificationAllowedError,
+    NotFoundError,
+    NotSupportedError,
+    InUseAttributeError,
+    InvalidStateError,
+    SyntaxError,
+    InvalidModificationError,
+    NamespaceError,
+    InvalidAccessError, // Deprecated. use NotAllowedError instead.
+    TypeMismatchError, // Deprecated. Use TypeError instead.
+    SecurityError,
+    NetworkError,
+    AbortError,
+    URLMismatchError,
+    QuotaExceededError,
+    TimeoutError,
+    InvalidNodeTypeError,
+    DataCloneError,
     EncodingError,
     NotReadableError,
     UnknownError,
@@ -72,16 +58,62 @@ enum {
     OperationError,
     NotAllowedError,
 
-    // Non-standard errors
+    // Simple exceptions (https://heycam.github.io/webidl/#idl-exceptions).
+    RangeError,
+    TypeError,
+
+    // Non-standard error.
     StackOverflowError,
+    OutOfMemoryError,
 
-    // Used to indicate to the bindings that a JS exception was thrown below and it should be propogated.
+    // Used to indicate to the bindings that a JS exception was thrown below and it should be propagated.
     ExistingExceptionError,
-
-    // WebIDL exception types, handled by the binding layer.
-    // FIXME: Add GeneralError, EvalError, etc. when implemented in the bindings.
-    TypeError = 105,
-    RangeError = 106,
 };
 
 } // namespace WebCore
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::ExceptionCode> {
+    using values = EnumValues<
+    WebCore::ExceptionCode,
+    WebCore::ExceptionCode::IndexSizeError,
+    WebCore::ExceptionCode::HierarchyRequestError,
+    WebCore::ExceptionCode::WrongDocumentError,
+    WebCore::ExceptionCode::InvalidCharacterError,
+    WebCore::ExceptionCode::NoModificationAllowedError,
+    WebCore::ExceptionCode::NotFoundError,
+    WebCore::ExceptionCode::NotSupportedError,
+    WebCore::ExceptionCode::InUseAttributeError,
+    WebCore::ExceptionCode::InvalidStateError,
+    WebCore::ExceptionCode::SyntaxError,
+    WebCore::ExceptionCode::InvalidModificationError,
+    WebCore::ExceptionCode::NamespaceError,
+    WebCore::ExceptionCode::InvalidAccessError,
+    WebCore::ExceptionCode::TypeMismatchError,
+    WebCore::ExceptionCode::SecurityError,
+    WebCore::ExceptionCode::NetworkError,
+    WebCore::ExceptionCode::AbortError,
+    WebCore::ExceptionCode::URLMismatchError,
+    WebCore::ExceptionCode::QuotaExceededError,
+    WebCore::ExceptionCode::TimeoutError,
+    WebCore::ExceptionCode::InvalidNodeTypeError,
+    WebCore::ExceptionCode::DataCloneError,
+    WebCore::ExceptionCode::EncodingError,
+    WebCore::ExceptionCode::NotReadableError,
+    WebCore::ExceptionCode::UnknownError,
+    WebCore::ExceptionCode::ConstraintError,
+    WebCore::ExceptionCode::DataError,
+    WebCore::ExceptionCode::TransactionInactiveError,
+    WebCore::ExceptionCode::ReadonlyError,
+    WebCore::ExceptionCode::VersionError,
+    WebCore::ExceptionCode::OperationError,
+    WebCore::ExceptionCode::NotAllowedError,
+    WebCore::ExceptionCode::RangeError,
+    WebCore::ExceptionCode::TypeError,
+    WebCore::ExceptionCode::StackOverflowError,
+    WebCore::ExceptionCode::ExistingExceptionError
+    >;
+};
+
+} // namespace WTF

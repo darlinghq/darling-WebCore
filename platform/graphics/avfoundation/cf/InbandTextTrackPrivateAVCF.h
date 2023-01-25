@@ -41,7 +41,7 @@ public:
         return adoptRef(*new InbandTextTrackPrivateAVCF(player, selection, format));
     }
 
-    ~InbandTextTrackPrivateAVCF() { }
+    ~InbandTextTrackPrivateAVCF() = default;
 
     InbandTextTrackPrivate::Kind kind() const override;
     bool isClosedCaptions() const override;
@@ -49,8 +49,8 @@ public:
     bool containsOnlyForcedSubtitles() const override;
     bool isMainProgramContent() const override;
     bool isEasyToRead() const override;
-    AtomicString label() const override;
-    AtomicString language() const override;
+    AtomString label() const override;
+    AtomString language() const override;
     bool isDefault() const override;
 
     void disconnect() override;

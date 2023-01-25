@@ -28,28 +28,29 @@
 #include <functional>
 #include <wtf/Deque.h>
 #include <wtf/Forward.h>
-#include <wtf/Vector.h>
 
 namespace WebCore {
 
 class SharedBuffer;
 
 class KeyedDecoder {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     WEBCORE_EXPORT static std::unique_ptr<KeyedDecoder> decoder(const uint8_t* data, size_t);
 
-    virtual ~KeyedDecoder() { }
+    virtual ~KeyedDecoder() = default;
 
-    virtual bool decodeBytes(const String& key, const uint8_t*&, size_t&) = 0;
-    virtual bool decodeBool(const String& key, bool&) = 0;
-    virtual bool decodeUInt32(const String& key, uint32_t&) = 0;
-    virtual bool decodeInt32(const String& key, int32_t&) = 0;
-    virtual bool decodeInt64(const String& key, int64_t&) = 0;
-    virtual bool decodeFloat(const String& key, float&) = 0;
-    virtual bool decodeDouble(const String& key, double&) = 0;
-    virtual bool decodeString(const String& key, String&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeBytes(const String& key, const uint8_t*&, size_t&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeBool(const String& key, bool&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeUInt32(const String& key, uint32_t&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeUInt64(const String& key, uint64_t&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeInt32(const String& key, int32_t&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeInt64(const String& key, int64_t&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeFloat(const String& key, float&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeDouble(const String& key, double&) = 0;
+    virtual WARN_UNUSED_RETURN bool decodeString(const String& key, String&) = 0;
 
-    template<typename T>
+    template<typename T> WARN_UNUSED_RETURN
     bool decodeBytes(const String& key, Vector<T>& vector)
     {
         static_assert(sizeof(T) == 1, "");
@@ -64,7 +65,7 @@ public:
         return true;
     }
 
-    template<typename T, typename F>
+    template<typename T, typename F> WARN_UNUSED_RETURN
     bool decodeEnum(const String& key, T& value, F&& isValidEnumFunction)
     {
         static_assert(std::is_enum<T>::value, "T must be an enum type");
@@ -80,7 +81,7 @@ public:
         return true;
     }
 
-    template<typename T, typename F>
+    template<typename T, typename F> WARN_UNUSED_RETURN
     bool decodeObject(const String& key, T& object, F&& function)
     {
         if (!beginObject(key))
@@ -90,7 +91,7 @@ public:
         return result;
     }
 
-    template<typename T, typename F>
+    template<typename T, typename F> WARN_UNUSED_RETURN
     bool decodeConditionalObject(const String& key, T& object, F&& function)
     {
         // FIXME: beginObject can return false for two reasons: either the
@@ -105,7 +106,7 @@ public:
         return result;
     }
 
-    template<typename ContainerType, typename F>
+    template<typename ContainerType, typename F> WARN_UNUSED_RETURN
     bool decodeObjects(const String& key, ContainerType& objects, F&& function)
     {
         if (!beginArray(key))
@@ -116,6 +117,7 @@ public:
             typename ContainerType::ValueType element;
             if (!function(*this, element)) {
                 result = false;
+                endArrayElement();
                 break;
             }
             objects.append(WTFMove(element));
@@ -142,14 +144,16 @@ private:
 };
 
 class KeyedEncoder {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     WEBCORE_EXPORT static std::unique_ptr<KeyedEncoder> encoder();
 
-    virtual ~KeyedEncoder() { }
+    virtual ~KeyedEncoder() = default;
 
     virtual void encodeBytes(const String& key, const uint8_t*, size_t) = 0;
     virtual void encodeBool(const String& key, bool) = 0;
     virtual void encodeUInt32(const String& key, uint32_t) = 0;
+    virtual void encodeUInt64(const String& key, uint64_t) = 0;
     virtual void encodeInt32(const String& key, int32_t) = 0;
     virtual void encodeInt64(const String& key, int64_t) = 0;
     virtual void encodeFloat(const String& key, float) = 0;

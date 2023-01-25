@@ -30,6 +30,7 @@ namespace WebCore {
 class SVGForeignObjectElement;
 
 class RenderSVGForeignObject final : public RenderSVGBlock {
+    WTF_MAKE_ISO_ALLOCATED(RenderSVGForeignObject);
 public:
     RenderSVGForeignObject(SVGForeignObjectElement&, RenderStyle&&);
     virtual ~RenderSVGForeignObject();
@@ -39,8 +40,8 @@ public:
     void paint(PaintInfo&, const LayoutPoint&) override;
 
     LayoutRect clippedOverflowRectForRepaint(const RenderLayerModelObject* repaintContainer) const override;
-    FloatRect computeFloatRectForRepaint(const FloatRect&, const RenderLayerModelObject* repaintContainer, bool fixed = false) const override;
-    LayoutRect computeRectForRepaint(const LayoutRect&, const RenderLayerModelObject* repaintContainer, RepaintContext = { }) const override;
+    Optional<FloatRect> computeFloatVisibleRectInContainer(const FloatRect&, const RenderLayerModelObject* container, VisibleRectContext) const override;
+    Optional<LayoutRect> computeVisibleRectInContainer(const LayoutRect&, const RenderLayerModelObject* container, VisibleRectContext) const override;
 
     bool requiresLayer() const override { return false; }
     void layout() override;
@@ -52,7 +53,7 @@ public:
     bool nodeAtFloatPoint(const HitTestRequest&, HitTestResult&, const FloatPoint& pointInParent, HitTestAction) override;
     bool nodeAtPoint(const HitTestRequest&, HitTestResult&, const HitTestLocation& locationInContainer, const LayoutPoint& accumulatedOffset, HitTestAction) override;
 
-    void mapLocalToContainer(const RenderLayerModelObject* repaintContainer, TransformState&, MapCoordinatesFlags, bool* wasFixed) const override;
+    void mapLocalToContainer(const RenderLayerModelObject* ancestorContainer, TransformState&, MapCoordinatesFlags, bool* wasFixed) const override;
     const RenderObject* pushMappingToContainer(const RenderLayerModelObject* ancestorToStopAt, RenderGeometryMap&) const override;
     void setNeedsTransformUpdate() override { m_needsTransformUpdate = true; }
 
@@ -67,10 +68,12 @@ private:
     const AffineTransform& localToParentTransform() const override;
     AffineTransform localTransform() const override { return m_localTransform; }
 
-    bool m_needsTransformUpdate : 1;
-    FloatRect m_viewport;
     AffineTransform m_localTransform;
     mutable AffineTransform m_localToParentTransform;
+    FloatRect m_viewport;
+    bool m_needsTransformUpdate { true };
 };
 
 } // namespace WebCore
+
+SPECIALIZE_TYPE_TRAITS_RENDER_OBJECT(RenderSVGForeignObject, isSVGForeignObject())

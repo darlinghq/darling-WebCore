@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008-2017 Apple Inc. All Rights Reserved.
+ * Copyright (C) 2008-2018 Apple Inc. All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,34 +26,35 @@
 
 #pragma once
 
-#include "PlatformExportMacros.h"
 #include "WebCoreJSBuiltinInternals.h"
-#include <heap/HeapInlines.h>
-#include <heap/LockDuringMarking.h>
-#include <runtime/JSGlobalObject.h>
-#include <runtime/StructureInlines.h>
+#include <JavaScriptCore/HeapInlines.h>
+#include <JavaScriptCore/JSGlobalObject.h>
+#include <JavaScriptCore/JSObjectInlines.h>
+#include <JavaScriptCore/LockDuringMarking.h>
 
 namespace WebCore {
 
 class DOMGuardedObject;
-class Document;
 class Event;
 class DOMWrapperWorld;
 class ScriptExecutionContext;
 
-typedef HashMap<const JSC::ClassInfo*, JSC::WriteBarrier<JSC::Structure>> JSDOMStructureMap;
-typedef HashMap<const JSC::ClassInfo*, JSC::WriteBarrier<JSC::JSObject>> JSDOMConstructorMap;
-typedef HashSet<DOMGuardedObject*> DOMGuardedObjectSet;
+using JSDOMStructureMap = HashMap<const JSC::ClassInfo*, JSC::WriteBarrier<JSC::Structure>>;
+using JSDOMConstructorMap = HashMap<const JSC::ClassInfo*, JSC::WriteBarrier<JSC::JSObject>>;
+using DOMGuardedObjectSet = HashSet<DOMGuardedObject*>;
 
 class WEBCORE_EXPORT JSDOMGlobalObject : public JSC::JSGlobalObject {
-    typedef JSC::JSGlobalObject Base;
-protected:
+public:
     struct JSDOMGlobalObjectData;
 
-    JSDOMGlobalObject(JSC::VM&, JSC::Structure*, Ref<DOMWrapperWorld>&&, const JSC::GlobalObjectMethodTable* = 0);
+    using Base = JSC::JSGlobalObject;
+
+    static const JSC::ClassInfo s_info;
+
+    template<typename, JSC::SubspaceAccess>
+    static void subspaceFor(JSC::VM&) { RELEASE_ASSERT_NOT_REACHED(); }
+
     static void destroy(JSC::JSCell*);
-    void finishCreation(JSC::VM&);
-    void finishCreation(JSC::VM&, JSC::JSObject*);
 
 public:
     Lock& gcLock() { return m_gcLock; }
@@ -68,9 +69,6 @@ public:
     // Make binding code generation easier.
     JSDOMGlobalObject* globalObject() { return this; }
 
-    void setCurrentEvent(Event*);
-    Event* currentEvent() const;
-
     static void visitChildren(JSC::JSCell*, JSC::SlotVisitor&);
 
     DOMWrapperWorld& world() { return m_world.get(); }
@@ -79,8 +77,11 @@ public:
 
     JSBuiltinInternalFunctions& builtinInternalFunctions() { return m_builtinInternalFunctions; }
 
-protected:
-    static const JSC::ClassInfo s_info;
+    static void reportUncaughtExceptionAtEventLoop(JSGlobalObject*, JSC::Exception*);
+
+    void clearDOMGuardedObjects();
+
+    JSC::JSProxy& proxy() const { ASSERT(m_proxy); return *m_proxy.get(); }
 
 public:
     ~JSDOMGlobalObject();
@@ -93,14 +94,20 @@ public:
     }
 
 protected:
+    JSDOMGlobalObject(JSC::VM&, JSC::Structure*, Ref<DOMWrapperWorld>&&, const JSC::GlobalObjectMethodTable* = nullptr);
+    void finishCreation(JSC::VM&);
+    void finishCreation(JSC::VM&, JSC::JSObject*);
+
+    static void promiseRejectionTracker(JSC::JSGlobalObject*, JSC::JSPromise*, JSC::JSPromiseRejectionOperation);
+
     JSDOMStructureMap m_structures;
     JSDOMConstructorMap m_constructors;
     DOMGuardedObjectSet m_guardedObjects;
 
-    Event* m_currentEvent;
     Ref<DOMWrapperWorld> m_world;
     uint8_t m_worldIsNormal;
     Lock m_gcLock;
+    JSC::WriteBarrier<JSC::JSProxy> m_proxy;
 
 private:
     void addBuiltinGlobals(JSC::VM&);
@@ -123,10 +130,8 @@ inline JSC::JSObject* getDOMConstructor(JSC::VM& vm, const JSDOMGlobalObject& gl
     return constructor;
 }
 
-JSDOMGlobalObject* toJSDOMGlobalObject(Document*, JSC::ExecState*);
-JSDOMGlobalObject* toJSDOMGlobalObject(ScriptExecutionContext*, JSC::ExecState*);
+WEBCORE_EXPORT JSDOMGlobalObject& callerGlobalObject(JSC::JSGlobalObject&, JSC::CallFrame&);
 
-JSDOMGlobalObject* toJSDOMGlobalObject(Document*, DOMWrapperWorld&);
-JSDOMGlobalObject* toJSDOMGlobalObject(ScriptExecutionContext*, DOMWrapperWorld&);
+JSDOMGlobalObject* toJSDOMGlobalObject(ScriptExecutionContext&, DOMWrapperWorld&);
 
 } // namespace WebCore

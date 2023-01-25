@@ -47,16 +47,6 @@ static inline bool isStartSide(GridPositionSide side)
     return side == ColumnStartSide || side == RowStartSide;
 }
 
-static inline GridPositionSide initialPositionSide(GridTrackSizingDirection direction)
-{
-    return direction == ForColumns ? ColumnStartSide : RowStartSide;
-}
-
-static inline GridPositionSide finalPositionSide(GridTrackSizingDirection direction)
-{
-    return direction == ForColumns ? ColumnEndSide : RowEndSide;
-}
-
 static inline GridTrackSizingDirection directionFromSide(GridPositionSide side)
 {
     return side == ColumnStartSide || side == ColumnEndSide ? ForColumns : ForRows;
@@ -74,6 +64,7 @@ NamedLineCollection::NamedLineCollection(const RenderStyle& gridContainerStyle, 
     bool isRowAxis = direction == ForColumns;
     const NamedGridLinesMap& gridLineNames = isRowAxis ? gridContainerStyle.namedGridColumnLines() : gridContainerStyle.namedGridRowLines();
     const NamedGridLinesMap& autoRepeatGridLineNames = isRowAxis ? gridContainerStyle.autoRepeatNamedGridColumnLines() : gridContainerStyle.autoRepeatNamedGridRowLines();
+    const NamedGridLinesMap& implicitGridLineNames = isRowAxis ? gridContainerStyle.implicitNamedGridColumnLines() : gridContainerStyle.implicitNamedGridRowLines();
 
     auto linesIterator = gridLineNames.find(namedLine);
     m_namedLinesIndexes = linesIterator == gridLineNames.end() ? nullptr : &linesIterator->value;
@@ -81,84 +72,87 @@ NamedLineCollection::NamedLineCollection(const RenderStyle& gridContainerStyle, 
     auto autoRepeatLinesIterator = autoRepeatGridLineNames.find(namedLine);
     m_autoRepeatNamedLinesIndexes = autoRepeatLinesIterator == autoRepeatGridLineNames.end() ? nullptr : &autoRepeatLinesIterator->value;
 
+    auto implicitGridLinesIterator = implicitGridLineNames.find(namedLine);
+    m_implicitNamedLinesIndexes = implicitGridLinesIterator == implicitGridLineNames.end() ? nullptr : &implicitGridLinesIterator->value;
+
     m_insertionPoint = isRowAxis ? gridContainerStyle.gridAutoRepeatColumnsInsertionPoint() : gridContainerStyle.gridAutoRepeatRowsInsertionPoint();
 
     m_autoRepeatTrackListLength = isRowAxis ? gridContainerStyle.gridAutoRepeatColumns().size() : gridContainerStyle.gridAutoRepeatRows().size();
 }
 
-bool NamedLineCollection::isValidNamedLineOrArea(const String& namedLine, const RenderStyle& gridContainerStyle, GridPositionSide side)
-{
-    bool isRowAxis = directionFromSide(side) == ForColumns;
-    auto& gridLineNames = isRowAxis ? gridContainerStyle.namedGridColumnLines() : gridContainerStyle.namedGridRowLines();
-    auto& autoRepeatGridLineNames = isRowAxis ? gridContainerStyle.autoRepeatNamedGridColumnLines() : gridContainerStyle.autoRepeatNamedGridRowLines();
-
-    if (gridLineNames.contains(namedLine) || autoRepeatGridLineNames.contains(namedLine))
-        return true;
-
-    String implicitName = implicitNamedGridLineForSide(namedLine, side);
-    return gridLineNames.contains(implicitName) || autoRepeatGridLineNames.contains(implicitName);
-}
-
-bool NamedLineCollection::hasNamedLines() const
+bool NamedLineCollection::hasExplicitNamedLines() const
 {
     return m_namedLinesIndexes || m_autoRepeatNamedLinesIndexes;
 }
 
-size_t NamedLineCollection::find(unsigned line) const
+bool NamedLineCollection::hasNamedLines() const
 {
-    if (line > m_lastLine)
-        return notFound;
-
-    if (!m_autoRepeatNamedLinesIndexes || line < m_insertionPoint)
-        return m_namedLinesIndexes ? m_namedLinesIndexes->find(line) : notFound;
-
-    if (line <= (m_insertionPoint + m_autoRepeatTotalTracks)) {
-        size_t localIndex = line - m_insertionPoint;
-
-        size_t indexInFirstRepetition = localIndex % m_autoRepeatTrackListLength;
-        if (indexInFirstRepetition)
-            return m_autoRepeatNamedLinesIndexes->find(indexInFirstRepetition);
-
-        // The line names defined in the last line are also present in the first line of the next
-        // repetition (if any). Same for the line names defined in the first line.
-        if (localIndex == m_autoRepeatTotalTracks)
-            return m_autoRepeatNamedLinesIndexes->find(m_autoRepeatTrackListLength);
-        size_t position = m_autoRepeatNamedLinesIndexes->find(0u);
-        if (position != notFound)
-            return position;
-        return localIndex ? m_autoRepeatNamedLinesIndexes->find(m_autoRepeatTrackListLength) : notFound;
-    }
-
-    return m_namedLinesIndexes ? m_namedLinesIndexes->find(line - (m_autoRepeatTotalTracks - 1)) : notFound;
+    return hasExplicitNamedLines() || m_implicitNamedLinesIndexes;
 }
 
 bool NamedLineCollection::contains(unsigned line) const
 {
     ASSERT(hasNamedLines());
-    return find(line) != notFound;
+
+    if (line > m_lastLine)
+        return false;
+
+    auto contains = [](const Vector<unsigned>* indexes, unsigned line) {
+        return indexes && indexes->find(line) != notFound;
+    };
+
+    if (contains(m_implicitNamedLinesIndexes, line))
+        return true;
+
+    if (!m_autoRepeatTrackListLength || line < m_insertionPoint)
+        return contains(m_namedLinesIndexes, line);
+
+    ASSERT(m_autoRepeatTotalTracks);
+
+    if (line > m_insertionPoint + m_autoRepeatTotalTracks)
+        return contains(m_namedLinesIndexes, line - (m_autoRepeatTotalTracks - 1));
+
+    if (line == m_insertionPoint)
+        return contains(m_namedLinesIndexes, line) || contains(m_autoRepeatNamedLinesIndexes, 0);
+
+    if (line == m_insertionPoint + m_autoRepeatTotalTracks)
+        return contains(m_autoRepeatNamedLinesIndexes, m_autoRepeatTrackListLength) || contains(m_namedLinesIndexes, m_insertionPoint + 1);
+
+    size_t autoRepeatIndexInFirstRepetition = (line - m_insertionPoint) % m_autoRepeatTrackListLength;
+    if (!autoRepeatIndexInFirstRepetition && contains(m_autoRepeatNamedLinesIndexes, m_autoRepeatTrackListLength))
+        return true;
+    return contains(m_autoRepeatNamedLinesIndexes, autoRepeatIndexInFirstRepetition);
+}
+
+unsigned NamedLineCollection::firstExplicitPosition() const
+{
+    ASSERT(hasExplicitNamedLines());
+    unsigned firstLine = 0;
+
+    // If there is no auto repeat(), there must be some named line outside, return the 1st one. Also return it if it precedes the auto-repeat().
+    if (!m_autoRepeatTrackListLength || (m_namedLinesIndexes && m_namedLinesIndexes->at(firstLine) <= m_insertionPoint))
+        return m_namedLinesIndexes->at(firstLine);
+
+    // Return the 1st named line inside the auto repeat(), if any.
+    if (m_autoRepeatNamedLinesIndexes)
+        return m_autoRepeatNamedLinesIndexes->at(firstLine) + m_insertionPoint;
+
+    // The 1st named line must be after the auto repeat().
+    return m_namedLinesIndexes->at(firstLine) + m_autoRepeatTotalTracks - 1;
 }
 
 unsigned NamedLineCollection::firstPosition() const
 {
     ASSERT(hasNamedLines());
     unsigned firstLine = 0;
-
-    if (!m_autoRepeatNamedLinesIndexes) {
-        if (!m_insertionPoint || m_insertionPoint < m_namedLinesIndexes->at(firstLine))
-            return m_namedLinesIndexes->at(firstLine) + (m_autoRepeatTotalTracks ? m_autoRepeatTotalTracks - 1 : 0);
-        return m_namedLinesIndexes->at(firstLine);
-    }
-
-    if (!m_namedLinesIndexes)
-        return m_autoRepeatNamedLinesIndexes->at(firstLine) + m_insertionPoint;
-
-    if (!m_insertionPoint)
-        return std::min(m_namedLinesIndexes->at(firstLine) + m_autoRepeatTotalTracks, m_autoRepeatNamedLinesIndexes->at(firstLine));
-
-    return std::min(m_namedLinesIndexes->at(firstLine), m_autoRepeatNamedLinesIndexes->at(firstLine) + m_insertionPoint);
+    if (!m_implicitNamedLinesIndexes)
+        return firstExplicitPosition();
+    if (!hasExplicitNamedLines())
+        return m_implicitNamedLinesIndexes->at(firstLine);
+    return std::min(firstExplicitPosition(), m_implicitNamedLinesIndexes->at(firstLine));
 }
 
-static void adjustGridPositionsFromStyle(const RenderStyle& gridContainerStyle, const RenderBox& gridItem, GridTrackSizingDirection direction, GridPosition& initialPosition, GridPosition& finalPosition)
+static void adjustGridPositionsFromStyle(const RenderBox& gridItem, GridTrackSizingDirection direction, GridPosition& initialPosition, GridPosition& finalPosition)
 {
     bool isForColumns = direction == ForColumns;
     initialPosition = isForColumns ? gridItem.style().gridItemColumnStart() : gridItem.style().gridItemRowStart();
@@ -168,15 +162,6 @@ static void adjustGridPositionsFromStyle(const RenderStyle& gridContainerStyle, 
     // overwrite the specified values.
     if (initialPosition.isSpan() && finalPosition.isSpan())
         finalPosition.setAutoPosition();
-
-    if (gridItem.isOutOfFlowPositioned()) {
-        // Early detect the case of non existing named grid lines for positioned items.
-        if (initialPosition.isNamedGridArea() && !NamedLineCollection::isValidNamedLineOrArea(initialPosition.namedGridLine(), gridContainerStyle, initialPositionSide(direction)))
-            initialPosition.setAutoPosition();
-
-        if (finalPosition.isNamedGridArea() && !NamedLineCollection::isValidNamedLineOrArea(finalPosition.namedGridLine(), gridContainerStyle, finalPositionSide(direction)))
-            finalPosition.setAutoPosition();
-    }
 
     // If the grid item has an automatic position and a grid span for a named line in a given dimension, instead treat the grid span as one.
     if (initialPosition.isAuto() && finalPosition.isSpan() && !finalPosition.namedGridLine().isNull())
@@ -302,10 +287,20 @@ static GridSpan resolveGridPositionAgainstOppositePosition(const RenderStyle& gr
     return GridSpan::untranslatedDefiniteGridSpan(oppositeLine, oppositeLine + positionOffset);
 }
 
-unsigned GridPositionsResolver::spanSizeForAutoPlacedItem(const RenderStyle& gridContainerStyle, const RenderBox& gridItem, GridTrackSizingDirection direction)
+GridPositionSide GridPositionsResolver::initialPositionSide(GridTrackSizingDirection direction)
+{
+    return direction == ForColumns ? ColumnStartSide : RowStartSide;
+}
+
+GridPositionSide GridPositionsResolver::finalPositionSide(GridTrackSizingDirection direction)
+{
+    return direction == ForColumns ? ColumnEndSide : RowEndSide;
+}
+
+unsigned GridPositionsResolver::spanSizeForAutoPlacedItem(const RenderBox& gridItem, GridTrackSizingDirection direction)
 {
     GridPosition initialPosition, finalPosition;
-    adjustGridPositionsFromStyle(gridContainerStyle, gridItem, direction, initialPosition, finalPosition);
+    adjustGridPositionsFromStyle(gridItem, direction, initialPosition, finalPosition);
 
     // This method will only be used when both positions need to be resolved against the opposite one.
     ASSERT(initialPosition.shouldBeResolvedAgainstOppositePosition() && finalPosition.shouldBeResolvedAgainstOppositePosition());
@@ -357,7 +352,6 @@ static int resolveGridPositionFromStyle(const RenderStyle& gridContainerStyle, c
         if (explicitLines.hasNamedLines())
             return explicitLines.firstPosition();
 
-        ASSERT(!NamedLineCollection::isValidNamedLineOrArea(namedGridLine, gridContainerStyle, side));
         // If none of the above works specs mandate to assume that all the lines in the implicit grid have this name.
         return lastLine + 1;
     }
@@ -374,7 +368,7 @@ static int resolveGridPositionFromStyle(const RenderStyle& gridContainerStyle, c
 GridSpan GridPositionsResolver::resolveGridPositionsFromStyle(const RenderStyle& gridContainerStyle, const RenderBox& gridItem, GridTrackSizingDirection direction, unsigned autoRepeatTracksCount)
 {
     GridPosition initialPosition, finalPosition;
-    adjustGridPositionsFromStyle(gridContainerStyle, gridItem, direction, initialPosition, finalPosition);
+    adjustGridPositionsFromStyle(gridItem, direction, initialPosition, finalPosition);
 
     GridPositionSide initialSide = initialPositionSide(direction);
     GridPositionSide finalSide = finalPositionSide(direction);

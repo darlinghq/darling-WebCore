@@ -31,7 +31,7 @@
 
 namespace WebCore {
 
-SetSelectionCommand::SetSelectionCommand(const VisibleSelection& selection, FrameSelection::SetSelectionOptions options)
+SetSelectionCommand::SetSelectionCommand(const VisibleSelection& selection, OptionSet<FrameSelection::SetSelectionOption> options)
     : SimpleEditCommand(selection.base().anchorNode()->document())
     , m_options(options)
     , m_selectionToSet(selection)
@@ -40,7 +40,7 @@ SetSelectionCommand::SetSelectionCommand(const VisibleSelection& selection, Fram
 
 void SetSelectionCommand::doApply()
 {
-    FrameSelection& selection = frame().selection();
+    FrameSelection& selection = document().selection();
 
     if (selection.shouldChangeSelection(m_selectionToSet) && !m_selectionToSet.isNoneOrOrphaned()) {
         selection.setSelection(m_selectionToSet, m_options);
@@ -50,7 +50,7 @@ void SetSelectionCommand::doApply()
 
 void SetSelectionCommand::doUnapply()
 {
-    FrameSelection& selection = frame().selection();
+    FrameSelection& selection = document().selection();
 
     if (selection.shouldChangeSelection(startingSelection()) && !startingSelection().isNoneOrOrphaned())
         selection.setSelection(startingSelection(), m_options);

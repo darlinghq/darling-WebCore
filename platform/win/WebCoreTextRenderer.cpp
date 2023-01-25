@@ -72,7 +72,7 @@ static void doDrawTextAtPoint(GraphicsContext& context, const String& text, cons
         underlinePoint.move(beforeWidth, 1);
 
         context.setStrokeColor(color);
-        context.drawLineForText(underlinePoint, underlinedWidth, false);
+        context.drawLineForText(FloatRect(underlinePoint, FloatSize(underlinedWidth, font.size() / 16)), false);
     }
 }
 
@@ -106,12 +106,12 @@ bool WebCoreShouldUseFontSmoothing()
 
 void WebCoreSetAlwaysUsesComplexTextCodePath(bool complex)
 {
-    FontCascade::setCodePath(complex ? FontCascade::Complex : FontCascade::Auto);
+    FontCascade::setCodePath(complex ? FontCascade::CodePath::Complex : FontCascade::CodePath::Auto);
 }
 
 bool WebCoreAlwaysUsesComplexTextCodePath()
 {
-    return FontCascade::codePath() == FontCascade::Complex;
+    return FontCascade::codePath() == FontCascade::CodePath::Complex;
 }
 
 } // namespace WebCore

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 Google Inc. All rights reserved.
- * Copyright (C) 2011 Apple Inc. All rights reserved.
+ * Copyright (C) 2011-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -35,14 +35,17 @@
 #include "FileChooser.h"
 #include "FileIconLoader.h"
 #include <wtf/RefPtr.h>
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
+class DirectoryFileListCreator;
 class DragData;
 class FileList;
 class Icon;
 
-class FileInputType final : public BaseClickableWithKeyInputType, private FileChooserClient, private FileIconLoaderClient {
+class FileInputType final : public BaseClickableWithKeyInputType, private FileChooserClient, private FileIconLoaderClient, public CanMakeWeakPtr<FileInputType> {
+    template<typename DowncastedType> friend bool isInvalidInputType(const InputType&, const String&);
 public:
     explicit FileInputType(HTMLInputElement&);
     virtual ~FileInputType();
@@ -50,10 +53,10 @@ public:
     static Vector<FileChooserFileInfo> filesFromFormControlState(const FormControlState&);
 
 private:
-    const AtomicString& formControlType() const final;
+    const AtomString& formControlType() const final;
     FormControlState saveFormControlState() const final;
     void restoreFormControlState(const FormControlState&) final;
-    bool appendFormData(FormDataList&, bool) const final;
+    bool appendFormData(DOMFormData&, bool) const final;
     bool valueMissing(const String&) const final;
     String valueMissingText() const final;
     void handleDOMActivateEvent(Event&) final;
@@ -69,30 +72,34 @@ private:
     void setValue(const String&, bool valueChanged, TextFieldEventBehavior) final;
 
 #if ENABLE(DRAG_SUPPORT)
+    bool receiveDroppedFilesWithImageTranscoding(const Vector<String>& paths);
     bool receiveDroppedFiles(const DragData&) final;
 #endif
 
     Icon* icon() const final;
-    bool isFileUpload() const final;
-    void createShadowSubtree() final;
-    void disabledAttributeChanged() final;
-    void multipleAttributeChanged() final;
+    void createShadowSubtreeAndUpdateInnerTextElementEditability(ContainerNode::ChildChange::Source, bool) final;
+    void disabledStateChanged() final;
+    void attributeChanged(const QualifiedName&) final;
     String defaultToolTip() const final;
 
     void filesChosen(const Vector<FileChooserFileInfo>&, const String& displayString = { }, Icon* = nullptr) final;
+    void filesChosen(const Vector<String>& paths, const Vector<String>& replacementPaths = { });
 
     // FileIconLoaderClient implementation.
     void iconLoaded(RefPtr<Icon>&&) final;
 
-    static Ref<FileList> createFileList(const Vector<FileChooserFileInfo>&);
+    FileChooserSettings fileChooserSettings() const;
+    void applyFileChooserSettings();
+    void didCreateFileList(Ref<FileList>&&, RefPtr<Icon>&&);
     void requestIcon(const Vector<String>&);
 
-    void applyFileChooserSettings(const FileChooserSettings&);
+    bool allowsDirectories() const;
 
     RefPtr<FileChooser> m_fileChooser;
     std::unique_ptr<FileIconLoader> m_fileIconLoader;
 
     Ref<FileList> m_fileList;
+    RefPtr<DirectoryFileListCreator> m_directoryFileListCreator;
     RefPtr<Icon> m_icon;
     String m_displayString;
 };

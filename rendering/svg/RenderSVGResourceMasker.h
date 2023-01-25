@@ -31,10 +31,12 @@ namespace WebCore {
 class GraphicsContext;
 
 struct MaskerData {
-    std::unique_ptr<ImageBuffer> maskImage;
+    WTF_MAKE_STRUCT_FAST_ALLOCATED;
+    RefPtr<ImageBuffer> maskImage;
 };
 
 class RenderSVGResourceMasker final : public RenderSVGResourceContainer {
+    WTF_MAKE_ISO_ALLOCATED(RenderSVGResourceMasker);
 public:
     RenderSVGResourceMasker(SVGMaskElement&, RenderStyle&&);
     virtual ~RenderSVGResourceMasker();

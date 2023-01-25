@@ -36,6 +36,7 @@
 namespace WebCore {
 
 class SpeechSynthesisUtterance final : public PlatformSpeechSynthesisUtteranceClient, public RefCounted<SpeechSynthesisUtterance>, public ContextDestructionObserver, public EventTargetWithInlineData {
+    WTF_MAKE_ISO_ALLOCATED(SpeechSynthesisUtterance);
 public:
     static Ref<SpeechSynthesisUtterance> create(ScriptExecutionContext&, const String&);
 
@@ -59,8 +60,8 @@ public:
     float pitch() const { return m_platformUtterance->pitch(); }
     void setPitch(float pitch) { m_platformUtterance->setPitch(pitch); }
 
-    double startTime() const { return m_platformUtterance->startTime(); }
-    void setStartTime(double startTime) { m_platformUtterance->setStartTime(startTime); }
+    MonotonicTime startTime() const { return m_platformUtterance->startTime(); }
+    void setStartTime(MonotonicTime startTime) { m_platformUtterance->setStartTime(startTime); }
 
     using RefCounted::ref;
     using RefCounted::deref;

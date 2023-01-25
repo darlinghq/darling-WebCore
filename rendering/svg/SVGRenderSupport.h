@@ -24,6 +24,7 @@
 #pragma once
 
 #include "PaintInfo.h"
+#include "RenderObject.h"
 
 namespace WebCore {
 
@@ -35,7 +36,6 @@ class RenderBoxModelObject;
 class RenderElement;
 class RenderGeometryMap;
 class RenderLayerModelObject;
-class RenderObject;
 class RenderStyle;
 class RenderSVGRoot;
 class TransformState;
@@ -51,8 +51,6 @@ public:
     // Helper function determining wheter overflow is hidden
     static bool isOverflowHidden(const RenderElement&);
 
-    static void intersectRepaintRectWithShadows(const RenderElement&, FloatRect&);
-
     // Calculates the repaintRect in combination with filter, clipper and masker in local coordinates.
     static void intersectRepaintRectWithResources(const RenderElement&, FloatRect&);
 
@@ -66,11 +64,10 @@ public:
     static bool paintInfoIntersectsRepaintRect(const FloatRect& localRepaintRect, const AffineTransform& localTransform, const PaintInfo&);
 
     // Important functions used by nearly all SVG renderers centralizing coordinate transformations / repaint rect calculations
-    static FloatRect repaintRectForRendererInLocalCoordinatesExcludingSVGShadow(const RenderElement&);
-    static LayoutRect clippedOverflowRectForRepaint(const RenderElement&, const RenderLayerModelObject* repaintContainer);
-    static FloatRect computeFloatRectForRepaint(const RenderElement&, const FloatRect&, const RenderLayerModelObject* repaintContainer, bool fixed);
+    static LayoutRect clippedOverflowRectForRepaint(const RenderElement&, const RenderLayerModelObject* container);
+    static Optional<FloatRect> computeFloatVisibleRectInContainer(const RenderElement&, const FloatRect&, const RenderLayerModelObject* container, RenderObject::VisibleRectContext);
     static const RenderElement& localToParentTransform(const RenderElement&, AffineTransform &);
-    static void mapLocalToContainer(const RenderElement&, const RenderLayerModelObject* repaintContainer, TransformState&, bool* wasFixed);
+    static void mapLocalToContainer(const RenderElement&, const RenderLayerModelObject* ancestorContainer, TransformState&, bool* wasFixed);
     static const RenderElement* pushMappingToContainer(const RenderElement&, const RenderLayerModelObject* ancestorToStopAt, RenderGeometryMap&);
     static bool checkForSVGRepaintDuringLayout(const RenderElement&);
 
@@ -80,11 +77,8 @@ public:
     // Determines if any ancestor's transform has changed.
     static bool transformToRootChanged(RenderElement*);
 
-    // Helper functions to keep track of whether a renderer has an SVG shadow applied.
-    static bool rendererHasSVGShadow(const RenderObject&);
-    static void setRendererHasSVGShadow(RenderObject&, bool hasShadow);
+    static void clipContextToCSSClippingArea(GraphicsContext&, const RenderElement& renderer);
 
-    static void childAdded(RenderElement& parent, RenderObject& child);
     static void styleChanged(RenderElement&, const RenderStyle*);
 
 #if ENABLE(CSS_COMPOSITING)
@@ -99,6 +93,19 @@ private:
     // This class is not constructable.
     SVGRenderSupport();
     ~SVGRenderSupport();
+};
+
+class SVGHitTestCycleDetectionScope {
+    WTF_MAKE_NONCOPYABLE(SVGHitTestCycleDetectionScope);
+public:
+    explicit SVGHitTestCycleDetectionScope(const RenderElement&);
+    ~SVGHitTestCycleDetectionScope();
+    static bool isEmpty();
+    static bool isVisiting(const RenderElement&);
+
+private:
+    static WeakHashSet<RenderElement>& visitedElements();
+    WeakPtr<RenderElement> m_element;
 };
 
 } // namespace WebCore

@@ -31,8 +31,6 @@
 
 #pragma once
 
-#if ENABLE(WEB_TIMING)
-
 #include "LoadTiming.h"
 #include "NetworkLoadMetrics.h"
 #include "PerformanceEntry.h"
@@ -41,14 +39,15 @@
 
 namespace WebCore {
 
+class PerformanceServerTiming;
 class ResourceTiming;
 
 class PerformanceResourceTiming final : public PerformanceEntry {
 public:
     static Ref<PerformanceResourceTiming> create(MonotonicTime timeOrigin, ResourceTiming&&);
 
-    AtomicString initiatorType() const { return m_initiatorType; }
-    String nextHopProtocol() const;
+    const AtomString& initiatorType() const { return m_initiatorType; }
+    const String& nextHopProtocol() const;
 
     double workerStart() const;
     double redirectStart() const;
@@ -62,6 +61,10 @@ public:
     double requestStart() const;
     double responseStart() const;
     double responseEnd() const;
+    const Vector<Ref<PerformanceServerTiming>>& serverTiming() const { return m_serverTiming; }
+
+    Type type() const final { return Type::Resource; }
+    ASCIILiteral entryType() const final { return "resource"_s; }
 
 private:
     PerformanceResourceTiming(MonotonicTime timeOrigin, ResourceTiming&&);
@@ -69,11 +72,12 @@ private:
 
     double networkLoadTimeToDOMHighResTimeStamp(Seconds) const;
 
-    AtomicString m_initiatorType;
+    AtomString m_initiatorType;
     MonotonicTime m_timeOrigin;
     LoadTiming m_loadTiming;
-    NetworkLoadMetrics m_networkLoadMetrics;
+    NetworkLoadMetricsWithoutNonTimingData m_networkLoadMetrics;
     bool m_shouldReportDetails;
+    Vector<Ref<PerformanceServerTiming>> m_serverTiming;
 };
 
 } // namespace WebCore
@@ -81,5 +85,3 @@ private:
 SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::PerformanceResourceTiming)
     static bool isType(const WebCore::PerformanceEntry& entry) { return entry.isResource(); }
 SPECIALIZE_TYPE_TRAITS_END()
-
-#endif // ENABLE(WEB_TIMING)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2006, 2007, 2010 Apple Inc. All rights reserved.
+ * Copyright (C) 2006, 2007, 2010, 2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,41 +23,14 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef GraphicsContextCG_h
-#define GraphicsContextCG_h
+#pragma once
 
+#include "ColorSpaceCG.h"
 #include "GraphicsContext.h"
-
-typedef struct CGColorSpace *CGColorSpaceRef;
 
 namespace WebCore {
 
-CGColorSpaceRef deviceRGBColorSpaceRef();
-WEBCORE_EXPORT CGColorSpaceRef sRGBColorSpaceRef();
-WEBCORE_EXPORT CGColorSpaceRef extendedSRGBColorSpaceRef();
-WEBCORE_EXPORT CGColorSpaceRef displayP3ColorSpaceRef();
-CGColorSpaceRef linearRGBColorSpaceRef();
-
-inline CGAffineTransform getUserToBaseCTM(CGContextRef context)
-{
-    return CGAffineTransformConcat(CGContextGetCTM(context), CGAffineTransformInvert(CGContextGetBaseCTM(context)));
-}
-
-static inline CGColorSpaceRef cachedCGColorSpace(ColorSpace colorSpace)
-{
-    switch (colorSpace) {
-    case ColorSpaceDeviceRGB:
-        return deviceRGBColorSpaceRef();
-    case ColorSpaceSRGB:
-        return sRGBColorSpaceRef();
-    case ColorSpaceLinearRGB:
-        return linearRGBColorSpaceRef();
-    case ColorSpaceDisplayP3:
-        return displayP3ColorSpaceRef();
-    }
-    ASSERT_NOT_REACHED();
-    return deviceRGBColorSpaceRef();
-}
+CGAffineTransform getUserToBaseCTM(CGContextRef);
 
 class CGContextStateSaver {
 public:
@@ -101,4 +74,3 @@ private:
 
 }
 
-#endif

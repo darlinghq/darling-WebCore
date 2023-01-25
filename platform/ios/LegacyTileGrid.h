@@ -26,7 +26,7 @@
 #ifndef LegacyTileGrid_h
 #define LegacyTileGrid_h
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
 #include "IntPoint.h"
 #include "IntPointHash.h"
@@ -46,6 +46,7 @@ namespace WebCore {
 class LegacyTileGridTile;
 
 class LegacyTileGrid {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     typedef IntPoint TileIndex;
 
@@ -132,5 +133,5 @@ static inline IntPoint bottomRight(const IntRect& rect)
 
 } // namespace WebCore
 
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY)
 #endif // TileGrid_h

@@ -23,17 +23,25 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef CertificateInfo_h
-#define CertificateInfo_h
+#pragma once
 
-#include "PlatformExportMacros.h"
+#include <wtf/EnumTraits.h>
 #include <wtf/RetainPtr.h>
+#include <wtf/Vector.h>
+#include <wtf/cf/TypeCastsCF.h>
+#include <wtf/persistence/PersistentCoder.h>
 
 #if PLATFORM(COCOA)
+#include <Security/SecCertificate.h>
 #include <Security/SecTrust.h>
+#include <wtf/spi/cocoa/SecuritySPI.h>
+
+WTF_DECLARE_CF_TYPE_TRAIT(SecCertificate);
 #endif
 
 namespace WebCore {
+
+struct CertificateSummary;
 
 class CertificateInfo {
 public:
@@ -61,10 +69,14 @@ public:
     {
     }
 
+    CertificateInfo isolatedCopy() const { return *this; }
+
     WEBCORE_EXPORT CFArrayRef certificateChain() const;
 
     WEBCORE_EXPORT Type type() const;
     WEBCORE_EXPORT bool containsNonRootSHA1SignedCertificate() const;
+
+    Optional<CertificateSummary> summary() const;
 
     bool isEmpty() const { return type() == Type::None; }
 
@@ -73,7 +85,9 @@ public:
 #endif
 
 #ifndef NDEBUG
+#if PLATFORM(COCOA)
     void dump() const;
+#endif
 #endif
 
 private:
@@ -83,5 +97,32 @@ private:
     mutable RetainPtr<CFArrayRef> m_certificateChain;
 };
 
-}
+#if PLATFORM(COCOA)
+WEBCORE_EXPORT bool certificatesMatch(SecTrustRef, SecTrustRef);
 #endif
+
+} // namespace WebCore
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::CertificateInfo::Type> {
+    using values = EnumValues<
+        WebCore::CertificateInfo::Type,
+        WebCore::CertificateInfo::Type::None,
+        WebCore::CertificateInfo::Type::CertificateChain
+#if HAVE(SEC_TRUST_SERIALIZATION)
+        , WebCore::CertificateInfo::Type::Trust
+#endif
+    >;
+};
+
+namespace Persistence {
+
+template<> struct Coder<WebCore::CertificateInfo> {
+    static WEBCORE_EXPORT void encode(Encoder&, const WebCore::CertificateInfo&);
+    static WEBCORE_EXPORT Optional<WebCore::CertificateInfo> decode(Decoder&);
+};
+
+} // namespace WTF::Persistence
+
+} // namespace WTF

@@ -19,26 +19,45 @@
 #include "config.h"
 #include "SharedBuffer.h"
 
-#include "FileSystem.h"
 #include <wtf/glib/GUniquePtr.h>
 #include <wtf/text/CString.h>
 
 #include <glib.h>
 
-
 namespace WebCore {
+
+SharedBuffer::SharedBuffer(GBytes* bytes)
+{
+    ASSERT(bytes);
+    m_size = g_bytes_get_size(bytes);
+    m_segments.append({ 0, DataSegment::create(GRefPtr<GBytes>(bytes)) });
+}
+
+Ref<SharedBuffer> SharedBuffer::create(GBytes* bytes)
+{
+    return adoptRef(*new SharedBuffer(bytes));
+}
+
+GRefPtr<GBytes> SharedBuffer::createGBytes() const
+{
+    ref();
+    GRefPtr<GBytes> bytes = adoptGRef(g_bytes_new_with_free_func(data(), size(), [](gpointer data) {
+        static_cast<SharedBuffer*>(data)->deref();
+    }, const_cast<SharedBuffer*>(this)));
+    return bytes;
+}
 
 RefPtr<SharedBuffer> SharedBuffer::createFromReadingFile(const String& filePath)
 {
     if (filePath.isEmpty())
         return nullptr;
 
-    CString filename = fileSystemRepresentation(filePath);
+    CString filename = FileSystem::fileSystemRepresentation(filePath);
     GUniqueOutPtr<gchar> contents;
     gsize size;
     GUniqueOutPtr<GError> error;
     if (!g_file_get_contents(filename.data(), &contents.outPtr(), &size, &error.outPtr())) {
-        LOG_ERROR("Failed to fully read contents of file %s - %s", filenameForDisplay(filePath).utf8().data(), error->message);
+        LOG_ERROR("Failed to fully read contents of file %s - %s", FileSystem::filenameForDisplay(filePath).utf8().data(), error->message);
         return nullptr;
     }
 

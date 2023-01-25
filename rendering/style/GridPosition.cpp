@@ -31,9 +31,11 @@
 #include "config.h"
 #include "GridPosition.h"
 
+#include <wtf/text/TextStream.h>
+
 namespace WebCore {
 
-std::optional<int> GridPosition::gMaxPositionForTesting;
+Optional<int> GridPosition::gMaxPositionForTesting;
 static const int kGridMaxPosition = 1000000;
 
 void GridPosition::setExplicitPosition(int position, const String& namedGridLine)
@@ -85,7 +87,7 @@ int GridPosition::spanPosition() const
 
 int GridPosition::max()
 {
-    return gMaxPositionForTesting.value_or(kGridMaxPosition);
+    return gMaxPositionForTesting.valueOr(kGridMaxPosition);
 }
 
 int GridPosition::min()
@@ -101,6 +103,21 @@ bool GridPosition::operator==(const GridPosition& other) const
 void GridPosition::setMaxPositionForTesting(unsigned maxPosition)
 {
     gMaxPositionForTesting = static_cast<int>(maxPosition);
+}
+
+TextStream& operator<<(TextStream& ts, const GridPosition& o)
+{
+    switch (o.type()) {
+    case AutoPosition:
+        return ts << "auto";
+    case ExplicitPosition:
+        return ts << o.namedGridLine() << " " << o.integerPosition();
+    case SpanPosition:
+        return ts << "span" << " " << o.namedGridLine() << " " << o.integerPosition();
+    case NamedGridAreaPosition:
+        return ts << o.namedGridLine();
+    }
+    return ts;
 }
 
 } // namespace WebCore

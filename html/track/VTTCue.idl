@@ -23,21 +23,27 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
+enum AutoKeyword { "auto" };
+typedef (double or AutoKeyword) LineAndPositionSetting;
+
 [
-    Conditional=VIDEO_TRACK,
-    Constructor(unrestricted double startTime, unrestricted double endTime, DOMString text),
-    ConstructorCallWith=ScriptExecutionContext,
+    Conditional=VIDEO,
     JSGenerateToJSObject,
     JSGenerateToNativeObject,
+    Exposed=Window
 ] interface VTTCue : TextTrackCue {
-    [SetterMayThrowException] attribute DOMString vertical;
+    [CallWith=Document] constructor(double startTime, double endTime, DOMString text);
+
+    attribute DOMString vertical;
     attribute boolean snapToLines;
-    [SetterMayThrowException] attribute double line;
-    [SetterMayThrowException] attribute double position;
-    [SetterMayThrowException] attribute double size;
-    [SetterMayThrowException] attribute DOMString align;
+    attribute LineAndPositionSetting line;
+    attribute DOMString lineAlign;
+    attribute LineAndPositionSetting position;
+    attribute DOMString positionAlign;
+    attribute double size;
+    attribute DOMString align;
     attribute DOMString text;
     DocumentFragment getCueAsHTML();
 
-    attribute DOMString regionId;
+    attribute VTTRegion? region;
 };

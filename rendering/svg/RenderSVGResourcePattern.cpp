@@ -29,12 +29,14 @@
 #include "SVGRenderingContext.h"
 #include "SVGResources.h"
 #include "SVGResourcesCache.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(RenderSVGResourcePattern);
+
 RenderSVGResourcePattern::RenderSVGResourcePattern(SVGPatternElement& element, RenderStyle&& style)
     : RenderSVGResourceContainer(element, WTFMove(style))
-    , m_shouldCollectPatternAttributes(true)
 {
 }
 
@@ -115,13 +117,13 @@ PatternData* RenderSVGResourcePattern::buildPattern(RenderElement& renderer, Opt
         return nullptr;
 
     // Build pattern.
-    auto patternData = std::make_unique<PatternData>();
+    auto patternData = makeUnique<PatternData>();
     patternData->pattern = Pattern::create(copiedImage.releaseNonNull(), true, true);
 
     // Compute pattern space transformation.
 
-    patternData->transform.translate(tileBoundaries.x(), tileBoundaries.y());
-    patternData->transform.scale(tileBoundaries.width() / tileImageSize.width(), tileBoundaries.height() / tileImageSize.height());
+    patternData->transform.translate(tileBoundaries.location());
+    patternData->transform.scale(tileBoundaries.size() / tileImageSize);
 
     AffineTransform patternTransform = m_attributes.patternTransform();
     if (!patternTransform.isIdentity())
@@ -144,10 +146,10 @@ PatternData* RenderSVGResourcePattern::buildPattern(RenderElement& renderer, Opt
 bool RenderSVGResourcePattern::applyResource(RenderElement& renderer, const RenderStyle& style, GraphicsContext*& context, OptionSet<RenderSVGResourceMode> resourceMode)
 {
     ASSERT(context);
-    ASSERT(resourceMode != RenderSVGResourceMode::ApplyToDefault);
+    ASSERT(!resourceMode.isEmpty());
 
     if (m_shouldCollectPatternAttributes) {
-        patternElement().synchronizeAnimatedSVGAttribute(anyQName());
+        patternElement().synchronizeAllAttributes();
 
         m_attributes = PatternAttributes();
         collectPatternAttributes(m_attributes);
@@ -174,7 +176,7 @@ bool RenderSVGResourcePattern::applyResource(RenderElement& renderer, const Rend
         context->setFillPattern(*patternData->pattern);
         context->setFillRule(svgStyle.fillRule());
     } else if (resourceMode.contains(RenderSVGResourceMode::ApplyToStroke)) {
-        if (svgStyle.vectorEffect() == VE_NON_SCALING_STROKE)
+        if (svgStyle.vectorEffect() == VectorEffect::NonScalingStroke)
             patternData->pattern->setPatternSpaceTransform(transformOnNonScalingStroke(&renderer, patternData->transform));
         context->setAlpha(svgStyle.strokeOpacity());
         context->setStrokePattern(*patternData->pattern);
@@ -183,13 +185,13 @@ bool RenderSVGResourcePattern::applyResource(RenderElement& renderer, const Rend
 
     if (resourceMode.contains(RenderSVGResourceMode::ApplyToText)) {
         if (resourceMode.contains(RenderSVGResourceMode::ApplyToFill)) {
-            context->setTextDrawingMode(TextModeFill);
+            context->setTextDrawingMode(TextDrawingMode::Fill);
 
 #if USE(CG)
             context->applyFillPattern();
 #endif
         } else if (resourceMode.contains(RenderSVGResourceMode::ApplyToStroke)) {
-            context->setTextDrawingMode(TextModeStroke);
+            context->setTextDrawingMode(TextDrawingMode::Stroke);
 
 #if USE(CG)
             context->applyStrokePattern();
@@ -203,7 +205,7 @@ bool RenderSVGResourcePattern::applyResource(RenderElement& renderer, const Rend
 void RenderSVGResourcePattern::postApplyResource(RenderElement&, GraphicsContext*& context, OptionSet<RenderSVGResourceMode> resourceMode, const Path* path, const RenderSVGShape* shape)
 {
     ASSERT(context);
-    ASSERT(resourceMode != RenderSVGResourceMode::ApplyToDefault);
+    ASSERT(!resourceMode.isEmpty());
 
     if (resourceMode.contains(RenderSVGResourceMode::ApplyToFill)) {
         if (path)
@@ -250,18 +252,17 @@ bool RenderSVGResourcePattern::buildTileImageTransform(RenderElement& renderer,
     return true;
 }
 
-std::unique_ptr<ImageBuffer> RenderSVGResourcePattern::createTileImage(const PatternAttributes& attributes, const FloatRect& tileBoundaries, const FloatRect& absoluteTileBoundaries, const AffineTransform& tileImageTransform, FloatRect& clampedAbsoluteTileBoundaries, RenderingMode renderingMode) const
+RefPtr<ImageBuffer> RenderSVGResourcePattern::createTileImage(const PatternAttributes& attributes, const FloatRect& tileBoundaries, const FloatRect& absoluteTileBoundaries, const AffineTransform& tileImageTransform, FloatRect& clampedAbsoluteTileBoundaries, RenderingMode renderingMode) const
 {
     clampedAbsoluteTileBoundaries = ImageBuffer::clampedRect(absoluteTileBoundaries);
-    auto tileImage = SVGRenderingContext::createImageBuffer(absoluteTileBoundaries, clampedAbsoluteTileBoundaries, ColorSpaceSRGB, renderingMode);
+    auto tileImage = SVGRenderingContext::createImageBuffer(absoluteTileBoundaries, clampedAbsoluteTileBoundaries, ColorSpace::SRGB, renderingMode);
     if (!tileImage)
         return nullptr;
 
     GraphicsContext& tileImageContext = tileImage->context();
 
     // The image buffer represents the final rendered size, so the content has to be scaled (to avoid pixelation).
-    tileImageContext.scale(FloatSize(clampedAbsoluteTileBoundaries.width() / tileBoundaries.width(),
-                                      clampedAbsoluteTileBoundaries.height() / tileBoundaries.height()));
+    tileImageContext.scale(clampedAbsoluteTileBoundaries.size() / tileBoundaries.size());
 
     // Apply tile image transformations.
     if (!tileImageTransform.isIdentity())
@@ -277,7 +278,7 @@ std::unique_ptr<ImageBuffer> RenderSVGResourcePattern::createTileImage(const Pat
             continue;
         if (child.renderer()->needsLayout())
             return nullptr;
-        SVGRenderingContext::renderSubtreeToImageBuffer(tileImage.get(), *child.renderer(), contentTransformation);
+        SVGRenderingContext::renderSubtreeToContext(tileImageContext, *child.renderer(), contentTransformation);
     }
 
     return tileImage;

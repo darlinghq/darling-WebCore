@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,11 +29,22 @@
 #if ENABLE(APPLE_PAY)
 
 #import "ApplePayPayment.h"
-#import "PassKitSPI.h"
 #import "PaymentContact.h"
 #import "PaymentMethod.h"
+#import <pal/spi/cocoa/PassKitSPI.h>
 
 namespace WebCore {
+
+static void finishConverting(PKPayment *payment, ApplePayPayment& result)
+{
+#if HAVE(PASSKIT_INSTALLMENTS)
+    if (NSString *installmentAuthorizationToken = payment.installmentAuthorizationToken)
+        result.installmentAuthorizationToken = installmentAuthorizationToken;
+#else
+    UNUSED_PARAM(payment);
+    UNUSED_PARAM(result);
+#endif
+}
 
 static ApplePayPayment::Token convert(PKPaymentToken *paymentToken)
 {
@@ -51,7 +62,7 @@ static ApplePayPayment::Token convert(PKPaymentToken *paymentToken)
     return result;
 }
 
-static ApplePayPayment convert(PKPayment *payment)
+static ApplePayPayment convert(unsigned version, PKPayment *payment)
 {
     ASSERT(payment);
 
@@ -60,16 +71,32 @@ static ApplePayPayment convert(PKPayment *payment)
     result.token = convert(payment.token);
 
     if (payment.billingContact)
-        result.billingContact = PaymentContact(payment.billingContact).toApplePayPaymentContact();
+        result.billingContact = PaymentContact(payment.billingContact).toApplePayPaymentContact(version);
     if (payment.shippingContact)
-        result.shippingContact = PaymentContact(payment.shippingContact).toApplePayPaymentContact();
+        result.shippingContact = PaymentContact(payment.shippingContact).toApplePayPaymentContact(version);
+
+    finishConverting(payment, result);
 
     return result;
 }
+    
+Payment::Payment() = default;
 
-ApplePayPayment Payment::toApplePayPayment() const
+Payment::Payment(RetainPtr<PKPayment>&& pkPayment)
+    : m_pkPayment { WTFMove(pkPayment) }
 {
-    return convert(m_pkPayment.get());
+}
+
+Payment::~Payment() = default;
+
+ApplePayPayment Payment::toApplePayPayment(unsigned version) const
+{
+    return convert(version, m_pkPayment.get());
+}
+
+PKPayment *Payment::pkPayment() const
+{
+    return m_pkPayment.get();
 }
 
 }

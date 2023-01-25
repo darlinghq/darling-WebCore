@@ -27,9 +27,13 @@
 #include "config.h"
 #include "ResourceError.h"
 
+#include "LocalizedStrings.h"
+#include "Logging.h"
+
 namespace WebCore {
 
 const char* const errorDomainWebKitInternal = "WebKitInternal";
+const char* const errorDomainWebKitServiceWorker = "WebKitServiceWorker";
 
 inline const ResourceError& ResourceErrorBase::asResourceError() const
 {
@@ -60,7 +64,7 @@ void ResourceErrorBase::lazyInit() const
 void ResourceErrorBase::setType(Type type)
 {
     // setType should only be used to specialize the error type.
-    ASSERT(m_type == Type::General || m_type == Type::Null || (m_type == Type::Cancellation && type == Type::AccessControl));
+    ASSERT(m_type == type || m_type == Type::General || m_type == Type::Null || (m_type == Type::Cancellation && type == Type::AccessControl));
     m_type = type;
 }
 
@@ -85,6 +89,14 @@ bool ResourceErrorBase::compare(const ResourceError& a, const ResourceError& b)
         return false;
 
     return ResourceError::platformCompare(a, b);
+}
+
+ResourceError internalError(const URL& url)
+{
+    RELEASE_LOG_ERROR(Loading, "Internal error called");
+    RELEASE_LOG_STACKTRACE(Loading);
+
+    return ResourceError("WebKitErrorDomain"_s, 300, url, WEB_UI_STRING("WebKit encountered an internal error", "WebKitErrorInternal description"));
 }
 
 } // namespace WebCore

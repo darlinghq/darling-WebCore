@@ -27,7 +27,7 @@
 
 #include "FloatRect.h"
 #include "IntRect.h"
-#include <wtf/Vector.h>
+#include <wtf/Forward.h>
 
 namespace WebCore {
 
@@ -38,10 +38,14 @@ float findSlope(const FloatPoint& p1, const FloatPoint& p2, float& c);
 // Find point where lines through the two pairs of points intersect. Returns false if the lines don't intersect.
 WEBCORE_EXPORT bool findIntersection(const FloatPoint& p1, const FloatPoint& p2, const FloatPoint& d1, const FloatPoint& d2, FloatPoint& intersection);
 
-IntRect unionRect(const Vector<IntRect>&);
+WEBCORE_EXPORT IntRect unionRect(const Vector<IntRect>&);
 WEBCORE_EXPORT FloatRect unionRect(const Vector<FloatRect>&);
+WEBCORE_EXPORT FloatRect unionRectIgnoringZeroRects(const Vector<FloatRect>&);
 
-// Map rect r from srcRect to an equivalent rect in destRect.
+// Map point from srcRect to an equivalent point in destRect.
+FloatPoint mapPoint(FloatPoint, const FloatRect& srcRect, const FloatRect& destRect);
+
+// Map rect from srcRect to an equivalent rect in destRect.
 FloatRect mapRect(const FloatRect&, const FloatRect& srcRect, const FloatRect& destRect);
 
 WEBCORE_EXPORT FloatRect largestRectWithAspectRatioInsideRect(float aspectRatio, const FloatRect&);

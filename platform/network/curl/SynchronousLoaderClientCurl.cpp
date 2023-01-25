@@ -29,7 +29,6 @@
 #include "SynchronousLoaderClient.h"
 
 #include "AuthenticationChallenge.h"
-#include "EventLoop.h"
 #include "NotImplemented.h"
 #include "ResourceHandleInternal.h"
 
@@ -46,7 +45,7 @@ ResourceError SynchronousLoaderClient::platformBadResponseError()
     URL failingURL;
     String localizedDescription("Bad Server Response");
 
-    return ResourceError(ASCIILiteral("CURL"), errorCode, failingURL, localizedDescription);
+    return ResourceError("CURL"_s, errorCode, failingURL, localizedDescription);
 }
 
 }

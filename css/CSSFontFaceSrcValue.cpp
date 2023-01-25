@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007, 2010 Apple Inc. All rights reserved.
+ * Copyright (C) 2007-2017 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,7 +37,6 @@
 
 namespace WebCore {
 
-#if ENABLE(SVG_FONTS)
 bool CSSFontFaceSrcValue::isSVGFontFaceSrc() const
 {
     return equalLettersIgnoringASCIICase(m_format, "svg");
@@ -47,7 +46,6 @@ bool CSSFontFaceSrcValue::isSVGFontTarget() const
 {
     return isSVGFontFaceSrc() || svgFontFaceElement();
 }
-#endif
 
 bool CSSFontFaceSrcValue::isSupportedFormat() const
 {
@@ -55,33 +53,20 @@ bool CSSFontFaceSrcValue::isSupportedFormat() const
     // we will also check to see if the URL ends with .eot. If so, we'll assume that we shouldn't load it.
     if (m_format.isEmpty()) {
         // Check for .eot.
-        if (!m_resource.startsWith("data:", false) && m_resource.endsWith(".eot", false))
+        if (!protocolIs(m_resource, "data") && m_resource.endsWithIgnoringASCIICase(".eot"))
             return false;
         return true;
     }
 
-    return FontCustomPlatformData::supportsFormat(m_format)
-#if ENABLE(SVG_FONTS)
-           || isSVGFontFaceSrc()
-#endif
-           ;
+    return FontCustomPlatformData::supportsFormat(m_format) || isSVGFontFaceSrc();
 }
 
 String CSSFontFaceSrcValue::customCSSText() const
 {
-    StringBuilder result;
-    if (isLocal())
-        result.appendLiteral("local(");
-    else
-        result.appendLiteral("url(");
-    result.append(m_resource);
-    result.append(')');
-    if (!m_format.isEmpty()) {
-        result.appendLiteral(" format(");
-        result.append(m_format);
-        result.append(')');
-    }
-    return result.toString();
+    const char* prefix = isLocal() ? "local(" : "url(";
+    if (m_format.isEmpty())
+        return makeString(prefix, m_resource, ')');
+    return makeString(prefix, m_resource, ')', " format(", m_format, ')');
 }
 
 bool CSSFontFaceSrcValue::traverseSubresources(const WTF::Function<bool (const CachedResource&)>& handler) const
@@ -98,10 +83,11 @@ CachedFont* CSSFontFaceSrcValue::cachedFont(Document* document, bool isSVG, bool
 
     ResourceLoaderOptions options = CachedResourceLoader::defaultCachedResourceOptions();
     options.contentSecurityPolicyImposition = isInitiatingElementInUserAgentShadowTree ? ContentSecurityPolicyImposition::SkipPolicyCheck : ContentSecurityPolicyImposition::DoPolicyCheck;
+    options.loadedFromOpaqueSource = m_loadedFromOpaqueSource;
 
     CachedResourceRequest request(ResourceRequest(document->completeURL(m_resource)), options);
     request.setInitiator(cachedResourceRequestInitiators().css);
-    m_cachedFont = document->cachedResourceLoader().requestFont(WTFMove(request), isSVG);
+    m_cachedFont = document->cachedResourceLoader().requestFont(WTFMove(request), isSVG).value_or(nullptr);
     return m_cachedFont.get();
 }
 

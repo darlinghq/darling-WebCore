@@ -34,8 +34,28 @@
 
 namespace WebCore {
 
-static const Seconds subimageCacheClearDelay { 1_s };
+SubimageCacheWithTimer* SubimageCacheWithTimer::s_cache;
+
+static const Seconds subimageCachePruneDelay { 500_ms };
+static const Seconds subimageCacheEntryLifetime { 500_ms };
 static const int maxSubimageCacheSize = 300;
+
+RetainPtr<CGImageRef> SubimageCacheWithTimer::getSubimage(CGImageRef image, const FloatRect& rect)
+{
+    return subimageCache().subimage(image, rect);
+}
+
+void SubimageCacheWithTimer::clearImage(CGImageRef image)
+{
+    if (subimageCacheExists())
+        subimageCache().clearImageAndSubimages(image);
+}
+
+void SubimageCacheWithTimer::clear()
+{
+    if (subimageCacheExists())
+        subimageCache().clearAll();
+}
 
 struct SubimageRequest {
     CGImageRef image;
@@ -57,60 +77,94 @@ struct SubimageCacheAdder {
     static void translate(SubimageCacheWithTimer::SubimageCacheEntry& entry, const SubimageRequest& request, unsigned /*hashCode*/)
     {
         entry.image = request.image;
-        entry.rect = request.rect;
         entry.subimage = adoptCF(CGImageCreateWithImageInRect(request.image, request.rect));
+        entry.rect = request.rect;
     }
 };
 
 SubimageCacheWithTimer::SubimageCacheWithTimer()
-    : m_timer(*this, &SubimageCacheWithTimer::invalidateCacheTimerFired, subimageCacheClearDelay)
+    : m_timer(*this, &SubimageCacheWithTimer::pruneCacheTimerFired)
 {
 }
 
-void SubimageCacheWithTimer::invalidateCacheTimerFired()
+void SubimageCacheWithTimer::pruneCacheTimerFired()
 {
-    m_images.clear();
-    m_cache.clear();
+    prune();
+    if (m_cache.isEmpty()) {
+        ASSERT(m_imageCounts.isEmpty());
+        m_timer.stop();
+    }
 }
 
-RetainPtr<CGImageRef> SubimageCacheWithTimer::getSubimage(CGImageRef image, const FloatRect& rect)
+void SubimageCacheWithTimer::prune()
 {
-    m_timer.restart();
+    auto now = MonotonicTime::now();
+
+    Vector<SubimageCacheEntry> toBeRemoved;
+
+    for (const auto& entry : m_cache) {
+        if ((now - entry.lastAccessTime) > subimageCacheEntryLifetime)
+            toBeRemoved.append(entry);
+    }
+
+    for (auto& entry : toBeRemoved) {
+        m_imageCounts.remove(entry.image.get());
+        m_cache.remove(entry);
+    }
+}
+
+RetainPtr<CGImageRef> SubimageCacheWithTimer::subimage(CGImageRef image, const FloatRect& rect)
+{
+    if (!m_timer.isActive())
+        m_timer.startRepeating(subimageCachePruneDelay);
+
     if (m_cache.size() == maxSubimageCacheSize) {
         SubimageCacheEntry entry = *m_cache.begin();
-        m_images.remove(entry.image.get());
+        m_imageCounts.remove(entry.image.get());
         m_cache.remove(entry);
     }
 
     ASSERT(m_cache.size() < maxSubimageCacheSize);
-    SubimageCache::AddResult result = m_cache.add<SubimageCacheAdder>(SubimageRequest(image, rect));
+    auto result = m_cache.add<SubimageCacheAdder>(SubimageRequest(image, rect));
     if (result.isNewEntry)
-        m_images.add(image);
+        m_imageCounts.add(image);
 
+    result.iterator->lastAccessTime = MonotonicTime::now();
     return result.iterator->subimage;
 }
 
-void SubimageCacheWithTimer::clearImage(CGImageRef image)
+void SubimageCacheWithTimer::clearImageAndSubimages(CGImageRef image)
 {
-    if (m_images.contains(image)) {
+    if (m_imageCounts.contains(image)) {
         Vector<SubimageCacheEntry> toBeRemoved;
-        SubimageCache::const_iterator end = m_cache.end();
-        for (SubimageCache::const_iterator it = m_cache.begin(); it != end; ++it) {
-            if (it->image.get() == image)
-                toBeRemoved.append(*it);
+        for (const auto& entry : m_cache) {
+            if (entry.image.get() == image)
+                toBeRemoved.append(entry);
         }
 
-        for (Vector<SubimageCacheEntry>::iterator removeIt = toBeRemoved.begin(); removeIt != toBeRemoved.end(); ++removeIt)
-            m_cache.remove(*removeIt);
+        for (auto& entry : toBeRemoved)
+            m_cache.remove(entry);
 
-        m_images.removeAll(image);
+        m_imageCounts.removeAll(image);
     }
 }
 
-SubimageCacheWithTimer& subimageCache()
+void SubimageCacheWithTimer::clearAll()
 {
-    static SubimageCacheWithTimer& cache = *new SubimageCacheWithTimer;
-    return cache;
+    m_imageCounts.clear();
+    m_cache.clear();
+}
+
+SubimageCacheWithTimer& SubimageCacheWithTimer::subimageCache()
+{
+    if (!s_cache)
+        s_cache = new SubimageCacheWithTimer;
+    return *s_cache;
+}
+
+bool SubimageCacheWithTimer::subimageCacheExists()
+{
+    return !!s_cache;
 }
 
 }

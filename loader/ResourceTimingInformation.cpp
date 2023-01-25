@@ -26,8 +26,6 @@
 #include "config.h"
 #include "ResourceTimingInformation.h"
 
-#if ENABLE(WEB_TIMING)
-
 #include "CachedResource.h"
 #include "DOMWindow.h"
 #include "Document.h"
@@ -47,11 +45,12 @@ bool ResourceTimingInformation::shouldAddResourceTiming(CachedResource& resource
     // <https://github.com/w3c/resource-timing/issues/100>
     if (!resource.resourceRequest().url().protocolIsInHTTPFamily())
         return false;
-    if (resource.response().httpStatusCode() >= 400)
-        return false;
     if (resource.errorOccurred())
         return false;
     if (resource.wasCanceled())
+        return false;
+
+    if (resource.options().loadedFromOpaqueSource == LoadedFromOpaqueSource::Yes)
         return false;
 
     return true;
@@ -59,7 +58,6 @@ bool ResourceTimingInformation::shouldAddResourceTiming(CachedResource& resource
 
 void ResourceTimingInformation::addResourceTiming(CachedResource& resource, Document& document, ResourceTiming&& resourceTiming)
 {
-    ASSERT(RuntimeEnabledFeatures::sharedFeatures().resourceTimingEnabled());
     if (!ResourceTimingInformation::shouldAddResourceTiming(resource))
         return;
 
@@ -72,30 +70,27 @@ void ResourceTimingInformation::addResourceTiming(CachedResource& resource, Docu
         return;
 
     Document* initiatorDocument = &document;
-    if (resource.type() == CachedResource::MainResource && document.frame() && document.frame()->loader().shouldReportResourceTimingToParentFrame()) {
-        document.frame()->loader().setShouldReportResourceTimingToParentFrame(false);
+    if (resource.type() == CachedResource::Type::MainResource && document.frame() && document.frame()->loader().shouldReportResourceTimingToParentFrame())
         initiatorDocument = document.parentDocument();
-    }
     if (!initiatorDocument)
         return;
-    if (!initiatorDocument->domWindow())
-        return;
-    if (!initiatorDocument->domWindow()->performance())
+
+    auto* initiatorWindow = initiatorDocument->domWindow();
+    if (!initiatorWindow)
         return;
 
     resourceTiming.overrideInitiatorName(info.name);
 
-    initiatorDocument->domWindow()->performance()->addResourceTiming(WTFMove(resourceTiming));
+    initiatorWindow->performance().addResourceTiming(WTFMove(resourceTiming));
 
     info.added = Added;
 }
 
-void ResourceTimingInformation::storeResourceTimingInitiatorInformation(const CachedResourceHandle<CachedResource>& resource, const AtomicString& initiatorName, Frame* frame)
+void ResourceTimingInformation::storeResourceTimingInitiatorInformation(const CachedResourceHandle<CachedResource>& resource, const AtomString& initiatorName, Frame* frame)
 {
-    ASSERT(RuntimeEnabledFeatures::sharedFeatures().resourceTimingEnabled());
     ASSERT(resource.get());
 
-    if (resource->type() == CachedResource::MainResource) {
+    if (resource->type() == CachedResource::Type::MainResource) {
         // <iframe>s should report the initial navigation requested by the parent document, but not subsequent navigations.
         ASSERT(frame);
         if (frame->ownerElement()) {
@@ -109,5 +104,3 @@ void ResourceTimingInformation::storeResourceTimingInitiatorInformation(const Ca
 }
 
 }
-
-#endif // ENABLE(WEB_TIMING)

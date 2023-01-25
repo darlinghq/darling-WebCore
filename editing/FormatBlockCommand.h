@@ -46,7 +46,7 @@ public:
     
     bool preservesTypingStyle() const override { return true; }
 
-    static Element* elementForFormatBlockCommand(Range*);
+    static Element* elementForFormatBlockCommand(const Optional<SimpleRange>&);
     bool didApply() const { return m_didApply; }
 
 private:
@@ -54,7 +54,7 @@ private:
 
     void formatSelection(const VisiblePosition& startOfSelection, const VisiblePosition& endOfSelection) override;
     void formatRange(const Position& start, const Position& end, const Position& endOfSelection, RefPtr<Element>&) override;
-    EditAction editingAction() const override { return EditActionFormatBlock; }
+    EditAction editingAction() const override { return EditAction::FormatBlock; }
 
     bool m_didApply;
 };

@@ -30,7 +30,6 @@
 
 #include "RTCNotifiersMock.h"
 
-#include "DOMError.h"
 #include "RTCDataChannelHandlerMock.h"
 #include "RTCSessionDescriptionDescriptor.h"
 #include "RTCSessionDescriptionRequest.h"
@@ -99,7 +98,7 @@ RemoteDataChannelNotifier::RemoteDataChannelNotifier(RTCPeerConnectionHandlerCli
 
 void RemoteDataChannelNotifier::fire()
 {
-    m_client->didAddRemoteDataChannel(std::make_unique<RTCDataChannelHandlerMock>("RTCDataChannelHandlerMock", RTCDataChannelInit()));
+    m_client->didAddRemoteDataChannel(makeUnique<RTCDataChannelHandlerMock>("RTCDataChannelHandlerMock", RTCDataChannelInit()));
 }
 
 DataChannelStateNotifier::DataChannelStateNotifier(RTCDataChannelHandlerClient* client, RTCDataChannelState state)

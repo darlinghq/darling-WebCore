@@ -24,12 +24,12 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
  
-#include "config.h"
-#include "FloatSize.h"
+#import "config.h"
+#import "FloatSize.h"
 
 namespace WebCore {
 
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
 #ifndef NSGEOMETRY_TYPES_SAME_AS_CGGEOMETRY_TYPES
 
 FloatSize::FloatSize(const NSSize& s) : m_width(s.width), m_height(s.height)
@@ -42,6 +42,6 @@ FloatSize::operator NSSize() const
 }
 
 #endif
-#endif // !PLATFORM(IOS)
+#endif // !PLATFORM(IOS_FAMILY)
 
 }

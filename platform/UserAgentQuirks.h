@@ -30,13 +30,14 @@
 
 namespace WebCore {
 
-class URL;
-
 class UserAgentQuirks {
 public:
     enum UserAgentQuirk {
         NeedsChromeBrowser,
+        NeedsFirefoxBrowser,
+        NeedsInternetExplorerBrowser,
         NeedsMacintoshPlatform,
+        NeedsWindowsPlatform,
         NeedsLinuxDesktopPlatform,
 
         NumUserAgentQuirks

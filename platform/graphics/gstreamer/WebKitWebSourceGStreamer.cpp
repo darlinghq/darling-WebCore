@@ -1,6 +1,7 @@
 /*
  *  Copyright (C) 2009, 2010 Sebastian Dröge <sebastian.droege@collabora.co.uk>
  *  Copyright (C) 2013 Collabora Ltd.
+ *  Copyright (C) 2019, 2020 Igalia S.L.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -22,150 +23,140 @@
 
 #if ENABLE(VIDEO) && USE(GSTREAMER)
 
-#include "GRefPtrGStreamer.h"
-#include "GStreamerUtilities.h"
-#include "GUniquePtrGStreamer.h"
+#include "GStreamerCommon.h"
 #include "HTTPHeaderNames.h"
-#include "MainThreadNotifier.h"
 #include "MediaPlayer.h"
-#include "NotImplemented.h"
 #include "PlatformMediaResourceLoader.h"
+#include "PolicyChecker.h"
 #include "ResourceError.h"
-#include "ResourceHandle.h"
-#include "ResourceHandleClient.h"
 #include "ResourceRequest.h"
 #include "ResourceResponse.h"
-#include "SharedBuffer.h"
-#include <gst/app/gstappsrc.h>
-#include <gst/gst.h>
-#include <gst/pbutils/missing-plugins.h>
-#include <wtf/MainThread.h>
-#include <wtf/Noncopyable.h>
-#include <wtf/glib/GMutexLocker.h>
-#include <wtf/glib/GRefPtr.h>
-#include <wtf/glib/GUniquePtr.h>
+#include <cstdint>
+#include <wtf/Condition.h>
+#include <wtf/DataMutex.h>
+#include <wtf/RunLoop.h>
+#include <wtf/Scope.h>
+#include <wtf/glib/WTFGType.h>
 #include <wtf/text/CString.h>
 
-#if USE(SOUP)
-#include "SoupNetworkSession.h"
-#endif
-
 using namespace WebCore;
+using WTF::DataMutex;
 
-class StreamingClient {
-public:
-    StreamingClient(WebKitWebSrc*, ResourceRequest&&);
-    virtual ~StreamingClient();
+// Never pause download of media resources smaller than 2MiB.
+#define SMALL_MEDIA_RESOURCE_MAX_SIZE 2 * 1024 * 1024
 
-protected:
-    char* createReadBuffer(size_t requestedSize, size_t& actualSize);
-    void handleResponseReceived(const ResourceResponse&);
-    void handleDataReceived(const char*, int);
-    void handleNotifyFinished();
+// Keep at most 2% of the full, non-small, media resource buffered. When this
+// threshold is reached, the download task is paused.
+#define HIGH_QUEUE_FACTOR_THRESHOLD 0.02
 
-    GRefPtr<GstElement> m_src;
-    ResourceRequest m_request;
-};
+// Keep at least 20% of maximum queue size buffered. When this threshold is
+// reached, the download task resumes.
+#define LOW_QUEUE_FACTOR_THRESHOLD 0.2
 
-class CachedResourceStreamingClient final : public PlatformMediaResourceClient, public StreamingClient {
+class CachedResourceStreamingClient final : public PlatformMediaResourceClient {
+    WTF_MAKE_FAST_ALLOCATED;
     WTF_MAKE_NONCOPYABLE(CachedResourceStreamingClient);
 public:
-    CachedResourceStreamingClient(WebKitWebSrc*, ResourceRequest&&);
+    CachedResourceStreamingClient(WebKitWebSrc*, ResourceRequest&&, unsigned requestNumber);
     virtual ~CachedResourceStreamingClient();
 
+    const HashSet<RefPtr<WebCore::SecurityOrigin>>& securityOrigins() const { return m_origins; }
+
+    void setSourceElement(WebKitWebSrc* src) { m_src = GST_ELEMENT_CAST(src); }
+
 private:
+    void checkUpdateBlocksize(unsigned bytesRead);
+
     // PlatformMediaResourceClient virtual methods.
-#if USE(SOUP)
-    char* getOrCreateReadBuffer(PlatformMediaResource&, size_t requestedSize, size_t& actualSize) override;
-#endif
-    void responseReceived(PlatformMediaResource&, const ResourceResponse&) override;
+    void responseReceived(PlatformMediaResource&, const ResourceResponse&, CompletionHandler<void(ShouldContinuePolicyCheck)>&&) override;
     void dataReceived(PlatformMediaResource&, const char*, int) override;
     void accessControlCheckFailed(PlatformMediaResource&, const ResourceError&) override;
     void loadFailed(PlatformMediaResource&, const ResourceError&) override;
-    void loadFinished(PlatformMediaResource&) override;
+    void loadFinished(PlatformMediaResource&, const NetworkLoadMetrics&) override;
+
+    static constexpr int s_growBlocksizeLimit { 1 };
+    static constexpr int s_growBlocksizeCount { 2 };
+    static constexpr int s_growBlocksizeFactor { 2 };
+    static constexpr float s_reduceBlocksizeLimit { 0.5 };
+    static constexpr int s_reduceBlocksizeCount { 2 };
+    static constexpr float s_reduceBlocksizeFactor { 0.5 };
+    int m_reduceBlocksizeCount { 0 };
+    int m_increaseBlocksizeCount { 0 };
+    unsigned m_requestNumber;
+
+    GRefPtr<GstElement> m_src;
+    ResourceRequest m_request;
+    HashSet<RefPtr<WebCore::SecurityOrigin>> m_origins;
 };
 
-class ResourceHandleStreamingClient : public ThreadSafeRefCounted<ResourceHandleStreamingClient>, public ResourceHandleClient, public StreamingClient {
-public:
-    static Ref<ResourceHandleStreamingClient> create(WebKitWebSrc* src, ResourceRequest&& request)
-    {
-        return adoptRef(*new ResourceHandleStreamingClient(src, WTFMove(request)));
-    }
-    virtual ~ResourceHandleStreamingClient();
+struct WebKitWebSrcPrivate {
+    // Constants initialized during construction:
+    unsigned minimumBlocksize;
 
-    void invalidate();
-
-    // StreamingClient virtual methods.
-    bool loadFailed() const;
-    void setDefersLoading(bool);
-
-private:
-    ResourceHandleStreamingClient(WebKitWebSrc*, ResourceRequest&&);
-    void cleanupAndStopRunLoop();
-
-    // ResourceHandleClient virtual methods.
-#if USE(SOUP)
-    char* getOrCreateReadBuffer(size_t requestedSize, size_t& actualSize) override;
-#endif
-    ResourceRequest willSendRequest(ResourceHandle*, ResourceRequest&&, ResourceResponse&&) override;
-    void didReceiveResponse(ResourceHandle*, ResourceResponse&&) override;
-    void didReceiveData(ResourceHandle*, const char*, unsigned, int) override;
-    void didReceiveBuffer(ResourceHandle*, Ref<SharedBuffer>&&, int encodedLength) override;
-    void didFinishLoading(ResourceHandle*) override;
-    void didFail(ResourceHandle*, const ResourceError&) override;
-    void wasBlocked(ResourceHandle*) override;
-    void cannotShowURL(ResourceHandle*) override;
-
-    RefPtr<Thread> m_thread;
-    Lock m_initializeRunLoopConditionMutex;
-    Condition m_initializeRunLoopCondition;
-    RunLoop* m_runLoop { nullptr };
-    Lock m_terminateRunLoopConditionMutex;
-    Condition m_terminateRunLoopCondition;
-    RefPtr<ResourceHandle> m_resource;
-#if USE(SOUP)
-    std::unique_ptr<SoupNetworkSession> m_session;
-#endif
-};
-
-enum MainThreadSourceNotification {
-    Start = 1 << 0,
-    Stop = 1 << 1,
-    NeedData = 1 << 2,
-    EnoughData = 1 << 3,
-    Seek = 1 << 4
-};
-
-#define WEBKIT_WEB_SRC_GET_PRIVATE(obj) (G_TYPE_INSTANCE_GET_PRIVATE((obj), WEBKIT_TYPE_WEB_SRC, WebKitWebSrcPrivate))
-struct _WebKitWebSrcPrivate {
-    GstAppSrc* appsrc;
-    GstPad* srcpad;
+    // Configuration of the element (properties set by the user of WebKitWebSrc):
+    // They can only change when state < PAUSED.
     CString originalURI;
-    CString redirectedURI;
     bool keepAlive;
     GUniquePtr<GstStructure> extraHeaders;
     bool compress;
     GUniquePtr<gchar> httpMethod;
 
-    WebCore::MediaPlayer* player;
+    struct StreamingMembers {
+#ifndef NDEBUG
+        ~StreamingMembers()
+        {
+            // By the time we're destroying WebKitWebSrcPrivate unLock() should have been called and therefore resource
+            // should have already been cleared.
+            ASSERT(!resource);
+        }
+#endif
 
-    RefPtr<PlatformMediaResourceLoader> loader;
-    RefPtr<PlatformMediaResource> resource;
-    RefPtr<ResourceHandleStreamingClient> client;
+        // Properties initially empty, but set once the first HTTP response arrives:
+        bool wasResponseReceived;
+        CString redirectedURI;
+        bool didPassAccessControlCheck;
+        bool haveSize;
+        uint64_t size;
+        bool isSeekable;
+        GRefPtr<GstCaps> pendingCaps;
+        GRefPtr<GstMessage> pendingHttpHeadersMessage; // Set from MT, sent from create().
+        GRefPtr<GstEvent> pendingHttpHeadersEvent; // Set from MT, sent from create().
 
-    bool didPassAccessControlCheck;
+        // Properties updated with every downloaded data block:
+        WallTime downloadStartTime { WallTime::nan() };
+        uint64_t totalDownloadedBytes { 0 };
+        bool doesHaveEOS; // Set both when we reach stopPosition and on errors (including on responseReceived).
+        bool isDownloadSuspended { false }; // Set to true from the network handler when the high water level is reached.
 
-    guint64 offset;
-    guint64 size;
-    gboolean seekable;
-    bool paused;
-    bool isSeeking;
+        // Obtained by means of GstContext queries before making the first HTTP request.
+        // We use it for getting access to WebKit networking objects: the PlatformMediaResourceLoader factory [createResourceLoader()]
+        // and the player HTTP referrer string.
+        WebCore::MediaPlayer* player;
 
-    guint64 requestedOffset;
+        // MediaPlayer referrer cached value. The corresponding method has to be called from the
+        // main thread, so the value needs to be cached before use in non-main thread.
+        String referrer;
 
-    bool createdInMainThread;
-    RefPtr<MainThreadNotifier<MainThreadSourceNotification>> notifier;
-    GRefPtr<GstBuffer> buffer;
+        // Properties used for GStreamer data-flow in create().
+        bool isFlushing { false };
+        Condition responseCondition; // Must be signaled after any updates on HTTP requests, and when flushing.
+        GRefPtr<GstAdapter> adapter;
+        bool isDurationSet;
+        uint64_t readPosition;
+
+        // Properties only set during seek.
+        // basesrc ensures they can't change during a create() call by taking the STREAMING_LOCK.
+        // (An initial seek is also guaranteed by basesrc.)
+        unsigned requestNumber { 1 };
+        uint64_t requestedPosition { 0 };
+        uint64_t stopPosition { UINT64_MAX };
+
+        bool isRequestPending { true };
+
+        RefPtr<PlatformMediaResourceLoader> loader;
+        RefPtr<PlatformMediaResource> resource;
+    };
+    DataMutex<StreamingMembers> dataMutex;
 };
 
 enum {
@@ -178,65 +169,49 @@ enum {
     PROP_METHOD
 };
 
-static GstStaticPadTemplate srcTemplate = GST_STATIC_PAD_TEMPLATE("src",
-                                                                  GST_PAD_SRC,
-                                                                  GST_PAD_ALWAYS,
-                                                                  GST_STATIC_CAPS_ANY);
+static GstStaticPadTemplate srcTemplate = GST_STATIC_PAD_TEMPLATE("src", GST_PAD_SRC, GST_PAD_ALWAYS, GST_STATIC_CAPS_ANY);
 
 GST_DEBUG_CATEGORY_STATIC(webkit_web_src_debug);
 #define GST_CAT_DEFAULT webkit_web_src_debug
 
 static void webKitWebSrcUriHandlerInit(gpointer gIface, gpointer ifaceData);
 
-static void webKitWebSrcDispose(GObject*);
-static void webKitWebSrcFinalize(GObject*);
+static void webKitWebSrcConstructed(GObject*);
 static void webKitWebSrcSetProperty(GObject*, guint propertyID, const GValue*, GParamSpec*);
 static void webKitWebSrcGetProperty(GObject*, guint propertyID, GValue*, GParamSpec*);
-static GstStateChangeReturn webKitWebSrcChangeState(GstElement*, GstStateChange);
-
-static gboolean webKitWebSrcQueryWithParent(GstPad*, GstObject*, GstQuery*);
-
-static void webKitWebSrcNeedData(WebKitWebSrc*);
-static void webKitWebSrcEnoughData(WebKitWebSrc*);
-static gboolean webKitWebSrcSeek(WebKitWebSrc*, guint64);
-
-static GstAppSrcCallbacks appsrcCallbacks = {
-    // need_data
-    [](GstAppSrc*, guint, gpointer userData) {
-        webKitWebSrcNeedData(WEBKIT_WEB_SRC(userData));
-    },
-    // enough_data
-    [](GstAppSrc*, gpointer userData) {
-        webKitWebSrcEnoughData(WEBKIT_WEB_SRC(userData));
-    },
-    // seek_data
-    [](GstAppSrc*, guint64 offset, gpointer userData) -> gboolean {
-        return webKitWebSrcSeek(WEBKIT_WEB_SRC(userData), offset);
-    },
-    { nullptr }
-};
+static GstFlowReturn webKitWebSrcCreate(GstPushSrc*, GstBuffer**);
+static void webKitWebSrcMakeRequest(WebKitWebSrc*, DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper&);
+static gboolean webKitWebSrcStart(GstBaseSrc*);
+static gboolean webKitWebSrcStop(GstBaseSrc*);
+static gboolean webKitWebSrcGetSize(GstBaseSrc*, guint64* size);
+static gboolean webKitWebSrcIsSeekable(GstBaseSrc*);
+static gboolean webKitWebSrcDoSeek(GstBaseSrc*, GstSegment*);
+static gboolean webKitWebSrcQuery(GstBaseSrc*, GstQuery*);
+static gboolean webKitWebSrcUnLock(GstBaseSrc*);
+static gboolean webKitWebSrcUnLockStop(GstBaseSrc*);
+static void webKitWebSrcSetContext(GstElement*, GstContext*);
+static void restartLoaderIfNeeded(WebKitWebSrc*, DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper&);
+static void stopLoaderIfNeeded(WebKitWebSrc*, DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper&);
 
 #define webkit_web_src_parent_class parent_class
-// We split this out into another macro to avoid a check-webkit-style error.
-#define WEBKIT_WEB_SRC_CATEGORY_INIT GST_DEBUG_CATEGORY_INIT(webkit_web_src_debug, "webkitwebsrc", 0, "websrc element");
-G_DEFINE_TYPE_WITH_CODE(WebKitWebSrc, webkit_web_src, GST_TYPE_BIN,
-                         G_IMPLEMENT_INTERFACE(GST_TYPE_URI_HANDLER, webKitWebSrcUriHandlerInit);
-                         WEBKIT_WEB_SRC_CATEGORY_INIT);
+WEBKIT_DEFINE_TYPE_WITH_CODE(WebKitWebSrc, webkit_web_src, GST_TYPE_PUSH_SRC,
+    G_IMPLEMENT_INTERFACE(GST_TYPE_URI_HANDLER, webKitWebSrcUriHandlerInit);
+    GST_DEBUG_CATEGORY_INIT(webkit_web_src_debug, "webkitwebsrc", 0, "websrc element");
+)
 
 static void webkit_web_src_class_init(WebKitWebSrcClass* klass)
 {
     GObjectClass* oklass = G_OBJECT_CLASS(klass);
-    GstElementClass* eklass = GST_ELEMENT_CLASS(klass);
 
-    oklass->dispose = webKitWebSrcDispose;
-    oklass->finalize = webKitWebSrcFinalize;
+    oklass->constructed = webKitWebSrcConstructed;
     oklass->set_property = webKitWebSrcSetProperty;
     oklass->get_property = webKitWebSrcGetProperty;
 
-    gst_element_class_add_pad_template(eklass,
-                                       gst_static_pad_template_get(&srcTemplate));
-    gst_element_class_set_metadata(eklass, "WebKit Web source element", "Source", "Handles HTTP/HTTPS uris",
-                               "Sebastian Dröge <sebastian.droege@collabora.co.uk>");
+    GstElementClass* eklass = GST_ELEMENT_CLASS(klass);
+    gst_element_class_add_static_pad_template(eklass, &srcTemplate);
+
+    gst_element_class_set_metadata(eklass, "WebKit Web source element", "Source/Network", "Handles HTTP/HTTPS uris",
+        "Philippe Normand <philn@igalia.com>");
 
     /* Allows setting the uri using the 'location' property, which is used
      * for example by gst_element_make_from_uri() */
@@ -264,87 +239,72 @@ static void webkit_web_src_class_init(WebKitWebSrcClass* klass)
         g_param_spec_string("method", "method", "The HTTP method to use (default: GET)",
             nullptr, static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
-    eklass->change_state = webKitWebSrcChangeState;
+    eklass->set_context = GST_DEBUG_FUNCPTR(webKitWebSrcSetContext);
 
-    g_type_class_add_private(klass, sizeof(WebKitWebSrcPrivate));
+    GstBaseSrcClass* baseSrcClass = GST_BASE_SRC_CLASS(klass);
+    baseSrcClass->start = GST_DEBUG_FUNCPTR(webKitWebSrcStart);
+    baseSrcClass->stop = GST_DEBUG_FUNCPTR(webKitWebSrcStop);
+    baseSrcClass->unlock = GST_DEBUG_FUNCPTR(webKitWebSrcUnLock);
+    baseSrcClass->unlock_stop = GST_DEBUG_FUNCPTR(webKitWebSrcUnLockStop);
+    baseSrcClass->get_size = GST_DEBUG_FUNCPTR(webKitWebSrcGetSize);
+    baseSrcClass->is_seekable = GST_DEBUG_FUNCPTR(webKitWebSrcIsSeekable);
+    baseSrcClass->do_seek = GST_DEBUG_FUNCPTR(webKitWebSrcDoSeek);
+    baseSrcClass->query = GST_DEBUG_FUNCPTR(webKitWebSrcQuery);
+
+    GstPushSrcClass* pushSrcClass = GST_PUSH_SRC_CLASS(klass);
+    pushSrcClass->create = GST_DEBUG_FUNCPTR(webKitWebSrcCreate);
 }
 
-static void webkit_web_src_init(WebKitWebSrc* src)
+enum class ResetType {
+    Soft,
+    Hard
+};
+
+static void webkitWebSrcReset(WebKitWebSrc* src, DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper& members, ResetType resetType)
 {
-    WebKitWebSrcPrivate* priv = WEBKIT_WEB_SRC_GET_PRIVATE(src);
+    GST_DEBUG_OBJECT(src, "Resetting internal state");
+    gst_adapter_clear(members->adapter.get());
+    members->isRequestPending = true;
 
-    src->priv = priv;
-    new (priv) WebKitWebSrcPrivate();
+    // Reset request state. Any previous request has been cancelled at this point.
+    members->wasResponseReceived = false;
+    members->doesHaveEOS = false;
+    members->downloadStartTime = WallTime::nan();
+    members->totalDownloadedBytes = 0; // Resetted for each request, used to estimate download speed.
+    members->pendingHttpHeadersMessage = nullptr;
+    members->pendingHttpHeadersEvent = nullptr;
 
-    priv->createdInMainThread = isMainThread();
-    priv->notifier = MainThreadNotifier<MainThreadSourceNotification>::create();
+    // After a flush, we have to emit a segment again.
+    members->isDurationSet = false;
 
-    priv->appsrc = GST_APP_SRC(gst_element_factory_make("appsrc", nullptr));
-    if (!priv->appsrc) {
-        GST_ERROR_OBJECT(src, "Failed to create appsrc");
-        return;
+    // Hard reset is done during initialization and state transitions.
+    // Soft reset is done during flushes. In these, we preserve the seek target.
+    if (resetType == ResetType::Hard) {
+        members->didPassAccessControlCheck = false;
+        members->redirectedURI = CString();
+        members->isSeekable = false;
+        members->haveSize = false;
+        members->size = 0;
+        members->requestedPosition = 0;
+        members->stopPosition = UINT64_MAX;
+        members->readPosition = members->requestedPosition;
     }
-
-    gst_bin_add(GST_BIN(src), GST_ELEMENT(priv->appsrc));
-
-
-    GRefPtr<GstPad> targetPad = adoptGRef(gst_element_get_static_pad(GST_ELEMENT(priv->appsrc), "src"));
-    priv->srcpad = webkitGstGhostPadFromStaticTemplate(&srcTemplate, "src", targetPad.get());
-
-    gst_element_add_pad(GST_ELEMENT(src), priv->srcpad);
-
-    GST_OBJECT_FLAG_SET(priv->srcpad, GST_PAD_FLAG_NEED_PARENT);
-    gst_pad_set_query_function(priv->srcpad, webKitWebSrcQueryWithParent);
-
-    gst_app_src_set_callbacks(priv->appsrc, &appsrcCallbacks, src, nullptr);
-    gst_app_src_set_emit_signals(priv->appsrc, FALSE);
-    gst_app_src_set_stream_type(priv->appsrc, GST_APP_STREAM_TYPE_SEEKABLE);
-
-    // 512k is a abitrary number but we should choose a value
-    // here to not pause/unpause the SoupMessage too often and
-    // to make sure there's always some data available for
-    // GStreamer to handle.
-    gst_app_src_set_max_bytes(priv->appsrc, 512 * 1024);
-
-    // Emit the need-data signal if the queue contains less
-    // than 20% of data. Without this the need-data signal
-    // is emitted when the queue is empty, we then dispatch
-    // the soup message unpausing to the main loop and from
-    // there unpause the soup message. This already takes
-    // quite some time and libsoup even needs some more time
-    // to actually provide data again. If we do all this
-    // already if the queue is 20% empty, it's much more
-    // likely that libsoup already provides new data before
-    // the queue is really empty.
-    // This might need tweaking for ports not using libsoup.
-    g_object_set(priv->appsrc, "min-percent", 20, nullptr);
-
-    gst_base_src_set_automatic_eos(GST_BASE_SRC(priv->appsrc), FALSE);
-
-    gst_app_src_set_caps(priv->appsrc, nullptr);
-    gst_app_src_set_size(priv->appsrc, -1);
 }
 
-static void webKitWebSrcDispose(GObject* object)
+static void webKitWebSrcConstructed(GObject* object)
 {
-    WebKitWebSrcPrivate* priv = WEBKIT_WEB_SRC(object)->priv;
-    if (priv->notifier) {
-        priv->notifier->invalidate();
-        priv->notifier = nullptr;
-    }
+    GST_CALL_PARENT(G_OBJECT_CLASS, constructed, (object));
 
-    priv->player = nullptr;
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(object);
+    WebKitWebSrcPrivate* priv = src->priv;
 
-    GST_CALL_PARENT(G_OBJECT_CLASS, dispose, (object));
-}
+    priv->minimumBlocksize = gst_base_src_get_blocksize(GST_BASE_SRC_CAST(src));
 
-static void webKitWebSrcFinalize(GObject* object)
-{
-    WebKitWebSrcPrivate* priv = WEBKIT_WEB_SRC(object)->priv;
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(priv->dataMutex);
+    members->adapter = adoptGRef(gst_adapter_new());
+    webkitWebSrcReset(src, members, ResetType::Hard);
 
-    priv->~WebKitWebSrcPrivate();
-
-    GST_CALL_PARENT(G_OBJECT_CLASS, finalize, (object));
+    gst_base_src_set_automatic_eos(GST_BASE_SRC_CAST(src), FALSE);
 }
 
 static void webKitWebSrcSetProperty(GObject* object, guint propID, const GValue* value, GParamSpec* pspec)
@@ -380,14 +340,15 @@ static void webKitWebSrcGetProperty(GObject* object, guint propID, GValue* value
     WebKitWebSrc* src = WEBKIT_WEB_SRC(object);
     WebKitWebSrcPrivate* priv = src->priv;
 
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
     switch (propID) {
     case PROP_LOCATION:
         g_value_set_string(value, priv->originalURI.data());
         break;
-    case PROP_RESOLVED_LOCATION:
-        g_value_set_string(value, priv->redirectedURI.isNull() ? priv->originalURI.data() : priv->redirectedURI.data());
+    case PROP_RESOLVED_LOCATION: {
+        DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(priv->dataMutex);
+        g_value_set_string(value, members->redirectedURI.isNull() ? priv->originalURI.data() : members->redirectedURI.data());
         break;
+    }
     case PROP_KEEP_ALIVE:
         g_value_set_boolean(value, priv->keepAlive);
         break;
@@ -406,62 +367,206 @@ static void webKitWebSrcGetProperty(GObject* object, guint propID, GValue* value
     }
 }
 
-static void webKitWebSrcStop(WebKitWebSrc* src)
+static void webKitWebSrcSetContext(GstElement* element, GstContext* context)
 {
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(element);
     WebKitWebSrcPrivate* priv = src->priv;
 
-    if (priv->resource || (priv->loader && !priv->keepAlive)) {
-        GRefPtr<WebKitWebSrc> protector = WTF::ensureGRef(src);
-        priv->notifier->cancelPendingNotifications(MainThreadSourceNotification::NeedData | MainThreadSourceNotification::EnoughData | MainThreadSourceNotification::Seek);
-        priv->notifier->notify(MainThreadSourceNotification::Stop, [protector, keepAlive = priv->keepAlive] {
-            WebKitWebSrcPrivate* priv = protector->priv;
+    GST_DEBUG_OBJECT(src, "context type: %s", gst_context_get_context_type(context));
+    if (gst_context_has_context_type(context, WEBKIT_WEB_SRC_PLAYER_CONTEXT_TYPE_NAME)) {
+        const GValue* value = gst_structure_get_value(gst_context_get_structure(context), "player");
+        DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(priv->dataMutex);
+        members->player = reinterpret_cast<MediaPlayer*>(g_value_get_pointer(value));
+    }
+    GST_ELEMENT_CLASS(parent_class)->set_context(element, context);
+}
 
-            WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(protector.get()));
-            if (priv->resource) {
-                priv->resource->stop();
-                priv->resource->setClient(nullptr);
-                priv->resource = nullptr;
-            }
+static void restartLoaderIfNeeded(WebKitWebSrc* src, DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper& members)
+{
+    if (!members->isDownloadSuspended) {
+        GST_TRACE_OBJECT(src, "download already active");
+        return;
+    }
 
-            if (!keepAlive)
-                priv->loader = nullptr;
+    GST_TRACE_OBJECT(src, "is download suspended %s, does have EOS %s, does have size %s, is seekable %s, size %" G_GUINT64_FORMAT
+        " (min %u)", boolForPrinting(members->isDownloadSuspended), boolForPrinting(members->doesHaveEOS), boolForPrinting(members->haveSize)
+        , boolForPrinting(members->isSeekable), members->size, SMALL_MEDIA_RESOURCE_MAX_SIZE);
+    if (members->doesHaveEOS || !members->haveSize || !members->isSeekable || members->size <= SMALL_MEDIA_RESOURCE_MAX_SIZE) {
+        GST_TRACE_OBJECT(src, "download cannot be stopped/restarted");
+        return;
+    }
+    GST_TRACE_OBJECT(src, "read position %" G_GUINT64_FORMAT ", state %s", members->readPosition, gst_element_state_get_name(GST_STATE(src)));
+    if (!members->readPosition || members->readPosition == members->size || GST_STATE(src) < GST_STATE_PAUSED) {
+        GST_TRACE_OBJECT(src, "can't restart download");
+        return;
+    }
+
+    size_t queueSize = gst_adapter_available(members->adapter.get());
+    GST_TRACE_OBJECT(src, "queue size %zu (min %1.0f)", queueSize
+        , members->size * HIGH_QUEUE_FACTOR_THRESHOLD * LOW_QUEUE_FACTOR_THRESHOLD);
+
+    if (queueSize >= members->size * HIGH_QUEUE_FACTOR_THRESHOLD * LOW_QUEUE_FACTOR_THRESHOLD) {
+        GST_TRACE_OBJECT(src, "queue size above low watermark, not restarting download");
+        return;
+    }
+
+    GST_DEBUG_OBJECT(src, "restarting download");
+    members->isDownloadSuspended = false;
+    members->requestNumber++;
+    members->requestedPosition = members->readPosition;
+    webKitWebSrcMakeRequest(src, members);
+}
+
+
+static void stopLoaderIfNeeded(WebKitWebSrc* src, DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper& members)
+{
+    ASSERT(isMainThread());
+
+    if (members->isDownloadSuspended) {
+        GST_TRACE_OBJECT(src, "download already suspended");
+        return;
+    }
+
+    GST_TRACE_OBJECT(src, "is download suspended %s, does have size %s, is seekable %s, size %" G_GUINT64_FORMAT " (min %u)"
+        , boolForPrinting(members->isDownloadSuspended), boolForPrinting(members->haveSize), boolForPrinting(members->isSeekable), members->size
+        , SMALL_MEDIA_RESOURCE_MAX_SIZE);
+    if (!members->isSeekable || members->size <= SMALL_MEDIA_RESOURCE_MAX_SIZE) {
+        GST_TRACE_OBJECT(src, "download cannot be stopped/restarted");
+        return;
+    }
+
+    size_t queueSize = gst_adapter_available(members->adapter.get());
+    GST_TRACE_OBJECT(src, "queue size %zu (max %1.0f)", queueSize, members->size * HIGH_QUEUE_FACTOR_THRESHOLD);
+    if (queueSize <= members->size * HIGH_QUEUE_FACTOR_THRESHOLD) {
+        GST_TRACE_OBJECT(src, "queue size under high watermark, not stopping download");
+        return;
+    }
+
+    if (members->readPosition == members->size) {
+        GST_TRACE_OBJECT(src, "just downloaded the last chunk in the file, loadFinished() is about to be called");
+        return;
+    }
+
+    GST_DEBUG_OBJECT(src, "R%u: stopping download", members->requestNumber);
+    members->isDownloadSuspended = true;
+    members->resource->stop();
+}
+
+static GstFlowReturn webKitWebSrcCreate(GstPushSrc* pushSrc, GstBuffer** buffer)
+{
+    ASSERT(!isMainThread());
+    GstBaseSrc* baseSrc = GST_BASE_SRC_CAST(pushSrc);
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+    WebKitWebSrcPrivate* priv = src->priv;
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(priv->dataMutex);
+
+    // We need members->player to make requests. There are two mechanisms for this.
+    //
+    // 1) webKitWebSrcSetMediaPlayer() is called by MediaPlayerPrivateGStreamer by means of hooking playbin's
+    //    "source-setup" event. This doesn't work for additional WebKitWebSrc elements created by adaptivedemux.
+    //
+    // 2) A GstContext query made here. Because of a bug, this only works in GStreamer >= 1.12.
+    //
+    // As a compatibility workaround, the http: URI protocol is only registered for gst>=1.12; otherwise using
+    // webkit+http:, which is used by MediaPlayerPrivateGStreamer but not by adaptivedemux's additional source
+    // elements, therefore using souphttpsrc instead and not routing traffic through the NetworkProcess.
+    if (webkitGstCheckVersion(1, 12, 0) && !members->player) {
+        members.runUnlocked([src, baseSrc]() {
+            GRefPtr<GstQuery> query = adoptGRef(gst_query_new_context(WEBKIT_WEB_SRC_PLAYER_CONTEXT_TYPE_NAME));
+            if (gst_pad_peer_query(GST_BASE_SRC_PAD(baseSrc), query.get())) {
+                GstContext* context;
+
+                gst_query_parse_context(query.get(), &context);
+                gst_element_set_context(GST_ELEMENT_CAST(src), context);
+            } else
+                gst_element_post_message(GST_ELEMENT_CAST(src), gst_message_new_need_context(GST_OBJECT_CAST(src), WEBKIT_WEB_SRC_PLAYER_CONTEXT_TYPE_NAME));
         });
+        if (members->isFlushing)
+            return GST_FLOW_FLUSHING;
+    }
+    RELEASE_ASSERT(members->player);
+
+    GST_TRACE_OBJECT(src, "readPosition = %" G_GUINT64_FORMAT " requestedPosition = %" G_GUINT64_FORMAT, members->readPosition, members->requestedPosition);
+
+    if (members->isRequestPending) {
+        members->isRequestPending = false;
+        webKitWebSrcMakeRequest(src, members);
     }
 
-    if (priv->client) {
-        priv->client->invalidate();
-        priv->client = nullptr;
+    // Wait for the response headers.
+    members->responseCondition.wait(members.mutex(), [&] () {
+        return members->wasResponseReceived || members->isFlushing;
+    });
+
+    if (members->isFlushing)
+        return GST_FLOW_FLUSHING;
+
+    if (members->pendingCaps) {
+        GST_DEBUG_OBJECT(src, "Setting caps: %" GST_PTR_FORMAT, members->pendingCaps.get());
+        members.runUnlocked([baseSrc, caps = members->pendingCaps.leakRef()]() {
+            gst_base_src_set_caps(baseSrc, caps);
+        });
+        if (members->isFlushing)
+            return GST_FLOW_FLUSHING;
     }
 
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-
-    bool wasSeeking = std::exchange(priv->isSeeking, false);
-
-    if (priv->buffer) {
-        unmapGstBuffer(priv->buffer.get());
-        priv->buffer.clear();
+    if (members->haveSize && !members->isDurationSet) {
+        GST_DEBUG_OBJECT(src, "Setting duration to %" G_GUINT64_FORMAT, members->size);
+        baseSrc->segment.duration = members->size;
+        members->isDurationSet = true;
+        gst_element_post_message(GST_ELEMENT_CAST(src), gst_message_new_duration_changed(GST_OBJECT_CAST(src)));
     }
 
-    priv->paused = false;
+    if (members->pendingHttpHeadersMessage)
+        gst_element_post_message(GST_ELEMENT(src), members->pendingHttpHeadersMessage.leakRef());
+    if (members->pendingHttpHeadersEvent)
+        gst_pad_push_event(GST_BASE_SRC_PAD(baseSrc), members->pendingHttpHeadersEvent.leakRef());
 
-    priv->offset = 0;
-    priv->seekable = FALSE;
+    restartLoaderIfNeeded(src, members);
 
-    if (!wasSeeking) {
-        priv->size = 0;
-        priv->requestedOffset = 0;
-        priv->player = nullptr;
+    // We don't use the GstAdapter methods marked as fast anymore because sometimes it was slower. The reason why this was slower is that we can be
+    // waiting for more "fast" (that could be retrieved with the _fast API) buffers to be available even in cases where the queue is not empty. These
+    // other buffers can be retrieved with the "non _fast" API.
+    GST_TRACE_OBJECT(src, "doesHaveEOS: %s, isDownloadSuspended: %s", boolForPrinting(members->doesHaveEOS), boolForPrinting(members->isDownloadSuspended));
+
+    unsigned size = gst_base_src_get_blocksize(baseSrc);
+    size_t queueSize = gst_adapter_available(members->adapter.get());
+    GST_TRACE_OBJECT(src, "available bytes %" G_GSIZE_FORMAT ", block size %u", queueSize, size);
+    if (!queueSize) {
+        GST_TRACE_OBJECT(src, "let's wait for data or EOS");
+        members->responseCondition.wait(members.mutex(), [&] {
+            return members->isFlushing || gst_adapter_available(members->adapter.get()) || members->doesHaveEOS;
+        });
+        if (members->isFlushing)
+            return GST_FLOW_FLUSHING;
+
+        queueSize = gst_adapter_available(members->adapter.get());
+        GST_TRACE_OBJECT(src, "available %" G_GSIZE_FORMAT, queueSize);
     }
 
-    locker.unlock();
+    if (queueSize) {
+        if (queueSize < size) {
+            GST_TRACE_OBJECT(src, "Did not get the %u blocksize bytes, let's push the %" G_GSIZE_FORMAT " bytes we got", size, queueSize);
+            size = queueSize;
+        } else
+            GST_TRACE_OBJECT(src, "Taking %u bytes from adapter", size);
 
-    if (priv->appsrc) {
-        gst_app_src_set_caps(priv->appsrc, nullptr);
-        if (!wasSeeking)
-            gst_app_src_set_size(priv->appsrc, -1);
+        *buffer = gst_adapter_take_buffer(members->adapter.get(), size);
+        RELEASE_ASSERT(*buffer);
+
+        GST_BUFFER_OFFSET(*buffer) = baseSrc->segment.position;
+        GST_BUFFER_OFFSET_END(*buffer) = GST_BUFFER_OFFSET(*buffer) + size;
+        GST_TRACE_OBJECT(src, "Buffer bounds set to %" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT, GST_BUFFER_OFFSET(*buffer), GST_BUFFER_OFFSET_END(*buffer));
+        GST_TRACE_OBJECT(src, "buffer size: %u, total content size: %" G_GUINT64_FORMAT, size, members->size);
+
+        restartLoaderIfNeeded(src, members);
+        return GST_FLOW_OK;
     }
 
-    GST_DEBUG_OBJECT(src, "Stopped request");
+    // If the queue is empty reached this point, the only other option is that we are in EOS.
+    ASSERT(members->doesHaveEOS);
+    GST_DEBUG_OBJECT(src, "Reached the end of the response, signalling EOS");
+    return GST_FLOW_EOS;
 }
 
 static bool webKitWebSrcSetExtraHeader(GQuark fieldId, const GValue* value, gpointer userData)
@@ -515,34 +620,32 @@ static gboolean webKitWebSrcProcessExtraHeaders(GQuark fieldId, const GValue* va
     return webKitWebSrcSetExtraHeader(fieldId, value, userData);
 }
 
-static void webKitWebSrcStart(WebKitWebSrc* src)
+static gboolean webKitWebSrcStart(GstBaseSrc* baseSrc)
+{
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+
+    if (src->priv->originalURI.isNull()) {
+        GST_ERROR_OBJECT(src, "No URI provided");
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void webKitWebSrcMakeRequest(WebKitWebSrc* src, DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper& members)
 {
     WebKitWebSrcPrivate* priv = src->priv;
 
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
+    ASSERT(!priv->originalURI.isNull());
+    ASSERT(members->requestedPosition != members->stopPosition);
 
-    priv->didPassAccessControlCheck = false;
-
-    if (priv->originalURI.isNull()) {
-        GST_ERROR_OBJECT(src, "No URI provided");
-        locker.unlock();
-        webKitWebSrcStop(src);
-        return;
-    }
-
-    ASSERT(!priv->client);
-
-    GST_DEBUG_OBJECT(src, "Fetching %s", priv->originalURI.data());
+    GST_DEBUG_OBJECT(src, "Posting task to request R%u %s requestedPosition=%" G_GUINT64_FORMAT " stopPosition=%" G_GUINT64_FORMAT, members->requestNumber, priv->originalURI.data(), members->requestedPosition, members->stopPosition);
     URL url = URL(URL(), priv->originalURI.data());
 
     ResourceRequest request(url);
     request.setAllowCookies(true);
     request.setFirstPartyForCookies(url);
 
-    priv->size = 0;
-
-    if (priv->player)
-        request.setHTTPReferrer(priv->player->referrer());
+    request.setHTTPReferrer(members->referrer);
 
     if (priv->httpMethod.get())
         request.setHTTPMethod(priv->httpMethod.get());
@@ -566,16 +669,16 @@ static void webKitWebSrcStart(WebKitWebSrc* src)
         || !g_ascii_strcasecmp("trailers.apple.com", url.host().utf8().data()))
         request.setHTTPUserAgent("Quicktime/7.6.6");
 
-    if (priv->requestedOffset) {
-        GUniquePtr<gchar> val(g_strdup_printf("bytes=%" G_GUINT64_FORMAT "-", priv->requestedOffset));
-        request.setHTTPHeaderField(HTTPHeaderName::Range, val.get());
+    if (members->requestedPosition) {
+        GUniquePtr<char> formatedRange(g_strdup_printf("bytes=%" G_GUINT64_FORMAT "-", members->requestedPosition));
+        GST_DEBUG_OBJECT(src, "Range request: %s", formatedRange.get());
+        request.setHTTPHeaderField(HTTPHeaderName::Range, formatedRange.get());
     }
-    priv->offset = priv->requestedOffset;
+    ASSERT(members->readPosition == members->requestedPosition);
 
-    if (!priv->keepAlive) {
-        GST_DEBUG_OBJECT(src, "Persistent connection support disabled");
+    GST_DEBUG_OBJECT(src, "Persistent connection support %s", priv->keepAlive ? "enabled" : "disabled");
+    if (!priv->keepAlive)
         request.setHTTPHeaderField(HTTPHeaderName::Connection, "close");
-    }
 
     if (priv->extraHeaders)
         gst_structure_foreach(priv->extraHeaders.get(), webKitWebSrcProcessExtraHeaders, &request);
@@ -583,134 +686,166 @@ static void webKitWebSrcStart(WebKitWebSrc* src)
     // We always request Icecast/Shoutcast metadata, just in case ...
     request.setHTTPHeaderField(HTTPHeaderName::IcyMetadata, "1");
 
-    if (!priv->player || !priv->createdInMainThread) {
-        priv->client = ResourceHandleStreamingClient::create(src, WTFMove(request));
-        if (priv->client->loadFailed()) {
-            GST_ERROR_OBJECT(src, "Failed to setup streaming client");
-            locker.unlock();
-            webKitWebSrcStop(src);
-        } else
-            GST_DEBUG_OBJECT(src, "Started request");
-        return;
-    }
-
-    locker.unlock();
-    GRefPtr<WebKitWebSrc> protector = WTF::ensureGRef(src);
-    priv->notifier->notify(MainThreadSourceNotification::Start, [protector, request = WTFMove(request)] {
+    ASSERT(!isMainThread());
+    RunLoop::main().dispatch([protector = WTF::ensureGRef(src), request = WTFMove(request), requestNumber = members->requestNumber] {
         WebKitWebSrcPrivate* priv = protector->priv;
+        DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(priv->dataMutex);
+        // Ignore this task (not making any HTTP request) if by now WebKitWebSrc streaming thread is already waiting
+        // for a different request. There is no point anymore in sending this one.
+        if (members->requestNumber != requestNumber) {
+            GST_DEBUG_OBJECT(protector.get(), "Skipping R%u, current request number is %u", requestNumber, members->requestNumber);
+            return;
+        }
 
-        WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(protector.get()));
-        if (!priv->loader)
-            priv->loader = priv->player->createResourceLoader();
+        if (!members->loader)
+            members->loader = members->player->createResourceLoader();
 
         PlatformMediaResourceLoader::LoadOptions loadOptions = 0;
-        if (request.url().protocolIsBlob())
-            loadOptions |= PlatformMediaResourceLoader::LoadOption::BufferData;
-        priv->resource = priv->loader->requestResource(ResourceRequest(request), loadOptions);
-        if (priv->resource) {
-            priv->resource->setClient(std::make_unique<CachedResourceStreamingClient>(protector.get(), ResourceRequest(request)));
-            GST_DEBUG_OBJECT(protector.get(), "Started request");
+        members->resource = members->loader->requestResource(ResourceRequest(request), loadOptions);
+        if (members->resource) {
+            members->resource->setClient(makeUnique<CachedResourceStreamingClient>(protector.get(), ResourceRequest(request), requestNumber));
+            GST_DEBUG_OBJECT(protector.get(), "Started request R%u", requestNumber);
         } else {
-            GST_ERROR_OBJECT(protector.get(), "Failed to setup streaming client");
-            priv->loader = nullptr;
-            locker.unlock();
-            webKitWebSrcStop(protector.get());
+            GST_ERROR_OBJECT(protector.get(), "Failed to setup streaming client to handle R%u", requestNumber);
+            members->loader = nullptr;
         }
     });
 }
 
-static GstStateChangeReturn webKitWebSrcChangeState(GstElement* element, GstStateChange transition)
+static gboolean webKitWebSrcStop(GstBaseSrc* baseSrc)
 {
-    GstStateChangeReturn ret = GST_STATE_CHANGE_SUCCESS;
-    WebKitWebSrc* src = WEBKIT_WEB_SRC(element);
-    WebKitWebSrcPrivate* priv = src->priv;
-
-    switch (transition) {
-    case GST_STATE_CHANGE_NULL_TO_READY:
-        if (!priv->appsrc) {
-            gst_element_post_message(element,
-                                     gst_missing_element_message_new(element, "appsrc"));
-            GST_ELEMENT_ERROR(src, CORE, MISSING_PLUGIN, (nullptr), ("no appsrc"));
-            return GST_STATE_CHANGE_FAILURE;
-        }
-        break;
-    default:
-        break;
-    }
-
-    ret = GST_ELEMENT_CLASS(parent_class)->change_state(element, transition);
-    if (G_UNLIKELY(ret == GST_STATE_CHANGE_FAILURE)) {
-        GST_DEBUG_OBJECT(src, "State change failed");
-        return ret;
-    }
-
-    switch (transition) {
-    case GST_STATE_CHANGE_READY_TO_PAUSED:
-    {
-        GST_DEBUG_OBJECT(src, "READY->PAUSED");
-        webKitWebSrcStart(src);
-        break;
-    }
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
-    {
-        GST_DEBUG_OBJECT(src, "PAUSED->READY");
-        webKitWebSrcStop(src);
-        break;
-    }
-    default:
-        break;
-    }
-
-    return ret;
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+    // basesrc will always call unLock() and unLockStop() before calling this. See gst_base_src_stop().
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+    webkitWebSrcReset(src, members, ResetType::Hard);
+    GST_DEBUG_OBJECT(src, "Stopped WebKitWebSrc");
+    return TRUE;
 }
 
-static gboolean webKitWebSrcQueryWithParent(GstPad* pad, GstObject* parent, GstQuery* query)
+static gboolean webKitWebSrcGetSize(GstBaseSrc* baseSrc, guint64* size)
 {
-    WebKitWebSrc* src = WEBKIT_WEB_SRC(GST_ELEMENT(parent));
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+
+    GST_DEBUG_OBJECT(src, "haveSize: %s, size: %" G_GUINT64_FORMAT, boolForPrinting(members->haveSize), members->size);
+    if (members->haveSize) {
+        *size = members->size;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static gboolean webKitWebSrcIsSeekable(GstBaseSrc* baseSrc)
+{
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+    GST_DEBUG_OBJECT(src, "isSeekable: %s", boolForPrinting(members->isSeekable));
+    return members->isSeekable;
+}
+
+static gboolean webKitWebSrcDoSeek(GstBaseSrc* baseSrc, GstSegment* segment)
+{
+    // This function is mutually exclusive with create(). It's only called when we're transitioning to >=PAUSED and
+    // between flushes. In any case, basesrc holds the STREAM_LOCK, so we know create() is not running.
+    // Also, both webKitWebSrcUnLock() and webKitWebSrcUnLockStop() are guaranteed to be called *before* this function.
+    // [See gst_base_src_perform_seek()].
+    ASSERT(GST_ELEMENT(baseSrc)->current_state < GST_STATE_PAUSED || GST_PAD_IS_FLUSHING(baseSrc->srcpad));
+
+    // Except for the initial seek, this function is only called if isSeekable() returns true.
+    ASSERT(GST_ELEMENT(baseSrc)->current_state < GST_STATE_PAUSED || webKitWebSrcIsSeekable(baseSrc));
+
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+
+    GST_DEBUG_OBJECT(src, "Seek segment: (%" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT ") Position previous to seek: %" G_GUINT64_FORMAT, segment->start, segment->stop, members->readPosition);
+
+    // Before attempting to seek, basesrc will call isSeekable(). If isSeekable() is true, a flush will be made and
+    // this function will be called. basesrc still gives us the chance here to return FALSE and cancel the seek.
+    // We cannot afford to return FALSE in this function though unless we're going to fail on purpose, since at this
+    // point we have already been flushed and cancelled the HTTP request that was feeding us data.
+
+    if (segment->rate < 0.0 || segment->format != GST_FORMAT_BYTES) {
+        GST_ERROR_OBJECT(src, "Invalid seek segment");
+        return FALSE;
+    }
+
+    if (members->haveSize && segment->start >= members->size)
+        GST_WARNING_OBJECT(src, "Potentially seeking behind end of file, might EOS immediately");
+
+    members->requestedPosition = members->readPosition = segment->start;
+    members->stopPosition = segment->stop;
+    return TRUE;
+}
+
+static gboolean webKitWebSrcQuery(GstBaseSrc* baseSrc, GstQuery* query)
+{
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+    WebKitWebSrcPrivate* priv = src->priv;
     gboolean result = FALSE;
 
-    switch (GST_QUERY_TYPE(query)) {
-    case GST_QUERY_DURATION: {
-        GstFormat format;
-
-        gst_query_parse_duration(query, &format, nullptr);
-
-        GST_DEBUG_OBJECT(src, "duration query in format %s", gst_format_get_name(format));
-        WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-        if (format == GST_FORMAT_BYTES && src->priv->size > 0) {
-            gst_query_set_duration(query, format, src->priv->size);
-            result = TRUE;
-        }
-        break;
-    }
-    case GST_QUERY_URI: {
-        WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-        gst_query_set_uri(query, src->priv->originalURI.data());
-        if (!src->priv->redirectedURI.isNull())
-            gst_query_set_uri_redirection(query, src->priv->redirectedURI.data());
+    if (GST_QUERY_TYPE(query) == GST_QUERY_URI) {
+        gst_query_set_uri(query, priv->originalURI.data());
+        DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+        if (!members->redirectedURI.isNull())
+            gst_query_set_uri_redirection(query, members->redirectedURI.data());
         result = TRUE;
-        break;
     }
-    case GST_QUERY_SCHEDULING: {
+
+    if (!result)
+        result = GST_BASE_SRC_CLASS(parent_class)->query(baseSrc, query);
+
+    if (GST_QUERY_TYPE(query) == GST_QUERY_SCHEDULING) {
         GstSchedulingFlags flags;
         int minSize, maxSize, align;
 
         gst_query_parse_scheduling(query, &flags, &minSize, &maxSize, &align);
         gst_query_set_scheduling(query, static_cast<GstSchedulingFlags>(flags | GST_SCHEDULING_FLAG_BANDWIDTH_LIMITED), minSize, maxSize, align);
-        result = TRUE;
-        break;
-    }
-    default: {
-        GRefPtr<GstPad> target = adoptGRef(gst_ghost_pad_get_target(GST_GHOST_PAD_CAST(pad)));
-
-        // Forward the query to the proxy target pad.
-        if (target)
-            result = gst_pad_query(target.get(), query);
-        break;
-    }
     }
 
     return result;
+}
+
+static gboolean webKitWebSrcUnLock(GstBaseSrc* baseSrc)
+{
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+
+    GST_DEBUG_OBJECT(src, "Unlock");
+    members->isFlushing = true;
+
+    // If we have a network resource request open, we ask the main thread to close it.
+    if (members->resource) {
+        GST_DEBUG_OBJECT(src, "Resource request R%u will be stopped", members->requestNumber);
+        RunLoop::main().dispatch([protector = WTF::ensureGRef(src), resource = WTFMove(members->resource), requestNumber = members->requestNumber] {
+            GST_DEBUG_OBJECT(protector.get(), "Stopping resource request R%u", requestNumber);
+            resource->stop();
+            resource->setClient(nullptr);
+        });
+    }
+    ASSERT(!members->resource);
+
+    if (!src->priv->keepAlive)
+        members->loader = nullptr;
+
+    // Ensure all network callbacks from the old request don't feed data to WebKitWebSrc anymore.
+    members->requestNumber++;
+
+    // Wake up streaming thread.
+    members->responseCondition.notifyOne();
+
+    return TRUE;
+}
+
+static gboolean webKitWebSrcUnLockStop(GstBaseSrc* baseSrc)
+{
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(baseSrc);
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+    GST_DEBUG_OBJECT(src, "Unlock stop");
+    members->isFlushing = false;
+    webkitWebSrcReset(src, members, ResetType::Soft);
+
+    return TRUE;
 }
 
 static bool urlHasSupportedProtocol(const URL& url)
@@ -727,25 +862,34 @@ static GstURIType webKitWebSrcUriGetType(GType)
 
 const gchar* const* webKitWebSrcGetProtocols(GType)
 {
-    static const char* protocols[] = {"webkit+http", "webkit+https", "blob", nullptr };
+    static const char* protocols[4];
+    if (webkitGstCheckVersion(1, 12, 0)) {
+        protocols[0] = "http";
+        protocols[1] = "https";
+        protocols[2] = "blob";
+    } else {
+        protocols[0] = "webkit+http";
+        protocols[1] = "webkit+https";
+        protocols[2] = "webkit+blob";
+    }
+    protocols[3] = nullptr;
     return protocols;
 }
 
 static URL convertPlaybinURI(const char* uriString)
 {
     URL url(URL(), uriString);
-    ASSERT(url.protocol().substring(0, 7) == "webkit+");
-    url.setProtocol(url.protocol().substring(7).toString());
+    if (!webkitGstCheckVersion(1, 12, 0)) {
+        ASSERT(url.protocol().substring(0, 7) == "webkit+");
+        url.setProtocol(url.protocol().substring(7).toString());
+    }
     return url;
 }
 
 static gchar* webKitWebSrcGetUri(GstURIHandler* handler)
 {
     WebKitWebSrc* src = WEBKIT_WEB_SRC(handler);
-    gchar* ret;
-
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-    ret = g_strdup(src->priv->originalURI.data());
+    gchar* ret = g_strdup(src->priv->originalURI.data());
     return ret;
 }
 
@@ -759,14 +903,17 @@ static gboolean webKitWebSrcSetUri(GstURIHandler* handler, const gchar* uri, GEr
         return FALSE;
     }
 
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-
-    priv->redirectedURI = CString();
     priv->originalURI = CString();
     if (!uri)
         return TRUE;
 
+    if (priv->originalURI.length()) {
+        GST_ERROR_OBJECT(src, "URI can only be set in states < PAUSED");
+        return FALSE;
+    }
+
     URL url = convertPlaybinURI(uri);
+
     if (!urlHasSupportedProtocol(url)) {
         g_set_error(error, GST_URI_ERROR, GST_URI_ERROR_BAD_URI, "Invalid URI '%s'", uri);
         return FALSE;
@@ -786,183 +933,152 @@ static void webKitWebSrcUriHandlerInit(gpointer gIface, gpointer)
     iface->set_uri = webKitWebSrcSetUri;
 }
 
-static void webKitWebSrcNeedData(WebKitWebSrc* src)
-{
-    WebKitWebSrcPrivate* priv = src->priv;
-
-    GST_DEBUG_OBJECT(src, "Need more data");
-
-    {
-        WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-        if (!priv->paused)
-            return;
-        priv->paused = false;
-        if (priv->client) {
-            priv->client->setDefersLoading(false);
-            return;
-        }
-    }
-
-    GRefPtr<WebKitWebSrc> protector = WTF::ensureGRef(src);
-    priv->notifier->notify(MainThreadSourceNotification::NeedData, [protector] {
-        WebKitWebSrcPrivate* priv = protector->priv;
-        if (priv->resource)
-            priv->resource->setDefersLoading(false);
-    });
-}
-
-static void webKitWebSrcEnoughData(WebKitWebSrc* src)
-{
-    WebKitWebSrcPrivate* priv = src->priv;
-
-    GST_DEBUG_OBJECT(src, "Have enough data");
-
-    {
-        WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-        if (priv->paused)
-            return;
-        priv->paused = true;
-        if (priv->client) {
-            priv->client->setDefersLoading(true);
-            return;
-        }
-    }
-
-    GRefPtr<WebKitWebSrc> protector = WTF::ensureGRef(src);
-    priv->notifier->notify(MainThreadSourceNotification::EnoughData, [protector] {
-        WebKitWebSrcPrivate* priv = protector->priv;
-        if (priv->resource)
-            priv->resource->setDefersLoading(true);
-    });
-}
-
-static gboolean webKitWebSrcSeek(WebKitWebSrc* src, guint64 offset)
-{
-    WebKitWebSrcPrivate* priv = src->priv;
-
-    {
-        WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-        if (offset == priv->offset && priv->requestedOffset == priv->offset)
-            return TRUE;
-
-        if (!priv->seekable)
-            return FALSE;
-
-        priv->isSeeking = true;
-        priv->requestedOffset = offset;
-    }
-
-    GST_DEBUG_OBJECT(src, "Seeking to offset: %" G_GUINT64_FORMAT, src->priv->requestedOffset);
-    if (priv->client) {
-        webKitWebSrcStop(src);
-        webKitWebSrcStart(src);
-        return TRUE;
-    }
-
-    GRefPtr<WebKitWebSrc> protector = WTF::ensureGRef(src);
-    priv->notifier->notify(MainThreadSourceNotification::Seek, [protector] {
-        webKitWebSrcStop(protector.get());
-        webKitWebSrcStart(protector.get());
-    });
-    return TRUE;
-}
-
-void webKitWebSrcSetMediaPlayer(WebKitWebSrc* src, WebCore::MediaPlayer* player)
+void webKitWebSrcSetMediaPlayer(WebKitWebSrc* src, WebCore::MediaPlayer* player, const String& referrer)
 {
     ASSERT(player);
-    ASSERT(src->priv->createdInMainThread);
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-    src->priv->player = player;
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+    members->player = player;
+    members->referrer = referrer;
 }
 
 bool webKitSrcPassedCORSAccessCheck(WebKitWebSrc* src)
 {
-    return src->priv->didPassAccessControlCheck;
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+    return members->didPassAccessControlCheck;
 }
 
-StreamingClient::StreamingClient(WebKitWebSrc* src, ResourceRequest&& request)
-    : m_src(GST_ELEMENT(src))
+CachedResourceStreamingClient::CachedResourceStreamingClient(WebKitWebSrc* src, ResourceRequest&& request, unsigned requestNumber)
+    : m_requestNumber(requestNumber)
+    , m_src(GST_ELEMENT(src))
     , m_request(WTFMove(request))
 {
 }
 
-StreamingClient::~StreamingClient()
-{
-}
+CachedResourceStreamingClient::~CachedResourceStreamingClient() = default;
 
-char* StreamingClient::createReadBuffer(size_t requestedSize, size_t& actualSize)
+void CachedResourceStreamingClient::checkUpdateBlocksize(unsigned bytesRead)
 {
+    ASSERT(isMainThread());
     WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
+    GstBaseSrc* baseSrc = GST_BASE_SRC_CAST(src);
     WebKitWebSrcPrivate* priv = src->priv;
 
-    ASSERT(!priv->buffer);
+    unsigned blocksize = gst_base_src_get_blocksize(baseSrc);
+    GST_LOG_OBJECT(src, "Checking to update blocksize. Read: %u, current blocksize: %u", bytesRead, blocksize);
 
-    GstBuffer* buffer = gst_buffer_new_and_alloc(requestedSize);
+    if (bytesRead > blocksize * s_growBlocksizeLimit) {
+        m_reduceBlocksizeCount = 0;
+        m_increaseBlocksizeCount++;
 
-    mapGstBuffer(buffer, GST_MAP_WRITE);
+        if (m_increaseBlocksizeCount >= s_growBlocksizeCount) {
+            blocksize *= s_growBlocksizeFactor;
+            GST_DEBUG_OBJECT(src, "Increased blocksize to %u", blocksize);
+            gst_base_src_set_blocksize(baseSrc, blocksize);
+            m_increaseBlocksizeCount = 0;
+        }
+    } else if (bytesRead < blocksize * s_reduceBlocksizeLimit) {
+        m_reduceBlocksizeCount++;
+        m_increaseBlocksizeCount = 0;
 
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-    priv->buffer = adoptGRef(buffer);
-    locker.unlock();
-
-    actualSize = gst_buffer_get_size(buffer);
-    return getGstBufferDataPointer(buffer);
+        if (m_reduceBlocksizeCount >= s_reduceBlocksizeCount) {
+            blocksize *= s_reduceBlocksizeFactor;
+            blocksize = std::max(blocksize, priv->minimumBlocksize);
+            GST_DEBUG_OBJECT(src, "Decreased blocksize to %u", blocksize);
+            gst_base_src_set_blocksize(baseSrc, blocksize);
+            m_reduceBlocksizeCount = 0;
+        }
+    } else {
+        m_reduceBlocksizeCount = 0;
+        m_increaseBlocksizeCount = 0;
+    }
 }
 
-void StreamingClient::handleResponseReceived(const ResourceResponse& response)
+void CachedResourceStreamingClient::responseReceived(PlatformMediaResource&, const ResourceResponse& response, CompletionHandler<void(ShouldContinuePolicyCheck)>&& completionHandler)
 {
+    ASSERT(isMainThread());
     WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
     WebKitWebSrcPrivate* priv = src->priv;
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(priv->dataMutex);
+    if (members->requestNumber != m_requestNumber) {
+        completionHandler(ShouldContinuePolicyCheck::No);
+        return;
+    }
 
-    GST_DEBUG_OBJECT(src, "Received response: %d", response.httpStatusCode());
+    GST_DEBUG_OBJECT(src, "R%u: Received response: %d", m_requestNumber, response.httpStatusCode());
+
+    members->didPassAccessControlCheck = members->resource->didPassAccessControlCheck();
+    m_origins.add(SecurityOrigin::create(response.url()));
 
     auto responseURI = response.url().string().utf8();
     if (priv->originalURI != responseURI)
-        priv->redirectedURI = WTFMove(responseURI);
+        members->redirectedURI = WTFMove(responseURI);
+
+    // length will be zero (unknown) if no Content-Length is provided or the response is compressed with Content-Encoding.
+    uint64_t length = !response.httpHeaderFields().contains(HTTPHeaderName::ContentEncoding) ? response.expectedContentLength() : 0;
+    if (length > 0 && members->requestedPosition && response.httpStatusCode() == 206)
+        length += members->requestedPosition;
+
+    GUniquePtr<GstStructure> httpHeaders(gst_structure_new_empty("http-headers"));
+
+    gst_structure_set(httpHeaders.get(), "uri", G_TYPE_STRING, priv->originalURI.data(),
+        "http-status-code", G_TYPE_UINT, response.httpStatusCode(), nullptr);
+    if (!members->redirectedURI.isNull())
+        gst_structure_set(httpHeaders.get(), "redirection-uri", G_TYPE_STRING, members->redirectedURI.data(), nullptr);
+
+    // Pack request headers in the http-headers structure.
+    GUniquePtr<GstStructure> headers(gst_structure_new_empty("request-headers"));
+    for (const auto& header : m_request.httpHeaderFields())
+        gst_structure_set(headers.get(), header.key.utf8().data(), G_TYPE_STRING, header.value.utf8().data(), nullptr);
+    GST_DEBUG_OBJECT(src, "R%u: Request headers going downstream: %" GST_PTR_FORMAT, m_requestNumber, headers.get());
+    gst_structure_set(httpHeaders.get(), "request-headers", GST_TYPE_STRUCTURE, headers.get(), nullptr);
+
+    // Pack response headers in the http-headers structure.
+    headers.reset(gst_structure_new_empty("response-headers"));
+    for (const auto& header : response.httpHeaderFields()) {
+        bool ok = false;
+        uint64_t convertedValue = header.value.toUInt64(&ok);
+        if (ok)
+            gst_structure_set(headers.get(), header.key.utf8().data(), G_TYPE_UINT64, convertedValue, nullptr);
+        else
+            gst_structure_set(headers.get(), header.key.utf8().data(), G_TYPE_STRING, header.value.utf8().data(), nullptr);
+    }
+    GST_DEBUG_OBJECT(src, "R%u: Response headers going downstream: %" GST_PTR_FORMAT, m_requestNumber, headers.get());
+    gst_structure_set(httpHeaders.get(), "response-headers", GST_TYPE_STRUCTURE, headers.get(), nullptr);
+
+    members->pendingHttpHeadersMessage = adoptGRef(gst_message_new_element(GST_OBJECT_CAST(src), gst_structure_copy(httpHeaders.get())));
+    members->pendingHttpHeadersEvent = adoptGRef(gst_event_new_custom(GST_EVENT_CUSTOM_DOWNSTREAM_STICKY, httpHeaders.release()));
 
     if (response.httpStatusCode() >= 400) {
-        GST_ELEMENT_ERROR(src, RESOURCE, READ, ("Received %d HTTP error code", response.httpStatusCode()), (nullptr));
-        gst_app_src_end_of_stream(priv->appsrc);
-        webKitWebSrcStop(src);
+        GST_ELEMENT_ERROR(src, RESOURCE, READ, ("R%u: Received %d HTTP error code", m_requestNumber, response.httpStatusCode()), (nullptr));
+        members->doesHaveEOS = true;
+        members->responseCondition.notifyOne();
+        completionHandler(ShouldContinuePolicyCheck::No);
         return;
     }
 
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-
-    if (priv->isSeeking) {
-        GST_DEBUG_OBJECT(src, "Seek in progress, ignoring response");
-        return;
-    }
-
-    if (priv->requestedOffset) {
+    if (members->requestedPosition) {
         // Seeking ... we expect a 206 == PARTIAL_CONTENT
-        if (response.httpStatusCode() == 200) {
-            // Range request didn't have a ranged response; resetting offset.
-            priv->offset = 0;
-        } else if (response.httpStatusCode() != 206) {
+        if (response.httpStatusCode() != 206) {
             // Range request completely failed.
-            locker.unlock();
-            GST_ELEMENT_ERROR(src, RESOURCE, READ, ("Received unexpected %d HTTP status code", response.httpStatusCode()), (nullptr));
-            gst_app_src_end_of_stream(priv->appsrc);
-            webKitWebSrcStop(src);
+            GST_ELEMENT_ERROR(src, RESOURCE, READ, ("R%u: Received unexpected %d HTTP status code for range request", m_requestNumber, response.httpStatusCode()), (nullptr));
+            members->doesHaveEOS = true;
+            members->responseCondition.notifyOne();
+            completionHandler(ShouldContinuePolicyCheck::No);
             return;
         }
+        GST_DEBUG_OBJECT(src, "R%u: Range request succeeded", m_requestNumber);
     }
 
-    long long length = response.expectedContentLength();
-    if (length > 0 && priv->requestedOffset && response.httpStatusCode() == 206)
-        length += priv->requestedOffset;
+    members->isSeekable = length > 0 && g_ascii_strcasecmp("none", response.httpHeaderField(HTTPHeaderName::AcceptRanges).utf8().data());
 
-    priv->size = length >= 0 ? length : 0;
-    priv->seekable = length > 0 && g_ascii_strcasecmp("none", response.httpHeaderField(HTTPHeaderName::AcceptRanges).utf8().data());
-
-    locker.unlock();
-
-    // notify size/duration
+    GST_DEBUG_OBJECT(src, "R%u: Size: %" G_GUINT64_FORMAT ", isSeekable: %s", m_requestNumber, length, boolForPrinting(members->isSeekable));
     if (length > 0) {
-        gst_app_src_set_size(priv->appsrc, length);
+        if (!members->haveSize || members->size != length) {
+            members->haveSize = true;
+            members->size = length;
+        }
     } else
-        gst_app_src_set_size(priv->appsrc, -1);
+        members->haveSize = false;
 
     // Signal to downstream if this is an Icecast stream.
     GRefPtr<GstCaps> caps;
@@ -970,309 +1086,115 @@ void StreamingClient::handleResponseReceived(const ResourceResponse& response)
     if (!metadataIntervalAsString.isEmpty()) {
         bool isMetadataIntervalParsed;
         int metadataInterval = metadataIntervalAsString.toInt(&isMetadataIntervalParsed);
-        if (isMetadataIntervalParsed && metadataInterval > 0)
+        if (isMetadataIntervalParsed && metadataInterval > 0) {
             caps = adoptGRef(gst_caps_new_simple("application/x-icy", "metadata-interval", G_TYPE_INT, metadataInterval, nullptr));
-    }
-    gst_app_src_set_caps(priv->appsrc, caps.get());
 
-    // Emit a GST_EVENT_CUSTOM_DOWNSTREAM_STICKY event to let GStreamer know about the HTTP headers sent and received.
-    GstStructure* httpHeaders = gst_structure_new_empty("http-headers");
-    gst_structure_set(httpHeaders, "uri", G_TYPE_STRING, priv->originalURI.data(), nullptr);
-    if (!priv->redirectedURI.isNull())
-        gst_structure_set(httpHeaders, "redirection-uri", G_TYPE_STRING, priv->redirectedURI.data(), nullptr);
-    GUniquePtr<GstStructure> headers(gst_structure_new_empty("request-headers"));
-    for (const auto& header : m_request.httpHeaderFields())
-        gst_structure_set(headers.get(), header.key.utf8().data(), G_TYPE_STRING, header.value.utf8().data(), nullptr);
-    gst_structure_set(httpHeaders, "request-headers", GST_TYPE_STRUCTURE, headers.get(), nullptr);
-    headers.reset(gst_structure_new_empty("response-headers"));
-    for (const auto& header : response.httpHeaderFields())
-        gst_structure_set(headers.get(), header.key.utf8().data(), G_TYPE_STRING, header.value.utf8().data(), nullptr);
-    gst_structure_set(httpHeaders, "response-headers", GST_TYPE_STRUCTURE, headers.get(), nullptr);
-    gst_pad_push_event(GST_BASE_SRC_PAD(priv->appsrc), gst_event_new_custom(GST_EVENT_CUSTOM_DOWNSTREAM_STICKY, httpHeaders));
-}
-
-void StreamingClient::handleDataReceived(const char* data, int length)
-{
-    WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
-    WebKitWebSrcPrivate* priv = src->priv;
-
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-
-    GST_LOG_OBJECT(src, "Have %lld bytes of data", priv->buffer ? static_cast<long long>(gst_buffer_get_size(priv->buffer.get())) : length);
-
-    ASSERT(!priv->buffer || data == getGstBufferDataPointer(priv->buffer.get()));
-
-    if (priv->buffer)
-        unmapGstBuffer(priv->buffer.get());
-
-    if (priv->isSeeking) {
-        GST_DEBUG_OBJECT(src, "Seek in progress, ignoring data");
-        priv->buffer.clear();
-        return;
-    }
-
-    if (priv->offset < priv->requestedOffset) {
-        // Range request failed; seeking manually.
-        if (priv->offset + length <= priv->requestedOffset) {
-            // Discard all the buffers coming before the requested seek position.
-            priv->offset += length;
-            priv->buffer.clear();
-            return;
+            String contentType = response.httpHeaderField(HTTPHeaderName::ContentType);
+            GST_DEBUG_OBJECT(src, "R%u: Response ContentType: %s", m_requestNumber, contentType.utf8().data());
+            gst_caps_set_simple(caps.get(), "content-type", G_TYPE_STRING, contentType.utf8().data(), nullptr);
         }
-
-        if (priv->offset + length > priv->requestedOffset) {
-            guint64 offset = priv->requestedOffset - priv->offset;
-            data += offset;
-            length -= offset;
-            if (priv->buffer)
-                gst_buffer_resize(priv->buffer.get(), offset, -1);
-            priv->offset = priv->requestedOffset;
-        }
-
-        priv->requestedOffset = 0;
+    }
+    if (caps) {
+        GST_DEBUG_OBJECT(src, "R%u: Set caps to %" GST_PTR_FORMAT, m_requestNumber, caps.get());
+        members->pendingCaps = WTFMove(caps);
     }
 
-    // Ports using the GStreamer backend but not the soup implementation of ResourceHandle
-    // won't be using buffers provided by this client, the buffer is created here in that case.
-    if (!priv->buffer)
-        priv->buffer = adoptGRef(createGstBufferForData(data, length));
-    else
-        gst_buffer_set_size(priv->buffer.get(), static_cast<gssize>(length));
+    members->wasResponseReceived = true;
+    members->responseCondition.notifyOne();
 
-    GST_BUFFER_OFFSET(priv->buffer.get()) = priv->offset;
-    if (priv->requestedOffset == priv->offset)
-        priv->requestedOffset += length;
-    priv->offset += length;
-    // priv->size == 0 if received length on didReceiveResponse < 0.
-    if (priv->size > 0 && priv->offset > priv->size) {
-        GST_DEBUG_OBJECT(src, "Updating internal size from %" G_GUINT64_FORMAT " to %" G_GUINT64_FORMAT, priv->size, priv->offset);
-        gst_app_src_set_size(priv->appsrc, priv->offset);
-        priv->size = priv->offset;
-    }
-    GST_BUFFER_OFFSET_END(priv->buffer.get()) = priv->offset;
-
-    locker.unlock();
-
-    GstFlowReturn ret = gst_app_src_push_buffer(priv->appsrc, priv->buffer.leakRef());
-    if (ret != GST_FLOW_OK && ret != GST_FLOW_EOS)
-        GST_ELEMENT_ERROR(src, CORE, FAILED, (nullptr), (nullptr));
-}
-
-void StreamingClient::handleNotifyFinished()
-{
-    WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
-    WebKitWebSrcPrivate* priv = src->priv;
-
-    GST_DEBUG_OBJECT(src, "Have EOS");
-
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-    if (!priv->isSeeking) {
-        locker.unlock();
-        gst_app_src_end_of_stream(priv->appsrc);
-    }
-}
-
-CachedResourceStreamingClient::CachedResourceStreamingClient(WebKitWebSrc* src, ResourceRequest&& request)
-    : StreamingClient(src, WTFMove(request))
-{
-}
-
-CachedResourceStreamingClient::~CachedResourceStreamingClient()
-{
-}
-
-#if USE(SOUP)
-char* CachedResourceStreamingClient::getOrCreateReadBuffer(PlatformMediaResource&, size_t requestedSize, size_t& actualSize)
-{
-    return createReadBuffer(requestedSize, actualSize);
-}
-#endif
-
-void CachedResourceStreamingClient::responseReceived(PlatformMediaResource&, const ResourceResponse& response)
-{
-    WebKitWebSrcPrivate* priv = WEBKIT_WEB_SRC(m_src.get())->priv;
-    priv->didPassAccessControlCheck = priv->resource->didPassAccessControlCheck();
-    handleResponseReceived(response);
+    completionHandler(ShouldContinuePolicyCheck::Yes);
 }
 
 void CachedResourceStreamingClient::dataReceived(PlatformMediaResource&, const char* data, int length)
 {
-    handleDataReceived(data, length);
+    ASSERT(isMainThread());
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
+    WebKitWebSrcPrivate* priv = src->priv;
+
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(priv->dataMutex);
+    if (members->requestNumber != m_requestNumber)
+        return;
+
+    GST_LOG_OBJECT(src, "R%u: Have %d bytes of data", m_requestNumber, length);
+
+    // Rough bandwidth calculation. We ignore here the first data package because we would have to reset the counters when we issue the request and
+    // that first package delivery would include the time of sending out the request and getting the data back. Since we can't distinguish the
+    // sending time from the receiving time, it is better to ignore it.
+    if (!std::isnan(members->downloadStartTime)) {
+        members->totalDownloadedBytes += length;
+        double timeSinceStart = (WallTime::now() - members->downloadStartTime).seconds();
+        GST_TRACE_OBJECT(src, "R%u: downloaded %" G_GUINT64_FORMAT " bytes in %f seconds =~ %1.0f bytes/second", m_requestNumber, members->totalDownloadedBytes, timeSinceStart
+            , timeSinceStart ? members->totalDownloadedBytes / timeSinceStart : 0);
+    } else {
+        members->downloadStartTime = WallTime::now();
+    }
+
+    members->readPosition += length;
+    ASSERT(!members->haveSize || members->readPosition <= members->size);
+
+    gst_element_post_message(GST_ELEMENT_CAST(src), gst_message_new_element(GST_OBJECT_CAST(src),
+        gst_structure_new("webkit-network-statistics", "read-position", G_TYPE_UINT64, members->readPosition, "size", G_TYPE_UINT64, members->size, nullptr)));
+
+    checkUpdateBlocksize(length);
+
+    GstBuffer* buffer = gst_buffer_new_wrapped(g_memdup(data, length), length);
+    gst_adapter_push(members->adapter.get(), buffer);
+    stopLoaderIfNeeded(src, members);
+    members->responseCondition.notifyOne();
 }
 
 void CachedResourceStreamingClient::accessControlCheckFailed(PlatformMediaResource&, const ResourceError& error)
 {
+    ASSERT(isMainThread());
     WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
-    GST_ELEMENT_ERROR(src, RESOURCE, READ, ("%s", error.localizedDescription().utf8().data()), (nullptr));
-    gst_app_src_end_of_stream(src->priv->appsrc);
-    webKitWebSrcStop(src);
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+    if (members->requestNumber != m_requestNumber)
+        return;
+
+    GST_ELEMENT_ERROR(src, RESOURCE, READ, ("R%u: %s", m_requestNumber, error.localizedDescription().utf8().data()), (nullptr));
+    members->doesHaveEOS = true;
+    members->responseCondition.notifyOne();
 }
 
 void CachedResourceStreamingClient::loadFailed(PlatformMediaResource&, const ResourceError& error)
 {
+    ASSERT(isMainThread());
     WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+    if (members->requestNumber != m_requestNumber)
+        return;
 
     if (!error.isCancellation()) {
-        GST_ERROR_OBJECT(src, "Have failure: %s", error.localizedDescription().utf8().data());
-        GST_ELEMENT_ERROR(src, RESOURCE, FAILED, ("%s", error.localizedDescription().utf8().data()), (nullptr));
+        GST_ERROR_OBJECT(src, "R%u: Have failure: %s", m_requestNumber, error.localizedDescription().utf8().data());
+        GST_ELEMENT_ERROR(src, RESOURCE, FAILED, ("R%u: %s", m_requestNumber, error.localizedDescription().utf8().data()), (nullptr));
     }
 
-    gst_app_src_end_of_stream(src->priv->appsrc);
+    members->doesHaveEOS = true;
+    members->responseCondition.notifyOne();
 }
 
-void CachedResourceStreamingClient::loadFinished(PlatformMediaResource&)
+void CachedResourceStreamingClient::loadFinished(PlatformMediaResource&, const NetworkLoadMetrics&)
 {
-    handleNotifyFinished();
-}
-
-ResourceHandleStreamingClient::ResourceHandleStreamingClient(WebKitWebSrc* src, ResourceRequest&& request)
-    : StreamingClient(src, WTFMove(request))
-{
-    LockHolder locker(m_initializeRunLoopConditionMutex);
-    m_thread = Thread::create("ResourceHandleStreamingClient", [this] {
-        {
-            LockHolder locker(m_initializeRunLoopConditionMutex);
-            m_runLoop = &RunLoop::current();
-#if USE(SOUP)
-            m_session = std::make_unique<SoupNetworkSession>();
-            m_resource = ResourceHandle::create(*m_session, m_request, this, true, false);
-#else
-            // FIXME: This create will hit an assert in debug builds. See https://bugs.webkit.org/show_bug.cgi?id=167003.
-            m_resource = ResourceHandle::create(nullptr, m_request, this, true, false);
-#endif
-            m_initializeRunLoopCondition.notifyOne();
-        }
-        if (!m_resource)
-            return;
-
-        m_runLoop->dispatch([this] { m_resource->setDefersLoading(false); });
-        m_runLoop->run();
-    });
-    m_initializeRunLoopCondition.wait(m_initializeRunLoopConditionMutex);
-}
-
-ResourceHandleStreamingClient::~ResourceHandleStreamingClient()
-{
-    if (m_thread) {
-        m_thread->detach();
-        m_thread = nullptr;
-    }
-}
-
-void ResourceHandleStreamingClient::cleanupAndStopRunLoop()
-{
-    m_resource->clearClient();
-    m_resource->cancel();
-    m_resource = nullptr;
-#if USE(SOUP)
-    m_session = nullptr;
-#endif
-    m_runLoop->stop();
-}
-
-void ResourceHandleStreamingClient::invalidate()
-{
-    if (m_runLoop == &RunLoop::current()) {
-        cleanupAndStopRunLoop();
-        return;
-    }
-
-    LockHolder locker(m_terminateRunLoopConditionMutex);
-    m_runLoop->dispatch([this, protectedThis = makeRef(*this)] {
-        cleanupAndStopRunLoop();
-        LockHolder locker(m_terminateRunLoopConditionMutex);
-        m_terminateRunLoopCondition.notifyOne();
-    });
-    m_terminateRunLoopCondition.wait(m_terminateRunLoopConditionMutex);
-}
-
-bool ResourceHandleStreamingClient::loadFailed() const
-{
-    return !m_resource;
-}
-
-void ResourceHandleStreamingClient::setDefersLoading(bool defers)
-{
-    m_runLoop->dispatch([this, protectedThis = makeRef(*this), defers] {
-        if (m_resource)
-            m_resource->setDefersLoading(defers);
-    });
-}
-
-#if USE(SOUP)
-char* ResourceHandleStreamingClient::getOrCreateReadBuffer(size_t requestedSize, size_t& actualSize)
-{
-    return createReadBuffer(requestedSize, actualSize);
-}
-#endif
-
-ResourceRequest ResourceHandleStreamingClient::willSendRequest(ResourceHandle*, ResourceRequest&& request, ResourceResponse&&)
-{
-    return WTFMove(request);
-}
-
-void ResourceHandleStreamingClient::didReceiveResponse(ResourceHandle*, ResourceResponse&& response)
-{
-    if (m_resource)
-        handleResponseReceived(response);
-}
-
-void ResourceHandleStreamingClient::didReceiveData(ResourceHandle*, const char* /* data */, unsigned /* length */, int)
-{
-    ASSERT_NOT_REACHED();
-}
-
-void ResourceHandleStreamingClient::didReceiveBuffer(ResourceHandle*, Ref<SharedBuffer>&& buffer, int /* encodedLength */)
-{
-    if (!m_resource)
+    ASSERT(isMainThread());
+    WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+    if (members->requestNumber != m_requestNumber)
         return;
 
-    for (const auto& element : buffer.get())
-        handleDataReceived(element.segment->data(), element.segment->size());
+    members->doesHaveEOS = true;
+    members->responseCondition.notifyOne();
 }
 
-void ResourceHandleStreamingClient::didFinishLoading(ResourceHandle*)
+bool webKitSrcWouldTaintOrigin(WebKitWebSrc* src, const SecurityOrigin& origin)
 {
-    if (m_resource)
-        handleNotifyFinished();
+    DataMutex<WebKitWebSrcPrivate::StreamingMembers>::LockedWrapper members(src->priv->dataMutex);
+
+    auto* cachedResourceStreamingClient = reinterpret_cast<CachedResourceStreamingClient*>(members->resource->client());
+    for (auto& responseOrigin : cachedResourceStreamingClient->securityOrigins()) {
+        if (!origin.canAccess(*responseOrigin))
+            return true;
+    }
+    return false;
 }
 
-void ResourceHandleStreamingClient::didFail(ResourceHandle*, const ResourceError& error)
-{
-    WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
-
-    GST_ERROR_OBJECT(src, "Have failure: %s", error.localizedDescription().utf8().data());
-    GST_ELEMENT_ERROR(src, RESOURCE, FAILED, ("%s", error.localizedDescription().utf8().data()), (nullptr));
-    gst_app_src_end_of_stream(src->priv->appsrc);
-}
-
-void ResourceHandleStreamingClient::wasBlocked(ResourceHandle*)
-{
-    WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
-    GUniquePtr<gchar> uri;
-
-    GST_ERROR_OBJECT(src, "Request was blocked");
-
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-    uri.reset(g_strdup(src->priv->originalURI.data()));
-    locker.unlock();
-
-    GST_ELEMENT_ERROR(src, RESOURCE, OPEN_READ, ("Access to \"%s\" was blocked", uri.get()), (nullptr));
-}
-
-void ResourceHandleStreamingClient::cannotShowURL(ResourceHandle*)
-{
-    WebKitWebSrc* src = WEBKIT_WEB_SRC(m_src.get());
-    GUniquePtr<gchar> uri;
-
-    GST_ERROR_OBJECT(src, "Cannot show URL");
-
-    WTF::GMutexLocker<GMutex> locker(*GST_OBJECT_GET_LOCK(src));
-    uri.reset(g_strdup(src->priv->originalURI.data()));
-    locker.unlock();
-
-    GST_ELEMENT_ERROR(src, RESOURCE, OPEN_READ, ("Can't show \"%s\"", uri.get()), (nullptr));
-}
-
-#endif // USE(GSTREAMER)
-
+#endif // ENABLE(VIDEO) && USE(GSTREAMER)

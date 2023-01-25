@@ -30,8 +30,6 @@
 
 #pragma once
 
-#if ENABLE(WEB_SOCKETS)
-
 #include <wtf/HashMap.h>
 #include <wtf/text/StringHash.h>
 #include <wtf/text/WTFString.h>
@@ -40,7 +38,7 @@ namespace WebCore {
 
 class WebSocketExtensionParser {
 public:
-    WebSocketExtensionParser(const char* start, const char* end)
+    explicit WebSocketExtensionParser(const char* start, const char* end)
         : m_current(start)
         , m_end(end)
     {
@@ -67,5 +65,3 @@ private:
 };
 
 } // namespace WebCore
-
-#endif // ENABLE(WEB_SOCKETS)

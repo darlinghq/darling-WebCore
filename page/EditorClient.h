@@ -27,48 +27,36 @@
 #pragma once
 
 #include "EditorInsertAction.h"
+#include "SerializedAttachmentData.h"
 #include "TextAffinity.h"
 #include "TextChecking.h"
 #include "UndoStep.h"
 #include <wtf/Forward.h>
 #include <wtf/Vector.h>
 
-#if PLATFORM(COCOA)
-OBJC_CLASS NSString;
-OBJC_CLASS NSURL;
-#endif
-
-#if PLATFORM(IOS)
-OBJC_CLASS NSArray;
-OBJC_CLASS NSDictionary;
-#endif
-
 namespace WebCore {
 
-class ArchiveResource;
+enum class DOMPasteAccessResponse : uint8_t;
+
 class DocumentFragment;
-class Editor;
 class Element;
 class Frame;
-class HTMLElement;
 class KeyboardEvent;
-class LayoutRect;
 class Node;
-class Range;
 class SharedBuffer;
 class StyleProperties;
 class TextCheckerClient;
 class VisibleSelection;
-class VisiblePosition;
 
 struct GapRects;
 struct GrammarDetail;
+struct SimpleRange;
 
 class EditorClient {
 public:
-    virtual ~EditorClient() {  }
+    virtual ~EditorClient() = default;
 
-    virtual bool shouldDeleteRange(Range*) = 0;
+    virtual bool shouldDeleteRange(const Optional<SimpleRange>&) = 0;
     virtual bool smartInsertDeleteEnabled() = 0; 
     virtual bool isSelectTrailingWhitespaceEnabled() const = 0;
     virtual bool isContinuousSpellCheckingEnabled() = 0;
@@ -77,32 +65,49 @@ public:
     virtual void toggleGrammarChecking() = 0;
     virtual int spellCheckerDocumentTag() = 0;
 
-    virtual bool shouldBeginEditing(Range*) = 0;
-    virtual bool shouldEndEditing(Range*) = 0;
-    virtual bool shouldInsertNode(Node*, Range*, EditorInsertAction) = 0;
-    virtual bool shouldInsertText(const String&, Range*, EditorInsertAction) = 0;
-    virtual bool shouldChangeSelectedRange(Range* fromRange, Range* toRange, EAffinity, bool stillSelecting) = 0;
+    virtual bool shouldBeginEditing(const SimpleRange&) = 0;
+    virtual bool shouldEndEditing(const SimpleRange&) = 0;
+    virtual bool shouldInsertNode(Node&, const Optional<SimpleRange>&, EditorInsertAction) = 0;
+    virtual bool shouldInsertText(const String&, const Optional<SimpleRange>&, EditorInsertAction) = 0;
+    virtual bool shouldChangeSelectedRange(const Optional<SimpleRange>& fromRange, const Optional<SimpleRange>& toRange, Affinity, bool stillSelecting) = 0;
+    virtual bool shouldRevealCurrentSelectionAfterInsertion() const { return true; };
+    virtual bool shouldSuppressPasswordEcho() const { return false; };
     
-    virtual bool shouldApplyStyle(StyleProperties*, Range*) = 0;
+    virtual bool shouldApplyStyle(const StyleProperties&, const Optional<SimpleRange>&) = 0;
     virtual void didApplyStyle() = 0;
-    virtual bool shouldMoveRangeAfterDelete(Range*, Range*) = 0;
+    virtual bool shouldMoveRangeAfterDelete(const SimpleRange&, const SimpleRange&) = 0;
+
+#if ENABLE(ATTACHMENT_ELEMENT)
+    virtual void registerAttachmentIdentifier(const String& /* identifier */, const String& /* contentType */, const String& /* preferredFileName */, Ref<SharedBuffer>&&) { }
+    virtual void registerAttachmentIdentifier(const String& /* identifier */, const String& /* contentType */, const String& /* filePath */) { }
+    virtual void registerAttachments(Vector<SerializedAttachmentData>&&) { }
+    virtual void registerAttachmentIdentifier(const String& /* identifier */) { }
+    virtual void cloneAttachmentData(const String& /* fromIdentifier */, const String& /* toIdentifier */) { }
+    virtual void didInsertAttachmentWithIdentifier(const String& /* identifier */, const String& /* source */, bool /* hasEnclosingImage */) { }
+    virtual void didRemoveAttachmentWithIdentifier(const String&) { }
+    virtual bool supportsClientSideAttachmentData() const { return false; }
+    virtual Vector<SerializedAttachmentData> serializedAttachmentDataForIdentifiers(const Vector<String>&) { return { }; }
+#endif
 
     virtual void didBeginEditing() = 0;
     virtual void respondToChangedContents() = 0;
     virtual void respondToChangedSelection(Frame*) = 0;
-    virtual void didChangeSelectionAndUpdateLayout() = 0;
+    virtual void didEndUserTriggeredSelectionChanges() = 0;
     virtual void updateEditorStateAfterLayoutIfEditabilityChanged() = 0;
     virtual void didEndEditing() = 0;
-    virtual void willWriteSelectionToPasteboard(Range*) = 0;
+    virtual void willWriteSelectionToPasteboard(const Optional<SimpleRange>&) = 0;
     virtual void didWriteSelectionToPasteboard() = 0;
-    virtual void getClientPasteboardDataForRange(Range*, Vector<String>& pasteboardTypes, Vector<RefPtr<SharedBuffer>>& pasteboardData) = 0;
+    virtual void getClientPasteboardData(const Optional<SimpleRange>&, Vector<String>& pasteboardTypes, Vector<RefPtr<SharedBuffer>>& pasteboardData) = 0;
     virtual void requestCandidatesForSelection(const VisibleSelection&) { }
     virtual void handleAcceptedCandidateWithSoftSpaces(TextCheckingResult) { }
+
+    virtual DOMPasteAccessResponse requestDOMPasteAccess(const String& originIdentifier) = 0;
 
     // Notify an input method that a composition was voluntarily discarded by WebCore, so that it could clean up too.
     // This function is not called when a composition is closed per a request from an input method.
     virtual void discardedComposition(Frame*) = 0;
     virtual void canceledComposition() = 0;
+    virtual void didUpdateComposition() = 0;
 
     virtual void registerUndoStep(UndoStep&) = 0;
     virtual void registerRedoStep(UndoStep&) = 0;
@@ -116,8 +121,9 @@ public:
     virtual void undo() = 0;
     virtual void redo() = 0;
 
-    virtual void handleKeyboardEvent(KeyboardEvent*) = 0;
-    virtual void handleInputMethodKeydown(KeyboardEvent*) = 0;
+    virtual void handleKeyboardEvent(KeyboardEvent&) = 0;
+    virtual void handleInputMethodKeydown(KeyboardEvent&) = 0;
+    virtual void didDispatchInputMethodKeydown(KeyboardEvent&) { }
     
     virtual void textFieldDidBeginEditing(Element*) = 0;
     virtual void textFieldDidEndEditing(Element*) = 0;
@@ -126,25 +132,20 @@ public:
     virtual void textWillBeDeletedInTextField(Element*) = 0;
     virtual void textDidChangeInTextArea(Element*) = 0;
     virtual void overflowScrollPositionChanged() = 0;
+    virtual void subFrameScrollPositionChanged() = 0;
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     virtual void startDelayingAndCoalescingContentChangeNotifications() = 0;
     virtual void stopDelayingAndCoalescingContentChangeNotifications() = 0;
-    virtual void writeDataToPasteboard(NSDictionary*) = 0;
-    virtual NSArray* supportedPasteboardTypesForCurrentSelection() = 0;
-    virtual NSArray* readDataFromPasteboard(NSString* type, int index) = 0;
     virtual bool hasRichlyEditableSelection() = 0;
     virtual int getPasteboardItemsCount() = 0;
     virtual RefPtr<DocumentFragment> documentFragmentFromDelegate(int index) = 0;
     virtual bool performsTwoStepPaste(DocumentFragment*) = 0;
-    virtual int pasteboardChangeCount() = 0;
+    virtual void updateStringForFind(const String&) = 0;
 #endif
 
 #if PLATFORM(COCOA)
-    virtual NSString *userVisibleString(NSURL *) = 0;
     virtual void setInsertionPasteboard(const String& pasteboardName) = 0;
-    virtual NSURL *canonicalizeURL(NSURL *) = 0;
-    virtual NSURL *canonicalizeURLString(NSString *) = 0;
 #endif
 
 #if USE(APPKIT)
@@ -180,13 +181,17 @@ public:
     virtual void showSpellingUI(bool show) = 0;
     virtual bool spellingUIIsShowing() = 0;
     virtual void willSetInputMethodState() = 0;
-    virtual void setInputMethodState(bool enabled) = 0;
+    virtual void setInputMethodState(Element*) = 0;
 
     // Support for global selections, used on platforms like the X Window System that treat
     // selection as a type of clipboard.
     virtual bool supportsGlobalSelection() { return false; }
 
-    virtual bool performTwoStepDrop(DocumentFragment&, Range& destination, bool isMove) = 0;
+    virtual bool performTwoStepDrop(DocumentFragment&, const SimpleRange& destination, bool isMove) = 0;
+
+    virtual bool canShowFontPanel() const = 0;
+
+    virtual bool shouldAllowSingleClickToChangeSelection(Node&, const VisibleSelection&) const { return true; }
 };
 
 }

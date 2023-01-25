@@ -26,9 +26,20 @@
 #include "config.h"
 #include "AccessibilityObject.h"
 
-#if HAVE(ACCESSIBILITY)
+#if ENABLE(ACCESSIBILITY)
+
+#include "AXObjectCache.h"
 
 namespace WebCore {
+
+void AccessibilityObject::detachPlatformWrapper(AccessibilityDetachmentType detachmentType)
+{
+    // On Windows, AccessibilityObjects are created when get_accChildCount is
+    // called, but they are not wrapped until get_accChild is called, so this
+    // object may not have a wrapper.
+    if (AccessibilityObjectWrapper* wrapper = this->wrapper())
+        wrapper->detach();
+}
 
 bool AccessibilityObject::accessibilityIgnoreAttachment() const
 {
@@ -38,11 +49,11 @@ bool AccessibilityObject::accessibilityIgnoreAttachment() const
 AccessibilityObjectInclusion AccessibilityObject::accessibilityPlatformIncludesObject() const
 {
     if (isMenuListPopup() || isMenuListOption())
-        return IncludeObject;
+        return AccessibilityObjectInclusion::IncludeObject;
 
-    return DefaultBehavior;
+    return AccessibilityObjectInclusion::DefaultBehavior;
 }
 
 } // namespace WebCore
 
-#endif // HAVE(ACCESSIBILITY)
+#endif // ENABLE(ACCESSIBILITY)

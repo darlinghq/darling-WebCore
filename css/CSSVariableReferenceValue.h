@@ -1,5 +1,5 @@
 // Copyright 2015 The Chromium Authors. All rights reserved.
-// Copyright (C) 2016 Apple Inc. All rights reserved.
+// Copyright (C) 2016-2020 Apple Inc. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
@@ -30,38 +30,35 @@
 #pragma once
 
 #include "CSSValue.h"
-#include "CSSVariableData.h"
-#include <wtf/RefPtr.h>
 
 namespace WebCore {
 
+class CSSParserTokenRange;
+class CSSVariableData;
+
+namespace Style {
+class BuilderState;
+}
+
 class CSSVariableReferenceValue : public CSSValue {
 public:
-    static Ref<CSSVariableReferenceValue> create(Ref<CSSVariableData>&& data)
-    {
-        return adoptRef(*new CSSVariableReferenceValue(WTFMove(data)));
-    }
+    static Ref<CSSVariableReferenceValue> create(const CSSParserTokenRange&);
 
-    CSSVariableData* variableDataValue() const
-    {
-        return m_data.get();
-    }
-
-    bool equals(const CSSVariableReferenceValue& other) const { return m_data == other.m_data; }
+    bool equals(const CSSVariableReferenceValue&) const;
     String customCSSText() const;
 
-    bool checkVariablesForCycles(const AtomicString& name, CustomPropertyValueMap&, HashSet<AtomicString>& seenProperties, HashSet<AtomicString>& invalidProperties) const;
+    RefPtr<CSSVariableData> resolveVariableReferences(Style::BuilderState&) const;
+
+    // The maximum number of tokens that may be produced by a var()
+    // reference or var() fallback value.
+    // https://drafts.csswg.org/css-variables/#long-variables
+    static constexpr size_t maxSubstitutionTokens = 65536;
 
 private:
-    CSSVariableReferenceValue(Ref<CSSVariableData>&& data)
-        : CSSValue(VariableReferenceClass)
-        , m_data(WTFMove(data))
-    {
-    }
+    explicit CSSVariableReferenceValue(Ref<CSSVariableData>&&);
 
-    RefPtr<CSSVariableData> m_data;
+    Ref<CSSVariableData> m_data;
     mutable String m_stringValue;
-    mutable bool m_serialized { false };
 };
 
 } // namespace WebCore

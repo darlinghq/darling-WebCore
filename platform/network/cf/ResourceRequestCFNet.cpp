@@ -26,9 +26,10 @@
 #include "config.h"
 #include "ResourceRequestCFNet.h"
 
-#include "CFNetworkSPI.h"
 #include "HTTPHeaderNames.h"
+#include "RegistrableDomain.h"
 #include "ResourceRequest.h"
+#include <wtf/cf/TypeCastsCF.h>
 
 #if ENABLE(PUBLIC_SUFFIX_LIST)
 #include "PublicSuffix.h"
@@ -37,23 +38,22 @@
 #if USE(CFURLCONNECTION)
 #include "FormDataStreamCFNet.h"
 #include <CFNetwork/CFURLRequestPriv.h>
+#include <pal/spi/win/CFNetworkSPIWin.h>
 #include <wtf/text/CString.h>
 #endif
 
 #if PLATFORM(COCOA)
 #include "ResourceLoadPriority.h"
-#include "WebCoreSystemInterface.h"
 #include <dlfcn.h>
+#include <pal/spi/cf/CFNetworkSPI.h>
 #endif
 
-#if PLATFORM(WIN)
-#include <WebKitSystemInterface/WebKitSystemInterface.h>
-#endif
+WTF_DECLARE_CF_TYPE_TRAIT(CFURL);
 
 namespace WebCore {
 
 // FIXME: Make this a NetworkingContext property.
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 bool ResourceRequest::s_httpPipeliningEnabled = true;
 #else
 bool ResourceRequest::s_httpPipeliningEnabled = false;
@@ -82,16 +82,6 @@ static CFURLRequestSetContentDispositionEncodingFallbackArrayFunction findCFURLR
 static CFURLRequestCopyContentDispositionEncodingFallbackArrayFunction findCFURLRequestCopyContentDispositionEncodingFallbackArrayFunction()
 {
     return reinterpret_cast<CFURLRequestCopyContentDispositionEncodingFallbackArrayFunction>(GetProcAddress(findCFNetworkModule(), "_CFURLRequestCopyContentDispositionEncodingFallbackArray"));
-}
-#elif PLATFORM(COCOA)
-static CFURLRequestSetContentDispositionEncodingFallbackArrayFunction findCFURLRequestSetContentDispositionEncodingFallbackArrayFunction()
-{
-    return reinterpret_cast<CFURLRequestSetContentDispositionEncodingFallbackArrayFunction>(dlsym(RTLD_DEFAULT, "_CFURLRequestSetContentDispositionEncodingFallbackArray"));
-}
-
-static CFURLRequestCopyContentDispositionEncodingFallbackArrayFunction findCFURLRequestCopyContentDispositionEncodingFallbackArrayFunction()
-{
-    return reinterpret_cast<CFURLRequestCopyContentDispositionEncodingFallbackArrayFunction>(dlsym(RTLD_DEFAULT, "_CFURLRequestCopyContentDispositionEncodingFallbackArray"));
 }
 #endif
 
@@ -130,8 +120,58 @@ static inline void setHeaderFields(CFMutableURLRequestRef request, const HTTPHea
     }
 
     for (const auto& header : requestHeaders)
-        CFURLRequestSetHTTPHeaderFieldValue(request, header.key.createCFString().get(), header.value.createCFString().get());
+        CFURLRequestSetHTTPHeaderFieldValue(request, header.key.createCFString().get(), httpHeaderValueUsingSuitableEncoding(header).get());
 }
+
+static inline CFURLRequestCachePolicy toPlatformRequestCachePolicy(ResourceRequestCachePolicy policy)
+{
+    switch (policy) {
+    case ResourceRequestCachePolicy::UseProtocolCachePolicy:
+        return kCFURLRequestCachePolicyProtocolDefault;
+    case ResourceRequestCachePolicy::ReturnCacheDataElseLoad:
+        return kCFURLRequestCachePolicyReturnCacheDataElseLoad;
+    case ResourceRequestCachePolicy::ReturnCacheDataDontLoad:
+        return kCFURLRequestCachePolicyReturnCacheDataDontLoad;
+    case ResourceRequestCachePolicy::ReloadIgnoringCacheData:
+    case ResourceRequestCachePolicy::DoNotUseAnyCache:
+    case ResourceRequestCachePolicy::RefreshAnyCacheData:
+        return kCFURLRequestCachePolicyReloadIgnoringCache;
+    }
+
+    ASSERT_NOT_REACHED();
+    return kCFURLRequestCachePolicyReloadIgnoringCache;
+}
+
+static inline ResourceRequestCachePolicy fromPlatformRequestCachePolicy(CFURLRequestCachePolicy policy)
+{
+    switch (policy) {
+    case kCFURLRequestCachePolicyProtocolDefault:
+        return ResourceRequestCachePolicy::UseProtocolCachePolicy;
+    case kCFURLRequestCachePolicyReloadIgnoringCache:
+        return ResourceRequestCachePolicy::ReloadIgnoringCacheData;
+    case kCFURLRequestCachePolicyReturnCacheDataElseLoad:
+        return ResourceRequestCachePolicy::ReturnCacheDataElseLoad;
+    case kCFURLRequestCachePolicyReturnCacheDataDontLoad:
+        return ResourceRequestCachePolicy::ReturnCacheDataDontLoad;
+    default:
+        return ResourceRequestCachePolicy::ReloadIgnoringCacheData;
+    }
+}
+
+#if PLATFORM(IOS_FAMILY)
+static CFURLRef siteForCookies(ResourceRequest::SameSiteDisposition disposition, CFURLRef url)
+{
+    switch (disposition) {
+    case ResourceRequest::SameSiteDisposition::Unspecified:
+        return { };
+    case ResourceRequest::SameSiteDisposition::SameSite:
+        return url;
+    case ResourceRequest::SameSiteDisposition::CrossSite:
+        static CFURLRef emptyURL = CFURLCreateWithString(nullptr, CFSTR(""), nullptr);
+        return emptyURL;
+    }
+}
+#endif
 
 void ResourceRequest::doUpdatePlatformRequest()
 {
@@ -144,26 +184,35 @@ void ResourceRequest::doUpdatePlatformRequest()
         cfRequest = CFURLRequestCreateMutableCopy(0, m_cfRequest.get());
         CFURLRequestSetURL(cfRequest, url.get());
         CFURLRequestSetMainDocumentURL(cfRequest, firstPartyForCookies.get());
-        CFURLRequestSetCachePolicy(cfRequest, (CFURLRequestCachePolicy)cachePolicy());
+        CFURLRequestSetCachePolicy(cfRequest, toPlatformRequestCachePolicy(cachePolicy()));
         CFURLRequestSetTimeoutInterval(cfRequest, timeoutInterval);
     } else
-        cfRequest = CFURLRequestCreateMutable(0, url.get(), (CFURLRequestCachePolicy)cachePolicy(), timeoutInterval, firstPartyForCookies.get());
+        cfRequest = CFURLRequestCreateMutable(0, url.get(), toPlatformRequestCachePolicy(cachePolicy()), timeoutInterval, firstPartyForCookies.get());
 
     CFURLRequestSetHTTPRequestMethod(cfRequest, httpMethod().createCFString().get());
 
     if (httpPipeliningEnabled())
         CFURLRequestSetShouldPipelineHTTP(cfRequest, true, true);
 
-    if (resourcePrioritiesEnabled())
+    if (resourcePrioritiesEnabled()) {
         CFURLRequestSetRequestPriority(cfRequest, toPlatformRequestPriority(priority()));
 
-#if !PLATFORM(WIN)
-    _CFURLRequestSetProtocolProperty(cfRequest, kCFURLRequestAllowAllPOSTCaching, kCFBooleanTrue);
-#endif
+        // Used by PLT to ignore very low priority beacon and ping loads.
+        if (priority() == ResourceLoadPriority::VeryLow)
+            _CFURLRequestSetProtocolProperty(cfRequest, CFSTR("WKVeryLowLoadPriority"), kCFBooleanTrue);
+    }
 
     setHeaderFields(cfRequest, httpHeaderFields());
 
     CFURLRequestSetShouldHandleHTTPCookies(cfRequest, allowCookies());
+
+#if PLATFORM(IOS_FAMILY)
+    _CFURLRequestSetProtocolProperty(cfRequest, CFSTR("_kCFHTTPCookiePolicyPropertySiteForCookies"), siteForCookies(m_sameSiteDisposition, url.get()));
+
+    int isTopSite = m_isTopSite;
+    RetainPtr<CFNumberRef> isTopSiteCF = adoptCF(CFNumberCreate(nullptr, kCFNumberIntType, &isTopSite));
+    _CFURLRequestSetProtocolProperty(cfRequest, CFSTR("_kCFHTTPCookiePolicyPropertyisTopSite"), isTopSiteCF.get());
+#endif
 
     unsigned fallbackCount = m_responseContentDispositionEncodingFallbackArray.size();
     RetainPtr<CFMutableArrayRef> encodingFallbacks = adoptCF(CFArrayCreateMutable(kCFAllocatorDefault, fallbackCount, 0));
@@ -180,20 +229,11 @@ void ResourceRequest::doUpdatePlatformRequest()
     if (!partition.isNull() && !partition.isEmpty()) {
         CString utf8String = partition.utf8();
         RetainPtr<CFStringRef> partitionValue = adoptCF(CFStringCreateWithBytes(0, reinterpret_cast<const UInt8*>(utf8String.data()), utf8String.length(), kCFStringEncodingUTF8, false));
-        _CFURLRequestSetProtocolProperty(cfRequest, wkCachePartitionKey(), partitionValue.get());
+        _CFURLRequestSetProtocolProperty(cfRequest, _kCFURLCachePartitionKey, partitionValue.get());
     }
 #endif
 
     m_cfRequest = adoptCF(cfRequest);
-#if PLATFORM(COCOA)
-    clearOrUpdateNSURLRequest();
-#endif
-}
-
-// FIXME: We should use a switch based on ResourceRequestCachePolicy parameter
-static inline CFURLRequestCachePolicy toPlatformRequestCachePolicy(ResourceRequestCachePolicy policy)
-{
-    return static_cast<CFURLRequestCachePolicy>((policy <= ReturnCacheDataDontLoad) ? policy : ReloadIgnoringCacheData);
 }
 
 void ResourceRequest::doUpdatePlatformHTTPBody()
@@ -210,7 +250,7 @@ void ResourceRequest::doUpdatePlatformHTTPBody()
         CFURLRequestSetCachePolicy(cfRequest, toPlatformRequestCachePolicy(cachePolicy()));
         CFURLRequestSetTimeoutInterval(cfRequest, timeoutInterval);
     } else
-        cfRequest = CFURLRequestCreateMutable(0, url.get(), (CFURLRequestCachePolicy)cachePolicy(), timeoutInterval, firstPartyForCookies.get());
+        cfRequest = CFURLRequestCreateMutable(0, url.get(), toPlatformRequestCachePolicy(cachePolicy()), timeoutInterval, firstPartyForCookies.get());
 
     FormData* formData = httpBody();
     if (formData && !formData->isEmpty())
@@ -227,37 +267,19 @@ void ResourceRequest::doUpdatePlatformHTTPBody()
     }
 
     m_cfRequest = adoptCF(cfRequest);
-#if PLATFORM(COCOA)
-    clearOrUpdateNSURLRequest();
-#endif
 }
 
 void ResourceRequest::doUpdateResourceRequest()
 {
     if (!m_cfRequest) {
-#if PLATFORM(IOS)
-        // <rdar://problem/9913526>
-        // This is a hack to mimic the subtle behaviour of the Foundation based ResourceRequest
-        // code. That code does not reset m_httpMethod if the NSURLRequest is nil. I filed
-        // <https://bugs.webkit.org/show_bug.cgi?id=66336> to track that.
-        // Another related bug is <https://bugs.webkit.org/show_bug.cgi?id=66350>. Fixing that
-        // would, ideally, allow us to not have this hack. But unfortunately that caused layout test
-        // failures.
-        // Removal of this hack is tracked by <rdar://problem/9970499>.
-
-        String httpMethod = m_httpMethod;
         *this = ResourceRequest();
-        m_httpMethod = httpMethod;
-#else
-        *this = ResourceRequest();
-#endif
         return;
     }
 
     m_url = CFURLRequestGetURL(m_cfRequest.get());
 
-    if (!m_cachePolicy)
-        m_cachePolicy = (ResourceRequestCachePolicy)CFURLRequestGetCachePolicy(m_cfRequest.get());
+    if (m_cachePolicy == ResourceRequestCachePolicy::UseProtocolCachePolicy)
+        m_cachePolicy = fromPlatformRequestCachePolicy(CFURLRequestGetCachePolicy(m_cfRequest.get()));
     m_timeoutInterval = CFURLRequestGetTimeoutInterval(m_cfRequest.get());
     m_firstPartyForCookies = CFURLRequestGetMainDocumentURL(m_cfRequest.get());
     if (CFStringRef method = CFURLRequestCopyHTTPRequestMethod(m_cfRequest.get())) {
@@ -268,6 +290,20 @@ void ResourceRequest::doUpdateResourceRequest()
 
     if (resourcePrioritiesEnabled())
         m_priority = toResourceLoadPriority(CFURLRequestGetRequestPriority(m_cfRequest.get()));
+
+#if PLATFORM(IOS_FAMILY)
+    RetainPtr<CFURLRef> siteForCookies = adoptCF(checked_cf_cast<CFURLRef>(_CFURLRequestCopyProtocolPropertyForKey(m_cfRequest.get(), CFSTR("_kCFHTTPCookiePolicyPropertySiteForCookies"))));
+    m_sameSiteDisposition = !siteForCookies ? SameSiteDisposition::Unspecified : (areRegistrableDomainsEqual(siteForCookies.get(), m_url) ? SameSiteDisposition::SameSite : SameSiteDisposition::CrossSite);
+
+    RetainPtr<CFNumberRef> isTopSiteCF = adoptCF(checked_cf_cast<CFNumber>(_CFURLRequestCopyProtocolPropertyForKey(m_cfRequest.get(), CFSTR("_kCFHTTPCookiePolicyPropertyisTopSite"))));
+    if (!isTopSiteCF)
+        m_isTopSite = false;
+    else {
+        int isTopSite = 0;
+        CFNumberGetValue(isTopSiteCF.get(), kCFNumberIntType, &isTopSite);
+        m_isTopSite = isTopSite;
+    }
+#endif
 
     m_httpHeaderFields.clear();
     if (CFDictionaryRef headers = CFURLRequestCopyAllHTTPHeaderFields(m_cfRequest.get())) {
@@ -292,7 +328,7 @@ void ResourceRequest::doUpdateResourceRequest()
     }
 
 #if ENABLE(CACHE_PARTITIONING)
-    RetainPtr<CFStringRef> cachePartition = adoptCF(static_cast<CFStringRef>(_CFURLRequestCopyProtocolPropertyForKey(m_cfRequest.get(), wkCachePartitionKey())));
+    RetainPtr<CFStringRef> cachePartition = adoptCF(static_cast<CFStringRef>(_CFURLRequestCopyProtocolPropertyForKey(m_cfRequest.get(), _kCFURLCachePartitionKey)));
     if (cachePartition)
         m_cachePartition = cachePartition.get();
 #endif
@@ -326,9 +362,6 @@ void ResourceRequest::setStorageSession(CFURLStorageSessionRef storageSession)
     if (storageSession)
         _CFURLRequestSetStorageSession(cfRequest, storageSession);
     m_cfRequest = adoptCF(cfRequest);
-#if PLATFORM(COCOA)
-    clearOrUpdateNSURLRequest();
-#endif
 }
 
 #endif // USE(CFURLCONNECTION)
@@ -341,6 +374,7 @@ void ResourceRequest::updateFromDelegatePreservingOldProperties(const ResourceRe
     bool isHiddenFromInspector = hiddenFromInspector();
     auto oldRequester = requester();
     auto oldInitiatorIdentifier = initiatorIdentifier();
+    auto oldInspectorInitiatorNodeIdentifier = inspectorInitiatorNodeIdentifier();
 
     *this = delegateProvidedRequest;
 
@@ -349,6 +383,8 @@ void ResourceRequest::updateFromDelegatePreservingOldProperties(const ResourceRe
     setHiddenFromInspector(isHiddenFromInspector);
     setRequester(oldRequester);
     setInitiatorIdentifier(oldInitiatorIdentifier);
+    if (oldInspectorInitiatorNodeIdentifier)
+        setInspectorInitiatorNodeIdentifier(*oldInspectorInitiatorNodeIdentifier);
 }
 
 bool ResourceRequest::httpPipeliningEnabled()
@@ -379,7 +415,7 @@ unsigned initializeMaximumHTTPConnectionCountPerHost()
     if (!ResourceRequest::resourcePrioritiesEnabled())
         return maximumHTTPConnectionCountPerHost;
 
-    _CFNetworkHTTPConnectionCacheSetLimit(kHTTPPriorityNumLevels, toPlatformRequestPriority(ResourceLoadPriority::Highest));
+    _CFNetworkHTTPConnectionCacheSetLimit(kHTTPPriorityNumLevels, resourceLoadPriorityCount);
 #if !PLATFORM(WIN)
     // FIXME: <rdar://problem/9375609> Implement minimum fast lane priority setting on Windows
     _CFNetworkHTTPConnectionCacheSetLimit(kHTTPMinimumFastLanePriority, toPlatformRequestPriority(ResourceLoadPriority::Medium));
@@ -388,7 +424,7 @@ unsigned initializeMaximumHTTPConnectionCountPerHost()
     return unlimitedRequestCount;
 }
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 void initializeHTTPConnectionSettingsOnStartup()
 {
     // This need to be called from WebKitInitialize so the calls happen early enough, before any requests are made. <rdar://problem/9691871>
@@ -398,7 +434,7 @@ void initializeHTTPConnectionSettingsOnStartup()
     static const unsigned preferredConnectionCount = 6;
     static const unsigned fastLaneConnectionCount = 1;
     _CFNetworkHTTPConnectionCacheSetLimit(kHTTPLoadWidth, preferredConnectionCount);
-    _CFNetworkHTTPConnectionCacheSetLimit(kHTTPPriorityNumLevels, toPlatformRequestPriority(ResourceLoadPriority::Highest));
+    _CFNetworkHTTPConnectionCacheSetLimit(kHTTPPriorityNumLevels, resourceLoadPriorityCount);
     _CFNetworkHTTPConnectionCacheSetLimit(kHTTPMinimumFastLanePriority, toPlatformRequestPriority(ResourceLoadPriority::Medium));
     _CFNetworkHTTPConnectionCacheSetLimit(kHTTPNumFastLanes, fastLaneConnectionCount);
 }

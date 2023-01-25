@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2017 Igalia S.L.
+ * Copyright (C) 2017, 2020 Igalia S.L.
+ * Copyright (C) 2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,15 +29,18 @@
 
 #if ENABLE(RESOURCE_USAGE) && OS(LINUX)
 
+#include "WorkerThread.h"
+#include <JavaScriptCore/GCActivityCallback.h>
+#include <JavaScriptCore/SamplingProfiler.h>
+#include <JavaScriptCore/VM.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <heap/GCActivityCallback.h>
-#include <runtime/VM.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <wtf/Threading.h>
 #include <wtf/linux/CurrentProcessMemoryStatus.h>
 
 namespace WebCore {
@@ -58,8 +62,14 @@ static float cpuPeriod()
     unsigned long long userTime, niceTime, systemTime, idleTime;
     unsigned long long ioWait, irq, softIrq, steal, guest, guestnice;
     ioWait = irq = softIrq = steal = guest = guestnice = 0;
-    sscanf(buffer, "cpu  %16llu %16llu %16llu %16llu %16llu %16llu %16llu %16llu %16llu %16llu",
+    int retVal = sscanf(buffer, "cpu  %16llu %16llu %16llu %16llu %16llu %16llu %16llu %16llu %16llu %16llu",
         &userTime, &niceTime, &systemTime, &idleTime, &ioWait, &irq, &softIrq, &steal, &guest, &guestnice);
+    // We expect 10 values to be matched by sscanf
+    if (retVal != 10) {
+        fclose(file);
+        return 0;
+    }
+
 
     // Keep parsing if we still don't know cpuCount.
     static unsigned cpuCount = 0;
@@ -83,15 +93,41 @@ static float cpuPeriod()
     return static_cast<float>(period) / cpuCount;
 }
 
-static float cpuUsage()
+void ResourceUsageThread::platformSaveStateBeforeStarting()
 {
-    float period = cpuPeriod();
-    if (!period)
-        return -1;
+#if ENABLE(SAMPLING_PROFILER)
+    m_samplingProfilerThreadID = 0;
 
-    int fd = open("/proc/self/stat", O_RDONLY);
+    if (auto* profiler = m_vm->samplingProfiler()) {
+        if (auto* thread = profiler->thread())
+            m_samplingProfilerThreadID = thread->id();
+    }
+#endif
+}
+
+struct ThreadInfo {
+    Optional<String> name;
+    Optional<float> cpuUsage;
+    unsigned long long previousUtime { 0 };
+    unsigned long long previousStime { 0 };
+};
+
+static HashMap<pid_t, ThreadInfo>& threadInfoMap()
+{
+    static LazyNeverDestroyed<HashMap<pid_t, ThreadInfo>> map;
+    static std::once_flag flag;
+    std::call_once(flag, [&] {
+        map.construct();
+    });
+    return map;
+}
+
+static bool threadCPUUsage(pid_t id, float period, ThreadInfo& info)
+{
+    String path = makeString("/proc/self/task/", id, "/stat");
+    int fd = open(path.utf8().data(), O_RDONLY);
     if (fd < 0)
-        return -1;
+        return false;
 
     static const ssize_t maxBufferLength = BUFSIZ - 1;
     char buffer[BUFSIZ];
@@ -103,7 +139,7 @@ static float cpuUsage()
         if (bytesRead < 0) {
             if (errno != EINTR) {
                 close(fd);
-                return -1;
+                return false;
             }
             continue;
         }
@@ -116,10 +152,18 @@ static float cpuUsage()
     close(fd);
     buffer[totalBytesRead] = '\0';
 
-    // Skip pid and process name.
-    char* position = strrchr(buffer, ')');
+    // Skip tid and name.
+    char* position = strchr(buffer, ')');
     if (!position)
-        return -1;
+        return false;
+
+    if (!info.name) {
+        char* name = strchr(buffer, '(');
+        if (!name)
+            return false;
+        name++;
+        info.name = String::fromUTF8(name, position - name);
+    }
 
     // Move after state.
     position += 4;
@@ -132,21 +176,134 @@ static float cpuUsage()
         position++;
     }
 
-    static unsigned long long previousUtime = 0;
-    static unsigned long long previousStime = 0;
     unsigned long long utime = strtoull(position, &position, 10);
     unsigned long long stime = strtoull(position, &position, 10);
-    float usage = (utime + stime - (previousUtime + previousStime)) / period * 100.0;
-    previousUtime = utime;
-    previousStime = stime;
+    float usage = (utime + stime - (info.previousUtime + info.previousStime)) / period * 100.0;
+    info.previousUtime = utime;
+    info.previousStime = stime;
 
-    return clampTo<float>(usage, 0, 100);
+    info.cpuUsage = clampTo<float>(usage, 0, 100);
+    return true;
 }
 
-void ResourceUsageThread::platformThreadBody(JSC::VM* vm, ResourceUsageData& data)
+static void collectCPUUsage(float period)
 {
-    data.cpu = cpuUsage();
+    DIR* dir = opendir("/proc/self/task");
+    if (!dir) {
+        threadInfoMap().clear();
+        return;
+    }
 
+    HashSet<pid_t> previousTasks;
+    for (const auto& key : threadInfoMap().keys())
+        previousTasks.add(key);
+
+    struct dirent* dp;
+    while ((dp = readdir(dir))) {
+        String name = String::fromUTF8(dp->d_name);
+        if (name == "." || name == "..")
+            continue;
+
+        bool ok;
+        pid_t id = name.toIntStrict(&ok);
+        if (!ok)
+            continue;
+
+        auto& info = threadInfoMap().add(id, ThreadInfo()).iterator->value;
+        if (!threadCPUUsage(id, period, info))
+            threadInfoMap().remove(id);
+
+        previousTasks.remove(id);
+    }
+    closedir(dir);
+
+    threadInfoMap().removeIf([&](auto& entry)  {
+        return previousTasks.contains(entry.key);
+    });
+}
+
+void ResourceUsageThread::platformCollectCPUData(JSC::VM*, ResourceUsageData& data)
+{
+    float period = cpuPeriod();
+    if (!period) {
+        data.cpu = 0;
+        data.cpuExcludingDebuggerThreads = 0;
+        return;
+    }
+
+    collectCPUUsage(period);
+
+    pid_t resourceUsageThreadID = Thread::currentID();
+
+    HashSet<pid_t> knownWebKitThreads;
+    {
+        auto locker = holdLock(Thread::allThreadsMutex());
+        for (auto* thread : Thread::allThreads(locker)) {
+            if (auto id = thread->id())
+                knownWebKitThreads.add(id);
+        }
+    }
+
+    HashMap<pid_t, String> knownWorkerThreads;
+    {
+        auto locker = holdLock(WorkerOrWorkletThread::workerOrWorkletThreadsLock());
+        for (auto* thread : WorkerOrWorkletThread::workerOrWorkletThreads()) {
+            // Ignore worker threads that have not been fully started yet.
+            if (!thread->thread())
+                continue;
+
+            if (auto id = thread->thread()->id())
+                knownWorkerThreads.set(id, thread->identifier().isolatedCopy());
+        }
+    }
+
+    auto isDebuggerThread = [&](pid_t id) -> bool {
+        if (id == resourceUsageThreadID)
+            return true;
+#if ENABLE(SAMPLING_PROFILER)
+        if (id == m_samplingProfilerThreadID)
+            return true;
+#endif
+        return false;
+    };
+
+    auto isWebKitThread = [&](pid_t id, const String& name) -> bool {
+        if (knownWebKitThreads.contains(id))
+            return true;
+
+        // The bmalloc scavenger thread is below WTF. Detect it by its name.
+        if (name == "BMScavenger")
+            return true;
+
+        return false;
+    };
+
+    for (const auto& it : threadInfoMap()) {
+        if (!it.value.cpuUsage)
+            continue;
+
+        float cpuUsage = it.value.cpuUsage.value();
+        pid_t id = it.key;
+        data.cpu += cpuUsage;
+        if (isDebuggerThread(id))
+            continue;
+
+        data.cpuExcludingDebuggerThreads += cpuUsage;
+
+        if (getpid() == id)
+            data.cpuThreads.append(ThreadCPUInfo { "Main Thread"_s, { }, cpuUsage, ThreadCPUInfo::Type::Main});
+        else {
+            String threadIdentifier = knownWorkerThreads.get(id);
+            bool isWorkerThread = !threadIdentifier.isEmpty();
+            String name = it.value.name.valueOr(emptyString());
+            ThreadCPUInfo::Type type = (isWorkerThread || isWebKitThread(id, name)) ? ThreadCPUInfo::Type::WebKit : ThreadCPUInfo::Type::Unknown;
+            data.cpuThreads.append(ThreadCPUInfo { name, threadIdentifier, cpuUsage, type });
+        }
+    }
+}
+
+void ResourceUsageThread::platformCollectMemoryData(JSC::VM* vm, ResourceUsageData& data)
+{
     ProcessMemoryStatus memoryStatus;
     currentProcessMemoryStatus(memoryStatus);
     data.totalDirtySize = memoryStatus.resident - memoryStatus.shared;
@@ -162,8 +319,8 @@ void ResourceUsageThread::platformThreadBody(JSC::VM* vm, ResourceUsageData& dat
 
     data.totalExternalSize = currentGCOwnedExternal;
 
-    data.timeOfNextEdenCollection = vm->heap.edenActivityCallback()->nextFireTime();
-    data.timeOfNextFullCollection = vm->heap.fullActivityCallback()->nextFireTime();
+    data.timeOfNextEdenCollection = data.timestamp + vm->heap.edenActivityCallback()->timeUntilFire().valueOr(Seconds(std::numeric_limits<double>::infinity()));
+    data.timeOfNextFullCollection = data.timestamp + vm->heap.fullActivityCallback()->timeUntilFire().valueOr(Seconds(std::numeric_limits<double>::infinity()));
 }
 
 } // namespace WebCore

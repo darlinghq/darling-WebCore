@@ -28,12 +28,11 @@
 #if ENABLE(LEGACY_ENCRYPTED_MEDIA)
 
 #include "ActiveDOMObject.h"
-#include "LegacyCDMSession.h"
 #include "EventTarget.h"
 #include "ExceptionOr.h"
-#include "GenericEventQueue.h"
+#include "LegacyCDMSession.h"
 #include "Timer.h"
-#include <runtime/Uint8Array.h>
+#include <JavaScriptCore/Uint8Array.h>
 #include <wtf/Deque.h>
 
 namespace WebCore {
@@ -41,18 +40,19 @@ namespace WebCore {
 class WebKitMediaKeyError;
 class WebKitMediaKeys;
 
-class WebKitMediaKeySession final : public RefCounted<WebKitMediaKeySession>, public EventTargetWithInlineData, private ActiveDOMObject, private CDMSessionClient {
+class WebKitMediaKeySession final : public RefCounted<WebKitMediaKeySession>, public EventTargetWithInlineData, public ActiveDOMObject, private LegacyCDMSessionClient {
+    WTF_MAKE_ISO_ALLOCATED(WebKitMediaKeySession);
 public:
     static Ref<WebKitMediaKeySession> create(ScriptExecutionContext&, WebKitMediaKeys&, const String& keySystem);
     ~WebKitMediaKeySession();
 
     WebKitMediaKeyError* error() { return m_error.get(); }
     const String& keySystem() const { return m_keySystem; }
-    const String& sessionId() const;
+    const String& sessionId() const { return m_sessionId; }
     ExceptionOr<void> update(Ref<Uint8Array>&& key);
     void close();
 
-    CDMSession* session() { return m_session.get(); }
+    LegacyCDMSession* session() { return m_session.get(); }
 
     void detachKeys() { m_keys = nullptr; }
 
@@ -61,8 +61,6 @@ public:
 
     using RefCounted::ref;
     using RefCounted::deref;
-
-    bool hasPendingActivity() const final;
 
 private:
     WebKitMediaKeySession(ScriptExecutionContext&, WebKitMediaKeys&, const String& keySystem);
@@ -76,9 +74,10 @@ private:
     void refEventTarget() final { ref(); }
     void derefEventTarget() final { deref(); }
 
+    // ActiveDOMObject.
     void stop() final;
-    bool canSuspendForDocumentSuspension() const final;
     const char* activeDOMObjectName() const final;
+    bool virtualHasPendingActivity() const final;
 
     EventTargetInterface eventTargetInterface() const final { return WebKitMediaKeySessionEventTargetInterfaceType; }
     ScriptExecutionContext* scriptExecutionContext() const final { return ActiveDOMObject::scriptExecutionContext(); }
@@ -87,8 +86,7 @@ private:
     String m_keySystem;
     String m_sessionId;
     RefPtr<WebKitMediaKeyError> m_error;
-    GenericEventQueue m_asyncEventQueue;
-    std::unique_ptr<CDMSession> m_session;
+    std::unique_ptr<LegacyCDMSession> m_session;
 
     struct PendingKeyRequest {
         String mimeType;

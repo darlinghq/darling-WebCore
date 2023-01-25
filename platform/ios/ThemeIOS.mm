@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008 Apple Inc. All Rights Reserved.
+ * Copyright (C) 2008-2017 Apple Inc. All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,30 +26,31 @@
 #import "config.h"
 #import "ThemeIOS.h"
 
-#import "GraphicsContext.h"
-#import "ScrollView.h"
-#include <wtf/NeverDestroyed.h>
-#include <wtf/SoftLinking.h>
-#include <wtf/StdLibExtras.h>
+#if PLATFORM(IOS_FAMILY)
 
-SOFT_LINK_FRAMEWORK(UIKit)
-SOFT_LINK(UIKit, UIAccessibilityIsReduceMotionEnabled, BOOL, (void), ())
+#import <pal/ios/UIKitSoftLink.h>
+#import <wtf/NeverDestroyed.h>
 
 using namespace std;
 
 namespace WebCore {
 
-// FIXME: Implement before enabling USE(NEW_THEME).
-
-Theme* platformTheme()
+Theme& Theme::singleton()
 {
-    static NeverDestroyed<ThemeIOS> themeIOS;
-    return &themeIOS.get();
+    static NeverDestroyed<ThemeIOS> theme;
+    return theme;
 }
 
 bool ThemeIOS::userPrefersReducedMotion() const
 {
-    return UIAccessibilityIsReduceMotionEnabled();
+    return PAL::softLink_UIKit_UIAccessibilityIsReduceMotionEnabled();
+}
+
+bool ThemeIOS::userPrefersContrast() const
+{
+    return PAL::softLink_UIKit_UIAccessibilityDarkerSystemColorsEnabled();
 }
 
 }
+
+#endif // PLATFORM(IOS_FAMILY)

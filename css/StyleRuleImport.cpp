@@ -1,7 +1,7 @@
 /*
  * (C) 1999-2003 Lars Knoll (knoll@kde.org)
  * (C) 2002-2003 Dirk Mueller (mueller@kde.org)
- * Copyright (C) 2002, 2005, 2006, 2008, 2009, 2010, 2012 Apple Inc. All rights reserved.
+ * Copyright (C) 2002-2017 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -29,6 +29,7 @@
 #include "CachedResourceRequestInitiators.h"
 #include "Document.h"
 #include "MediaList.h"
+#include "MediaQueryParser.h"
 #include "SecurityOrigin.h"
 #include "StyleSheetContents.h"
 #include <wtf/StdLibExtras.h>
@@ -41,16 +42,13 @@ Ref<StyleRuleImport> StyleRuleImport::create(const String& href, Ref<MediaQueryS
 }
 
 StyleRuleImport::StyleRuleImport(const String& href, Ref<MediaQuerySet>&& media)
-    : StyleRuleBase(Import)
-    , m_parentStyleSheet(0)
+    : StyleRuleBase(StyleRuleType::Import)
     , m_styleSheetClient(this)
     , m_strHref(href)
     , m_mediaQueries(WTFMove(media))
-    , m_cachedSheet(0)
-    , m_loading(false)
 {
     if (!m_mediaQueries)
-        m_mediaQueries = MediaQuerySet::create(String());
+        m_mediaQueries = MediaQuerySet::create(String(), MediaQueryParserContext());
 }
 
 StyleRuleImport::~StyleRuleImport()
@@ -73,6 +71,8 @@ void StyleRuleImport::setCSSStyleSheet(const String& href, const URL& baseURL, c
 
     Document* document = m_parentStyleSheet ? m_parentStyleSheet->singleOwnerDocument() : nullptr;
     m_styleSheet = StyleSheetContents::create(this, href, context);
+    if (m_parentStyleSheet->isContentOpaque() || !cachedStyleSheet->isCORSSameOrigin())
+        m_styleSheet->setAsOpaque();
     m_styleSheet->parseAuthorStyleSheet(cachedStyleSheet, document ? &document->securityOrigin() : nullptr);
 
     m_loading = false;
@@ -92,8 +92,11 @@ void StyleRuleImport::requestStyleSheet()
 {
     if (!m_parentStyleSheet)
         return;
-    Document* document = m_parentStyleSheet->singleOwnerDocument();
+    auto* document = m_parentStyleSheet->singleOwnerDocument();
     if (!document)
+        return;
+    auto* page = document->page();
+    if (!page)
         return;
 
     URL absURL;
@@ -115,15 +118,36 @@ void StyleRuleImport::requestStyleSheet()
 
     // FIXME: Skip Content Security Policy check when stylesheet is in a user agent shadow tree.
     // See <https://bugs.webkit.org/show_bug.cgi?id=146663>.
-    CachedResourceRequest request(absURL, CachedResourceLoader::defaultCachedResourceOptions(), std::nullopt, String(m_parentStyleSheet->charset()));
+    CachedResourceRequest request(absURL, CachedResourceLoader::defaultCachedResourceOptions(), WTF::nullopt, String(m_parentStyleSheet->charset()));
     request.setInitiator(cachedResourceRequestInitiators().css);
     if (m_cachedSheet)
         m_cachedSheet->removeClient(m_styleSheetClient);
     if (m_parentStyleSheet->isUserStyleSheet()) {
-        request.setOptions(ResourceLoaderOptions(DoNotSendCallbacks, SniffContent, BufferData, AllowStoredCredentials, ClientCredentialPolicy::MayAskClientForCredentials, FetchOptions::Credentials::Include, SkipSecurityCheck, FetchOptions::Mode::NoCors, DoNotIncludeCertificateInfo, ContentSecurityPolicyImposition::SkipPolicyCheck, DefersLoadingPolicy::AllowDefersLoading, CachingPolicy::AllowCaching));
-        m_cachedSheet = document->cachedResourceLoader().requestUserCSSStyleSheet(WTFMove(request));
-    } else
-        m_cachedSheet = document->cachedResourceLoader().requestCSSStyleSheet(WTFMove(request));
+        ResourceLoaderOptions options {
+            SendCallbackPolicy::DoNotSendCallbacks,
+            ContentSniffingPolicy::SniffContent,
+            DataBufferingPolicy::BufferData,
+            StoredCredentialsPolicy::Use,
+            ClientCredentialPolicy::MayAskClientForCredentials,
+            FetchOptions::Credentials::Include,
+            SecurityCheckPolicy::SkipSecurityCheck,
+            FetchOptions::Mode::NoCors,
+            CertificateInfoPolicy::DoNotIncludeCertificateInfo,
+            ContentSecurityPolicyImposition::SkipPolicyCheck,
+            DefersLoadingPolicy::AllowDefersLoading,
+            CachingPolicy::AllowCaching
+        };
+        options.loadedFromOpaqueSource = m_parentStyleSheet->isContentOpaque() ? LoadedFromOpaqueSource::Yes : LoadedFromOpaqueSource::No;
+
+        request.setOptions(WTFMove(options));
+
+        m_cachedSheet = document->cachedResourceLoader().requestUserCSSStyleSheet(*page, WTFMove(request));
+    } else {
+        auto options = request.options();
+        options.loadedFromOpaqueSource = m_parentStyleSheet->isContentOpaque() ? LoadedFromOpaqueSource::Yes : LoadedFromOpaqueSource::No;
+        request.setOptions(WTFMove(options));
+        m_cachedSheet = document->cachedResourceLoader().requestCSSStyleSheet(WTFMove(request)).value_or(nullptr);
+    }
     if (m_cachedSheet) {
         // if the import rule is issued dynamically, the sheet may be
         // removed from the pending sheet count, so let the doc know
@@ -132,6 +156,9 @@ void StyleRuleImport::requestStyleSheet()
             m_parentStyleSheet->startLoadingDynamicSheet();
         m_loading = true;
         m_cachedSheet->addClient(m_styleSheetClient);
+    } else if (m_parentStyleSheet) {
+        m_parentStyleSheet->setLoadErrorOccured();
+        m_parentStyleSheet->checkLoaded();
     }
 }
 

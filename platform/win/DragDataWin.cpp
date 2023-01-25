@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007, 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2007-2020 Apple Inc. All rights reserved.
  * Copyright (C) 2012 Baidu Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,7 +41,7 @@
 namespace WebCore {
 
 DragData::DragData(const DragDataMap& data, const IntPoint& clientPosition, const IntPoint& globalPosition,
-    DragOperation sourceOperationMask, DragApplicationFlags flags)
+    OptionSet<DragOperation> sourceOperationMask, OptionSet<DragApplicationFlags> flags)
     : m_clientPosition(clientPosition)
     , m_globalPosition(globalPosition)
     , m_platformDragData(0)
@@ -136,36 +136,40 @@ unsigned DragData::numberOfFiles() const
 #endif
 }
 
-void DragData::asFilenames(Vector<String>& result) const
+Vector<String> DragData::asFilenames() const
 {
+    Vector<String> result;
+
 #if USE(CF)
     if (m_platformDragData) {
         WCHAR filename[MAX_PATH];
 
         STGMEDIUM medium;
         if (FAILED(m_platformDragData->GetData(cfHDropFormat(), &medium)))
-            return;
+            return result;
 
         HDROP hdrop = reinterpret_cast<HDROP>(GlobalLock(medium.hGlobal)); 
 
         if (!hdrop)
-            return;
+            return result;
 
         const unsigned numFiles = DragQueryFileW(hdrop, 0xFFFFFFFF, 0, 0);
         for (unsigned i = 0; i < numFiles; i++) {
             if (!DragQueryFileW(hdrop, i, filename, WTF_ARRAY_LENGTH(filename)))
                 continue;
-            result.append(static_cast<UChar*>(filename)); 
+            result.append(filename);
         }
 
         // Free up memory from drag
         DragFinish(hdrop);
 
         GlobalUnlock(medium.hGlobal);
-        return;
+        return result;
     }
     result = m_dragDataMap.get(cfHDropFormat()->cfFormat);
 #endif
+
+    return result;
 }
 
 bool DragData::containsPlainText() const

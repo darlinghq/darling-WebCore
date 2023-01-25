@@ -23,10 +23,12 @@
 #include "config.h"
 #include "HTMLFormControlsCollection.h"
 
-#include "HTMLFieldSetElement.h"
+#include "FormAssociatedElement.h"
 #include "HTMLFormElement.h"
 #include "HTMLImageElement.h"
 #include "HTMLNames.h"
+#include "ScriptDisallowedScope.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
@@ -35,12 +37,14 @@ using namespace HTMLNames;
 // Since the collections are to be "live", we have to do the
 // calculation every time if anything has changed.
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(HTMLFormControlsCollection);
+
 HTMLFormControlsCollection::HTMLFormControlsCollection(ContainerNode& ownerNode)
-    : CachedHTMLCollection<HTMLFormControlsCollection, CollectionTypeTraits<FormControls>::traversalType>(ownerNode, FormControls)
+    : CachedHTMLCollection(ownerNode, FormControls)
     , m_cachedElement(nullptr)
     , m_cachedElementOffsetInArray(0)
 {
-    ASSERT(is<HTMLFormElement>(ownerNode) || is<HTMLFieldSetElement>(ownerNode));
+    ASSERT(is<HTMLFormElement>(ownerNode));
 }
 
 Ref<HTMLFormControlsCollection> HTMLFormControlsCollection::create(ContainerNode& ownerNode, CollectionType)
@@ -48,41 +52,28 @@ Ref<HTMLFormControlsCollection> HTMLFormControlsCollection::create(ContainerNode
     return adoptRef(*new HTMLFormControlsCollection(ownerNode));
 }
 
-HTMLFormControlsCollection::~HTMLFormControlsCollection()
-{
-}
+HTMLFormControlsCollection::~HTMLFormControlsCollection() = default;
 
-std::optional<Variant<RefPtr<RadioNodeList>, RefPtr<Element>>> HTMLFormControlsCollection::namedItemOrItems(const String& name) const
+Optional<Variant<RefPtr<RadioNodeList>, RefPtr<Element>>> HTMLFormControlsCollection::namedItemOrItems(const String& name) const
 {
     auto namedItems = this->namedItems(name);
 
     if (namedItems.isEmpty())
-        return std::nullopt;
+        return WTF::nullopt;
     if (namedItems.size() == 1)
         return Variant<RefPtr<RadioNodeList>, RefPtr<Element>> { RefPtr<Element> { WTFMove(namedItems[0]) } };
 
     return Variant<RefPtr<RadioNodeList>, RefPtr<Element>> { RefPtr<RadioNodeList> { ownerNode().radioNodeList(name) } };
 }
 
-const Vector<FormAssociatedElement*>& HTMLFormControlsCollection::formControlElements() const
-{
-    ASSERT(is<HTMLFormElement>(ownerNode()) || is<HTMLFieldSetElement>(ownerNode()));
-    if (is<HTMLFormElement>(ownerNode()))
-        return downcast<HTMLFormElement>(ownerNode()).associatedElements();
-    return downcast<HTMLFieldSetElement>(ownerNode()).associatedElements();
-}
-
-const Vector<HTMLImageElement*>& HTMLFormControlsCollection::formImageElements() const
-{
-    ASSERT(is<HTMLFormElement>(ownerNode()));
-    return downcast<HTMLFormElement>(ownerNode()).imageElements();
-}
-
-static unsigned findFormAssociatedElement(const Vector<FormAssociatedElement*>& elements, const Element& element)
+static unsigned findFormAssociatedElement(const Vector<WeakPtr<HTMLElement>>& elements, const Element& element)
 {
     for (unsigned i = 0; i < elements.size(); ++i) {
-        auto& associatedElement = *elements[i];
-        if (associatedElement.isEnumeratable() && &associatedElement.asHTMLElement() == &element)
+        auto currentElement = makeRefPtr(elements[i].get());
+        ASSERT(currentElement);
+        auto* associatedElement = currentElement->asFormAssociatedElement();
+        ASSERT(associatedElement);
+        if (associatedElement->isEnumeratable() && currentElement == &element)
             return i;
     }
     return elements.size();
@@ -90,7 +81,8 @@ static unsigned findFormAssociatedElement(const Vector<FormAssociatedElement*>& 
 
 HTMLElement* HTMLFormControlsCollection::customElementAfter(Element* current) const
 {
-    const Vector<FormAssociatedElement*>& elements = formControlElements();
+    ScriptDisallowedScope::InMainThread scriptDisallowedScope;
+    auto& elements = ownerNode().unsafeAssociatedElements();
     unsigned start;
     if (!current)
         start = 0;
@@ -100,14 +92,21 @@ HTMLElement* HTMLFormControlsCollection::customElementAfter(Element* current) co
         start = findFormAssociatedElement(elements, *current) + 1;
 
     for (unsigned i = start; i < elements.size(); ++i) {
-        FormAssociatedElement& element = *elements[i];
-        if (element.isEnumeratable()) {
-            m_cachedElement = &element.asHTMLElement();
+        auto element = makeRefPtr(elements[i].get());
+        ASSERT(element);
+        ASSERT(element->asFormAssociatedElement());
+        if (element->asFormAssociatedElement()->isEnumeratable()) {
+            m_cachedElement = element.get();
             m_cachedElementOffsetInArray = i;
-            return &element.asHTMLElement();
+            return element.get();
         }
     }
     return nullptr;
+}
+
+HTMLFormElement& HTMLFormControlsCollection::ownerNode() const
+{
+    return downcast<HTMLFormElement>(CachedHTMLCollection::ownerNode());
 }
 
 void HTMLFormControlsCollection::updateNamedElementCache() const
@@ -115,39 +114,40 @@ void HTMLFormControlsCollection::updateNamedElementCache() const
     if (hasNamedElementCache())
         return;
 
-    auto cache = std::make_unique<CollectionNamedElementCache>();
+    auto cache = makeUnique<CollectionNamedElementCache>();
 
-    bool ownerIsFormElement = is<HTMLFormElement>(ownerNode());
-    HashSet<AtomicStringImpl*> foundInputElements;
+    HashSet<AtomStringImpl*> foundInputElements;
 
-    for (auto& elementPtr : formControlElements()) {
-        FormAssociatedElement& associatedElement = *elementPtr;
-        if (associatedElement.isEnumeratable()) {
-            HTMLElement& element = associatedElement.asHTMLElement();
-            const AtomicString& id = element.getIdAttribute();
+    ScriptDisallowedScope::InMainThread scriptDisallowedScope;
+    for (auto& weakElement : ownerNode().unsafeAssociatedElements()) {
+        auto element = makeRefPtr(weakElement.get());
+        ASSERT(element);
+        auto* associatedElement = element->asFormAssociatedElement();
+        ASSERT(associatedElement);
+        if (associatedElement->isEnumeratable()) {
+            const AtomString& id = element->getIdAttribute();
             if (!id.isEmpty()) {
-                cache->appendToIdCache(id, element);
-                if (ownerIsFormElement)
-                    foundInputElements.add(id.impl());
+                cache->appendToIdCache(id, *element);
+                foundInputElements.add(id.impl());
             }
-            const AtomicString& name = element.getNameAttribute();
+            const AtomString& name = element->getNameAttribute();
             if (!name.isEmpty() && id != name) {
-                cache->appendToNameCache(name, element);
-                if (ownerIsFormElement)
-                    foundInputElements.add(name.impl());
+                cache->appendToNameCache(name, *element);
+                foundInputElements.add(name.impl());
             }
         }
     }
-    if (ownerIsFormElement) {
-        for (auto* elementPtr : formImageElements()) {
-            HTMLImageElement& element = *elementPtr;
-            const AtomicString& id = element.getIdAttribute();
-            if (!id.isEmpty() && !foundInputElements.contains(id.impl()))
-                cache->appendToIdCache(id, element);
-            const AtomicString& name = element.getNameAttribute();
-            if (!name.isEmpty() && id != name && !foundInputElements.contains(name.impl()))
-                cache->appendToNameCache(name, element);
-        }
+
+    for (auto& elementPtr : ownerNode().imageElements()) {
+        if (!elementPtr)
+            continue;
+        HTMLImageElement& element = *elementPtr;
+        const AtomString& id = element.getIdAttribute();
+        if (!id.isEmpty() && !foundInputElements.contains(id.impl()))
+            cache->appendToIdCache(id, element);
+        const AtomString& name = element.getNameAttribute();
+        if (!name.isEmpty() && id != name && !foundInputElements.contains(name.impl()))
+            cache->appendToNameCache(name, element);
     }
 
     setNamedItemCache(WTFMove(cache));
@@ -155,7 +155,7 @@ void HTMLFormControlsCollection::updateNamedElementCache() const
 
 void HTMLFormControlsCollection::invalidateCacheForDocument(Document& document)
 {
-    CachedHTMLCollection<HTMLFormControlsCollection, CollectionTypeTraits<FormControls>::traversalType>::invalidateCacheForDocument(document);
+    CachedHTMLCollection::invalidateCacheForDocument(document);
     m_cachedElement = nullptr;
     m_cachedElementOffsetInArray = 0;
 }

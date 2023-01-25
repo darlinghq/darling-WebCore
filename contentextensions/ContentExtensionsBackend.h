@@ -37,13 +37,11 @@ namespace WebCore {
 
 class DocumentLoader;
 class ResourceRequest;
-class URL;
-
-struct ResourceLoadInfo;
 
 namespace ContentExtensions {
 
 class CompiledContentExtension;
+struct ResourceLoadInfo;
 
 // The ContentExtensionsBackend is the internal model of all the content extensions.
 //
@@ -51,25 +49,29 @@ class CompiledContentExtension;
 // 1) It stores the rules for each content extension.
 // 2) It provides APIs for the WebCore interfaces to use those rules efficiently.
 class ContentExtensionsBackend {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     // - Rule management interface. This can be used by upper layer.
 
-    // Set a list of rules for a given name. If there were existing rules for the name, they are overriden.
+    // Set a list of rules for a given name. If there were existing rules for the name, they are overridden.
     // The identifier cannot be empty.
-    WEBCORE_EXPORT void addContentExtension(const String& identifier, RefPtr<CompiledContentExtension>);
+    WEBCORE_EXPORT void addContentExtension(const String& identifier, Ref<CompiledContentExtension>, ContentExtension::ShouldCompileCSS = ContentExtension::ShouldCompileCSS::Yes);
     WEBCORE_EXPORT void removeContentExtension(const String& identifier);
     WEBCORE_EXPORT void removeAllContentExtensions();
 
     // - Internal WebCore Interface.
-    WEBCORE_EXPORT Vector<Action> actionsForResourceLoad(const ResourceLoadInfo&) const;
+    WEBCORE_EXPORT Vector<ActionsFromContentRuleList> actionsForResourceLoad(const ResourceLoadInfo&) const;
     WEBCORE_EXPORT StyleSheetContents* globalDisplayNoneStyleSheet(const String& identifier) const;
 
-    BlockedStatus processContentExtensionRulesForLoad(const URL&, ResourceType, DocumentLoader& initiatingDocumentLoader);
+    ContentRuleListResults processContentRuleListsForLoad(const URL&, OptionSet<ResourceType>, DocumentLoader& initiatingDocumentLoader);
+    WEBCORE_EXPORT ContentRuleListResults processContentRuleListsForPingLoad(const URL&, const URL& mainDocumentURL);
 
     static const String& displayNoneCSSRule();
 
+    void forEach(const Function<void(const String&, ContentExtension&)>&);
+
 private:
-    HashMap<String, RefPtr<ContentExtension>> m_contentExtensions;
+    HashMap<String, Ref<ContentExtension>> m_contentExtensions;
 };
 
 } // namespace ContentExtensions

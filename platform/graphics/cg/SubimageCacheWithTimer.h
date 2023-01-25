@@ -23,8 +23,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef SubimageCacheWithTimer_h
-#define SubimageCacheWithTimer_h
+#pragma once
 
 #include "FloatRect.h"
 #include "Timer.h"
@@ -47,8 +46,9 @@ class SubimageCacheWithTimer {
 public:
     struct SubimageCacheEntry {
         RetainPtr<CGImageRef> image;
-        FloatRect rect;
         RetainPtr<CGImageRef> subimage;
+        FloatRect rect;
+        MonotonicTime lastAccessTime;
     };
 
     struct SubimageCacheEntryTraits : WTF::GenericHashTraits<SubimageCacheEntry> {
@@ -80,25 +80,30 @@ public:
         static const bool safeToCompareToEmptyOrDeleted = true;
     };
 
-    typedef HashSet<SubimageCacheEntry, SubimageCacheHash, SubimageCacheEntryTraits> SubimageCache;
-
-public:
-    SubimageCacheWithTimer();
-    RetainPtr<CGImageRef> getSubimage(CGImageRef, const FloatRect&);
-    void clearImage(CGImageRef);
+    static RetainPtr<CGImageRef> getSubimage(CGImageRef, const FloatRect&);
+    static void clearImage(CGImageRef);
+    static void clear();
 
 private:
-    void invalidateCacheTimerFired();
+    typedef HashSet<SubimageCacheEntry, SubimageCacheHash, SubimageCacheEntryTraits> SubimageCacheHashSet;
 
-    HashCountedSet<CGImageRef> m_images;
-    SubimageCache m_cache;
-    DeferrableOneShotTimer m_timer;
+    SubimageCacheWithTimer();
+    void pruneCacheTimerFired();
+
+    RetainPtr<CGImageRef> subimage(CGImageRef, const FloatRect&);
+    void clearImageAndSubimages(CGImageRef);
+    void prune();
+    void clearAll();
+
+    HashCountedSet<CGImageRef> m_imageCounts;
+    SubimageCacheHashSet m_cache;
+    Timer m_timer;
+
+    static SubimageCacheWithTimer& subimageCache();
+    static bool subimageCacheExists();
+    static SubimageCacheWithTimer* s_cache;
 };
-
-SubimageCacheWithTimer& subimageCache();
 
 #endif // CACHE_SUBIMAGES
 
 }
-
-#endif // SubimageCacheWithTimer_h

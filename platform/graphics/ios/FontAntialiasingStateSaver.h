@@ -26,29 +26,38 @@
 #ifndef FontAntialiasingStateSaver_h
 #define FontAntialiasingStateSaver_h
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
-#import "CoreGraphicsSPI.h"
+#import <pal/spi/cg/CoreGraphicsSPI.h>
 
 namespace WebCore {
 
 class FontAntialiasingStateSaver {
+    WTF_MAKE_NONCOPYABLE(FontAntialiasingStateSaver);
 public:
     FontAntialiasingStateSaver(CGContextRef context, bool useOrientationDependentFontAntialiasing)
-#if !PLATFORM(IOS_SIMULATOR)
+#if !PLATFORM(IOS_FAMILY_SIMULATOR)
         : m_context(context)
         , m_useOrientationDependentFontAntialiasing(useOrientationDependentFontAntialiasing)
 #endif
     {
-#if PLATFORM(IOS_SIMULATOR)
+#if PLATFORM(IOS_FAMILY_SIMULATOR)
         UNUSED_PARAM(context);
         UNUSED_PARAM(useOrientationDependentFontAntialiasing);
 #endif
     }
 
+    ~FontAntialiasingStateSaver()
+    {
+#if !PLATFORM(IOS_FAMILY_SIMULATOR)
+        if (m_useOrientationDependentFontAntialiasing)
+            CGContextSetFontAntialiasingStyle(m_context, m_oldAntialiasingStyle);
+#endif
+    }
+
     void setup(bool isLandscapeOrientation)
     {
-#if !PLATFORM(IOS_SIMULATOR)
+#if !PLATFORM(IOS_FAMILY_SIMULATOR)
     m_oldAntialiasingStyle = CGContextGetFontAntialiasingStyle(m_context);
 
     if (m_useOrientationDependentFontAntialiasing)
@@ -58,16 +67,8 @@ public:
 #endif
     }
 
-    void restore()
-    {
-#if !PLATFORM(IOS_SIMULATOR)
-        if (m_useOrientationDependentFontAntialiasing)
-            CGContextSetFontAntialiasingStyle(m_context, m_oldAntialiasingStyle);
-#endif
-    }
-
 private:
-#if !PLATFORM(IOS_SIMULATOR)
+#if !PLATFORM(IOS_FAMILY_SIMULATOR)
     CGContextRef m_context;
     bool m_useOrientationDependentFontAntialiasing;
     CGFontAntialiasingStyle m_oldAntialiasingStyle;

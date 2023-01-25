@@ -43,7 +43,7 @@ typedef const void* WrappedImagePtr;
 
 class StyleImage : public RefCounted<StyleImage> {
 public:
-    virtual ~StyleImage() { }
+    virtual ~StyleImage() = default;
 
     virtual bool operator==(const StyleImage& other) const = 0;
 
@@ -59,7 +59,7 @@ public:
     virtual bool imageHasRelativeWidth() const = 0;
     virtual bool imageHasRelativeHeight() const = 0;
     virtual bool usesImageContainerSize() const = 0;
-    virtual void setContainerSizeForRenderer(const RenderElement*, const FloatSize&, float) = 0;
+    virtual void setContainerContextForRenderer(const RenderElement&, const FloatSize&, float) = 0;
     virtual void addClient(RenderElement*) = 0;
     virtual void removeClient(RenderElement*) = 0;
     virtual RefPtr<Image> image(RenderElement*, const FloatSize&) const = 0;
@@ -67,18 +67,28 @@ public:
     virtual float imageScaleFactor() const { return 1; }
     virtual bool knownToBeOpaque(const RenderElement*) const = 0;
     virtual CachedImage* cachedImage() const { return 0; }
+    virtual StyleImage* selectedImage() { return this; }
+    virtual const StyleImage* selectedImage() const { return this; }
 
     ALWAYS_INLINE bool isCachedImage() const { return m_isCachedImage; }
     ALWAYS_INLINE bool isGeneratedImage() const { return m_isGeneratedImage; }
+    ALWAYS_INLINE bool isCursorImage() const { return m_isCursorImage; }
+    ALWAYS_INLINE bool isImageSet() const { return m_isImageSet; }
+
+    bool hasCachedImage() const { return m_isCachedImage || selectedImage()->isCachedImage(); }
 
 protected:
     StyleImage()
         : m_isCachedImage(false)
         , m_isGeneratedImage(false)
+        , m_isImageSet(false)
+        , m_isCursorImage(false)
     {
     }
     bool m_isCachedImage : 1;
     bool m_isGeneratedImage : 1;
+    bool m_isImageSet : 1;
+    bool m_isCursorImage : 1;
 };
 
 } // namespace WebCore

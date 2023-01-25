@@ -25,24 +25,33 @@
 
 #pragma once
 
-#if ENABLE(WEB_TIMING)
-
 #include "PerformanceEntry.h"
 #include <wtf/text/WTFString.h>
 
+namespace JSC {
+class JSGlobalObject;
+class JSValue;
+}
+
 namespace WebCore {
+
+class SerializedScriptValue;
+class ScriptExecutionContext;
 
 class PerformanceMeasure final : public PerformanceEntry {
 public:
-    static Ref<PerformanceMeasure> create(const String& name, double startTime, double duration) { return adoptRef(*new PerformanceMeasure(name, startTime, duration)); }
+    static ExceptionOr<Ref<PerformanceMeasure>> create(const String& name, double startTime, double endTime, Ref<SerializedScriptValue>&& detail);
+
+    JSC::JSValue detail(JSC::JSGlobalObject&);
 
 private:
-    PerformanceMeasure(const String& name, double startTime, double duration)
-        : PerformanceEntry(PerformanceEntry::Type::Measure, name, ASCIILiteral("measure"), startTime, duration)
-    {
-    }
+    PerformanceMeasure(const String& name, double startTime, double endTime, Ref<SerializedScriptValue>&& detail);
+    ~PerformanceMeasure();
 
-    ~PerformanceMeasure() { }
+    Type type() const final { return Type::Measure; }
+    ASCIILiteral entryType() const final { return "measure"_s; }
+
+    Ref<SerializedScriptValue> m_serializedDetail;
 };
 
 } // namespace WebCore
@@ -50,5 +59,3 @@ private:
 SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::PerformanceMeasure)
     static bool isType(const WebCore::PerformanceEntry& entry) { return entry.isMeasure(); }
 SPECIALIZE_TYPE_TRAITS_END()
-
-#endif // ENABLE(WEB_TIMING)

@@ -28,14 +28,15 @@
 #include "TransformationMatrix.h"
 
 #include "AffineTransform.h"
-#include "FloatRect.h"
 #include "FloatQuad.h"
+#include "FloatRect.h"
 #include "IntRect.h"
 #include "LayoutRect.h"
-#include "TextStream.h"
 #include <cmath>
 #include <wtf/Assertions.h>
 #include <wtf/MathExtras.h>
+#include <wtf/Optional.h>
+#include <wtf/text/TextStream.h>
 
 #if CPU(X86_64)
 #include <emmintrin.h>
@@ -69,6 +70,8 @@ typedef double Vector4[4];
 typedef double Vector3[3];
 
 const double SMALL_NUMBER = 1.e-8;
+
+const TransformationMatrix TransformationMatrix::identity { };
 
 // inverse(original_matrix, inverse_matrix)
 //
@@ -251,7 +254,7 @@ static void v4MulPointByMatrix(const Vector4 p, const TransformationMatrix::Matr
 
 static double v3Length(Vector3 a)
 {
-    return sqrt((a[0] * a[0]) + (a[1] * a[1]) + (a[2] * a[2]));
+    return std::hypot(a[0], a[1], a[2]);
 }
 
 static void v3Scale(Vector3 v, double desiredLength)
@@ -297,8 +300,8 @@ static bool decompose2(const TransformationMatrix::Matrix4& matrix, Transformati
     result.translateY = matrix[3][1];
 
     // Compute scaling factors.
-    result.scaleX = sqrt(row0x * row0x + row0y * row0y);
-    result.scaleY = sqrt(row1x * row1x + row1y * row1y);
+    result.scaleX = std::hypot(row0x, row0y);
+    result.scaleY = std::hypot(row1x, row1y);
 
     // If determinant is negative, one axis was flipped.
     double determinant = row0x * row1y - row0y * row1x;
@@ -748,20 +751,70 @@ LayoutRect TransformationMatrix::mapRect(const LayoutRect& r) const
 
 FloatRect TransformationMatrix::mapRect(const FloatRect& r) const
 {
-    if (isIdentityOrTranslation()) {
+    auto type = this->type();
+    if (type == Type::IdentityOrTranslation) {
         FloatRect mappedRect(r);
         mappedRect.move(static_cast<float>(m_matrix[3][0]), static_cast<float>(m_matrix[3][1]));
         return mappedRect;
     }
 
-    FloatQuad result;
-
+    float minX = r.x();
+    float minY = r.y();
     float maxX = r.maxX();
     float maxY = r.maxY();
-    result.setP1(internalMapPoint(FloatPoint(r.x(), r.y())));
-    result.setP2(internalMapPoint(FloatPoint(maxX, r.y())));
+
+    if (type == Type::Affine) {
+        double a = m11();
+        double b = m12();
+        double c = m21();
+        double d = m22();
+
+        double minResultX;
+        double minResultY;
+        double maxResultX;
+        double maxResultY;
+
+        if (a > 0) {
+            maxResultX = a * maxX;
+            minResultX = a * minX;
+        } else {
+            maxResultX = a * minX;
+            minResultX = a * maxX;
+        }
+
+        if (b > 0) {
+            maxResultY = b * maxX;
+            minResultY = b * minX;
+        } else {
+            maxResultY = b * minX;
+            minResultY = b * maxX;
+        }
+
+        if (c > 0) {
+            maxResultX += c * maxY;
+            minResultX += c * minY;
+        } else {
+            maxResultX += c * minY;
+            minResultX += c * maxY;
+        }
+
+        if (d > 0) {
+            maxResultY += d * maxY;
+            minResultY += d * minY;
+        } else {
+            maxResultY += d * minY;
+            minResultY += d * maxY;
+        }
+
+        return FloatRect(minResultX + m41(), minResultY + m42(), maxResultX - minResultX, maxResultY - minResultY);
+    }
+
+    FloatQuad result;
+
+    result.setP1(internalMapPoint(FloatPoint(minX, minY)));
+    result.setP2(internalMapPoint(FloatPoint(maxX, minY)));
     result.setP3(internalMapPoint(FloatPoint(maxX, maxY)));
-    result.setP4(internalMapPoint(FloatPoint(r.x(), maxY)));
+    result.setP4(internalMapPoint(FloatPoint(minX, maxY)));
 
     return result.boundingBox();
 }
@@ -810,7 +863,7 @@ TransformationMatrix& TransformationMatrix::scale3d(double sx, double sy, double
 TransformationMatrix& TransformationMatrix::rotate3d(double x, double y, double z, double angle)
 {
     // Normalize the axis of rotation
-    double length = sqrt(x * x + y * y + z * z);
+    double length = std::hypot(x, y, z);
     if (length == 0) {
         // A direction vector that cannot be normalized, such as [0, 0, 0], will cause the rotation to not be applied.
         return *this;
@@ -891,6 +944,18 @@ TransformationMatrix& TransformationMatrix::rotate3d(double x, double y, double 
         mat.m_matrix[3][3] = 1.0;
     }
     multiply(mat);
+    return *this;
+}
+
+TransformationMatrix& TransformationMatrix::rotate(double angle)
+{
+    if (!std::fmod(angle, 360))
+        return *this;
+
+    angle = deg2rad(angle);
+    double sinZ = sin(angle);
+    double cosZ = cos(angle);
+    multiply({ cosZ, sinZ, -sinZ, cosZ, 0, 0 });
     return *this;
 }
 
@@ -1048,7 +1113,7 @@ TransformationMatrix TransformationMatrix::rectToRect(const FloatRect& from, con
 // this = mat * this.
 TransformationMatrix& TransformationMatrix::multiply(const TransformationMatrix& mat)
 {
-#if CPU(ARM64)
+#if CPU(ARM64) && defined(_LP64)
     double* leftMatrix = &(m_matrix[0][0]);
     const double* rightMatrix = &(mat.m_matrix[0][0]);
     asm volatile (
@@ -1214,7 +1279,7 @@ TransformationMatrix& TransformationMatrix::multiply(const TransformationMatrix&
         : [leftMatrix]"+r"(leftMatrix), [rightMatrix]"+r"(rightMatrix)
         :
         : "memory", "r3", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d16", "d17", "d18", "d19", "d20", "d21", "d22", "d23", "d24", "d25", "d26", "d27", "d28", "d29", "d30", "d31");
-#elif CPU(ARM_VFP) && PLATFORM(IOS)
+#elif CPU(ARM_VFP) && PLATFORM(IOS_FAMILY)
 
 #define MATRIX_MULTIPLY_ONE_LINE \
     "vldmia.64  %[rightMatrix]!, { d0-d3}\n\t" \
@@ -1416,7 +1481,7 @@ TransformationMatrix& TransformationMatrix::multiply(const TransformationMatrix&
     tmp[3][3] = (mat.m_matrix[3][0] * m_matrix[0][3] + mat.m_matrix[3][1] * m_matrix[1][3]
                + mat.m_matrix[3][2] * m_matrix[2][3] + mat.m_matrix[3][3] * m_matrix[3][3]);
 
-    setMatrix(tmp);
+    memcpy(&m_matrix[0][0], &tmp[0][0], sizeof(Matrix4));
 #endif
     return *this;
 }
@@ -1447,20 +1512,17 @@ void TransformationMatrix::multVecMatrix(double x, double y, double z, double& r
 
 bool TransformationMatrix::isInvertible() const
 {
-    if (isIdentityOrTranslation())
+    auto type = this->type();
+    if (type == Type::IdentityOrTranslation)
         return true;
 
-    double det = WebCore::determinant4x4(m_matrix);
-
-    if (fabs(det) < SMALL_NUMBER)
-        return false;
-
-    return true;
+    return fabs(type == Type::Affine ? (m11() * m22() - m12() * m21()) : WebCore::determinant4x4(m_matrix)) >= SMALL_NUMBER;
 }
 
-std::optional<TransformationMatrix> TransformationMatrix::inverse() const
+Optional<TransformationMatrix> TransformationMatrix::inverse() const
 {
-    if (isIdentityOrTranslation()) {
+    auto type = this->type();
+    if (type == Type::IdentityOrTranslation) {
         // identity matrix
         if (m_matrix[3][0] == 0 && m_matrix[3][1] == 0 && m_matrix[3][2] == 0)
             return TransformationMatrix();
@@ -1472,11 +1534,33 @@ std::optional<TransformationMatrix> TransformationMatrix::inverse() const
                                     -m_matrix[3][0], -m_matrix[3][1], -m_matrix[3][2], 1);
     }
 
+    if (type == Type::Affine) {
+        double a = m11();
+        double b = m12();
+        double c = m21();
+        double d = m22();
+        double e = m41();
+        double f = m42();
+        double determinant = a * d - b * c;
+        if (fabs(determinant) < SMALL_NUMBER)
+            return WTF::nullopt;
+
+        double inverseDeterminant = 1 / determinant;
+        return {{
+            d * inverseDeterminant,
+            -b * inverseDeterminant,
+            -c * inverseDeterminant,
+            a * inverseDeterminant,
+            (c * f - d * e) * inverseDeterminant,
+            (b * e - a * f) * inverseDeterminant
+        }};
+    }
+
     TransformationMatrix invMat;
     // FIXME: Use LU decomposition to apply the inverse instead of calculating the inverse explicitly.
     // Calculating the inverse of a 4x4 matrix using cofactors is numerically unstable and unnecessary to apply the inverse transformation to a point.
     if (!WebCore::inverse(m_matrix, invMat.m_matrix))
-        return std::nullopt;
+        return WTF::nullopt;
 
     return invMat;
 }
@@ -1584,6 +1668,14 @@ void TransformationMatrix::blend4(const TransformationMatrix& from, double progr
 
 void TransformationMatrix::blend(const TransformationMatrix& from, double progress)
 {
+    if (!progress) {
+        *this = from;
+        return;
+    }
+
+    if (progress == 1)
+        return;
+
     if (from.isIdentity() && isIdentity())
         return;
 
@@ -1722,24 +1814,13 @@ TransformationMatrix TransformationMatrix::to2dTransform() const
                                 m_matrix[3][0], m_matrix[3][1], 0, m_matrix[3][3]);
 }
 
-void TransformationMatrix::toColumnMajorFloatArray(FloatMatrix4& result) const
+auto TransformationMatrix::toColumnMajorFloatArray() const -> FloatMatrix4
 {
-    result[0] = m11();
-    result[1] = m12();
-    result[2] = m13();
-    result[3] = m14();
-    result[4] = m21();
-    result[5] = m22();
-    result[6] = m23();
-    result[7] = m24();
-    result[8] = m31();
-    result[9] = m32();
-    result[10] = m33();
-    result[11] = m34();
-    result[12] = m41();
-    result[13] = m42();
-    result[14] = m43();
-    result[15] = m44();
+    return { {
+        float(m11()), float(m12()), float(m13()), float(m14()),
+        float(m21()), float(m22()), float(m23()), float(m24()),
+        float(m31()), float(m32()), float(m33()), float(m34()),
+        float(m41()), float(m42()), float(m43()), float(m44()) } };
 }
 
 bool TransformationMatrix::isBackFaceVisible() const
@@ -1772,17 +1853,12 @@ bool TransformationMatrix::isBackFaceVisible() const
 
 TextStream& operator<<(TextStream& ts, const TransformationMatrix& transform)
 {
+    TextStream::IndentScope indentScope(ts);
     ts << "\n";
-    ts.increaseIndent();
-    ts.writeIndent();
-    ts << "[" << transform.m11() << " " << transform.m12() << " " << transform.m13() << " " << transform.m14() << "]\n";
-    ts.writeIndent();
-    ts << "[" << transform.m21() << " " << transform.m22() << " " << transform.m23() << " " << transform.m24() << "]\n";
-    ts.writeIndent();
-    ts << "[" << transform.m31() << " " << transform.m32() << " " << transform.m33() << " " << transform.m34() << "]\n";
-    ts.writeIndent();
-    ts << "[" << transform.m41() << " " << transform.m42() << " " << transform.m43() << " " << transform.m44() << "]";
-    ts.decreaseIndent();
+    ts << indent << "[" << transform.m11() << " " << transform.m12() << " " << transform.m13() << " " << transform.m14() << "]\n";
+    ts << indent << "[" << transform.m21() << " " << transform.m22() << " " << transform.m23() << " " << transform.m24() << "]\n";
+    ts << indent << "[" << transform.m31() << " " << transform.m32() << " " << transform.m33() << " " << transform.m34() << "]\n";
+    ts << indent << "[" << transform.m41() << " " << transform.m42() << " " << transform.m43() << " " << transform.m44() << "]";
     return ts;
 }
 

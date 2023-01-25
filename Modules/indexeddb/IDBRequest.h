@@ -31,23 +31,30 @@
 #include "ExceptionOr.h"
 #include "IDBActiveDOMObject.h"
 #include "IDBError.h"
+#include "IDBGetAllResult.h"
+#include "IDBGetResult.h"
+#include "IDBKeyData.h"
 #include "IDBResourceIdentifier.h"
+#include "IDBValue.h"
 #include "IndexedDB.h"
-#include <heap/Strong.h>
+#include "JSValueInWrappedObject.h"
+#include <JavaScriptCore/Strong.h>
+#include <wtf/Function.h>
+#include <wtf/IsoMalloc.h>
+#include <wtf/Scope.h>
+#include <wtf/ThreadSafeRefCounted.h>
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
-class DOMError;
+class DOMException;
 class Event;
 class IDBCursor;
 class IDBDatabase;
 class IDBIndex;
-class IDBKeyData;
 class IDBObjectStore;
 class IDBResultData;
 class IDBTransaction;
-class IDBValue;
-class ScopeGuard;
 class ThreadSafeDataBuffer;
 
 namespace IDBClient {
@@ -55,8 +62,14 @@ class IDBConnectionProxy;
 class IDBConnectionToServer;
 }
 
-class IDBRequest : public EventTargetWithInlineData, public IDBActiveDOMObject, public RefCounted<IDBRequest> {
+class IDBRequest : public EventTargetWithInlineData, public IDBActiveDOMObject, public ThreadSafeRefCounted<IDBRequest>, public CanMakeWeakPtr<IDBRequest> {
+    WTF_MAKE_ISO_ALLOCATED(IDBRequest);
 public:
+    enum class NullResultType {
+        Empty,
+        Undefined
+    };
+
     static Ref<IDBRequest> create(ScriptExecutionContext&, IDBObjectStore&, IDBTransaction&);
     static Ref<IDBRequest> create(ScriptExecutionContext&, IDBCursor&, IDBTransaction&);
     static Ref<IDBRequest> create(ScriptExecutionContext&, IDBIndex&, IDBTransaction&);
@@ -67,13 +80,15 @@ public:
 
     virtual ~IDBRequest();
 
-    using Result = Variant<RefPtr<IDBCursor>, RefPtr<IDBDatabase>, JSC::Strong<JSC::Unknown>>;
-    ExceptionOr<std::optional<Result>> result() const;
+    using Result = Variant<RefPtr<IDBCursor>, RefPtr<IDBDatabase>, IDBKeyData, Vector<IDBKeyData>, IDBGetResult, IDBGetAllResult, uint64_t, NullResultType>;
+    ExceptionOr<Result> result() const;
+    JSValueInWrappedObject& resultWrapper() { return m_resultWrapper; }
+    JSValueInWrappedObject& cursorWrapper() { return m_cursorWrapper; }
 
     using Source = Variant<RefPtr<IDBObjectStore>, RefPtr<IDBIndex>, RefPtr<IDBCursor>>;
-    const std::optional<Source>& source() const { return m_source; }
+    const Optional<Source>& source() const { return m_source; }
 
-    ExceptionOr<DOMError*> error() const;
+    ExceptionOr<DOMException*> error() const;
 
     RefPtr<IDBTransaction> transaction() const;
     
@@ -89,35 +104,35 @@ public:
 
     ScriptExecutionContext* scriptExecutionContext() const final { return ActiveDOMObject::scriptExecutionContext(); }
 
-    using RefCounted::ref;
-    using RefCounted::deref;
+    using ThreadSafeRefCounted::ref;
+    using ThreadSafeRefCounted::deref;
 
     void completeRequestAndDispatchEvent(const IDBResultData&);
 
     void setResult(const IDBKeyData&);
     void setResult(const Vector<IDBKeyData>&);
-    void setResult(const Vector<IDBValue>&);
+    void setResultToStructuredClone(const IDBGetResult&);
+    void setResult(const IDBGetAllResult&);
     void setResult(uint64_t);
-    void setResultToStructuredClone(const IDBValue&);
     void setResultToUndefined();
 
     void willIterateCursor(IDBCursor&);
     void didOpenOrIterateCursor(const IDBResultData&);
 
-    const IDBCursor* pendingCursor() const { return m_pendingCursor.get(); }
+    IDBCursor* pendingCursor() const { return m_pendingCursor ? m_pendingCursor.get() : nullptr; }
 
     void setSource(IDBCursor&);
     void setVersionChangeTransaction(IDBTransaction&);
 
     IndexedDB::RequestType requestType() const { return m_requestType; }
 
-    bool hasPendingActivity() const final;
+    void setTransactionOperationID(uint64_t transactionOperationID) { m_currentTransactionOperationID = transactionOperationID; }
 
 protected:
     IDBRequest(ScriptExecutionContext&, IDBClient::IDBConnectionProxy&);
 
     void enqueueEvent(Ref<Event>&&);
-    bool dispatchEvent(Event&) override;
+    void dispatchEvent(Event&) override;
 
     void setResult(Ref<IDBDatabase>&&);
 
@@ -128,9 +143,8 @@ protected:
     ReadyState m_readyState { ReadyState::Pending };
     RefPtr<IDBTransaction> m_transaction;
     bool m_shouldExposeTransactionToDOM { true };
-    RefPtr<DOMError> m_domError;
+    RefPtr<DOMException> m_domError;
     IndexedDB::RequestType m_requestType { IndexedDB::RequestType::Other };
-    bool m_contextStopped { false };
     Event* m_openDatabaseSuccessEvent { nullptr };
 
 private:
@@ -142,13 +156,15 @@ private:
 
     EventTargetInterface eventTargetInterface() const override;
 
+    // ActiveDOMObject.
+    bool virtualHasPendingActivity() const final;
     const char* activeDOMObjectName() const final;
-    bool canSuspendForDocumentSuspension() const final;
     void stop() final;
+
     virtual void cancelForStop();
 
-    void refEventTarget() final { RefCounted::ref(); }
-    void derefEventTarget() final { RefCounted::deref(); }
+    void refEventTarget() final { ref(); }
+    void derefEventTarget() final { deref(); }
     void uncaughtExceptionInEventHandler() final;
 
     virtual bool isOpenDBRequest() const { return false; }
@@ -156,13 +172,17 @@ private:
     void onError();
     void onSuccess();
 
+    void clearWrappers();
+
     IDBCursor* resultCursor();
 
     IDBError m_idbError;
     IDBResourceIdentifier m_resourceIdentifier;
 
-    std::optional<Result> m_result;
-    std::optional<Source> m_source;
+    JSValueInWrappedObject m_resultWrapper;
+    JSValueInWrappedObject m_cursorWrapper;
+    Result m_result;
+    Optional<Source> m_source;
 
     bool m_hasPendingActivity { true };
     IndexedDB::ObjectStoreRecordType m_requestedObjectStoreRecordType { IndexedDB::ObjectStoreRecordType::ValueOnly };
@@ -170,9 +190,12 @@ private:
 
     RefPtr<IDBCursor> m_pendingCursor;
 
-    std::unique_ptr<ScopeGuard> m_cursorRequestNotifier;
-
     Ref<IDBClient::IDBConnectionProxy> m_connectionProxy;
+
+    bool m_dispatchingEvent { false };
+    bool m_hasUncaughtException { false };
+
+    uint64_t m_currentTransactionOperationID { 0 };
 };
 
 } // namespace WebCore

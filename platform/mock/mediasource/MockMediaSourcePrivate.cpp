@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013 Apple Inc. All rights reserved.
+ * Copyright (C) 2013-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,59 +29,58 @@
 #if ENABLE(MEDIA_SOURCE)
 
 #include "ContentType.h"
+#include "Logging.h"
 #include "MediaSourcePrivateClient.h"
 #include "MockMediaPlayerMediaSource.h"
 #include "MockSourceBufferPrivate.h"
 
 namespace WebCore {
 
-RefPtr<MockMediaSourcePrivate> MockMediaSourcePrivate::create(MockMediaPlayerMediaSource* parent, MediaSourcePrivateClient* client)
+Ref<MockMediaSourcePrivate> MockMediaSourcePrivate::create(MockMediaPlayerMediaSource& parent, MediaSourcePrivateClient& client)
 {
-    RefPtr<MockMediaSourcePrivate> mediaSourcePrivate = adoptRef(new MockMediaSourcePrivate(parent, client));
-    client->setPrivateAndOpen(*mediaSourcePrivate);
-    return mediaSourcePrivate;
+    auto source = adoptRef(*new MockMediaSourcePrivate(parent, client));
+    client.setPrivateAndOpen(source.copyRef());
+    return source;
 }
 
-MockMediaSourcePrivate::MockMediaSourcePrivate(MockMediaPlayerMediaSource* parent, MediaSourcePrivateClient* client)
+MockMediaSourcePrivate::MockMediaSourcePrivate(MockMediaPlayerMediaSource& parent, MediaSourcePrivateClient& client)
     : m_player(parent)
     , m_client(client)
-    , m_isEnded(false)
-    , m_totalVideoFrames(0)
-    , m_droppedVideoFrames(0)
-    , m_corruptedVideoFrames(0)
+#if !RELEASE_LOG_DISABLED
+    , m_logger(m_player.mediaPlayerLogger())
+    , m_logIdentifier(m_player.mediaPlayerLogIdentifier())
+#endif
 {
+#if !RELEASE_LOG_DISABLED
+    m_client->setLogIdentifier(m_player.mediaPlayerLogIdentifier());
+#endif
 }
 
 MockMediaSourcePrivate::~MockMediaSourcePrivate()
 {
-    for (auto it = m_sourceBuffers.begin(), end = m_sourceBuffers.end(); it != end; ++it)
-        (*it)->clearMediaSource();
+    for (auto& buffer : m_sourceBuffers)
+        buffer->clearMediaSource();
 }
 
-MediaSourcePrivate::AddStatus MockMediaSourcePrivate::addSourceBuffer(const ContentType& contentType, RefPtr<SourceBufferPrivate>& outPrivate)
+MediaSourcePrivate::AddStatus MockMediaSourcePrivate::addSourceBuffer(const ContentType& contentType, bool, RefPtr<SourceBufferPrivate>& outPrivate)
 {
     MediaEngineSupportParameters parameters;
     parameters.isMediaSource = true;
     parameters.type = contentType;
-    if (MockMediaPlayerMediaSource::supportsType(parameters) == MediaPlayer::IsNotSupported)
-        return NotSupported;
+    if (MockMediaPlayerMediaSource::supportsType(parameters) == MediaPlayer::SupportsType::IsNotSupported)
+        return AddStatus::NotSupported;
 
     m_sourceBuffers.append(MockSourceBufferPrivate::create(this));
     outPrivate = m_sourceBuffers.last();
 
-    return Ok;
+    return AddStatus::Ok;
 }
 
 void MockMediaSourcePrivate::removeSourceBuffer(SourceBufferPrivate* buffer)
 {
     ASSERT(m_sourceBuffers.contains(buffer));
-
-    size_t pos = m_activeSourceBuffers.find(buffer);
-    if (pos != notFound)
-        m_activeSourceBuffers.remove(pos);
-
-    pos = m_sourceBuffers.find(buffer);
-    m_sourceBuffers.remove(pos);
+    m_activeSourceBuffers.removeFirst(buffer);
+    m_sourceBuffers.removeFirst(buffer);
 }
 
 MediaTime MockMediaSourcePrivate::duration()
@@ -94,15 +93,15 @@ std::unique_ptr<PlatformTimeRanges> MockMediaSourcePrivate::buffered()
     return m_client->buffered();
 }
 
-void MockMediaSourcePrivate::durationChanged()
+void MockMediaSourcePrivate::durationChanged(const MediaTime&)
 {
-    m_player->updateDuration(duration());
+    m_player.updateDuration(duration());
 }
 
 void MockMediaSourcePrivate::markEndOfStream(EndOfStreamStatus status)
 {
     if (status == EosNoError)
-        m_player->setNetworkState(MediaPlayer::Loaded);
+        m_player.setNetworkState(MediaPlayer::NetworkState::Loaded);
     m_isEnded = true;
 }
 
@@ -113,22 +112,22 @@ void MockMediaSourcePrivate::unmarkEndOfStream()
 
 MediaPlayer::ReadyState MockMediaSourcePrivate::readyState() const
 {
-    return m_player->readyState();
+    return m_player.readyState();
 }
 
 void MockMediaSourcePrivate::setReadyState(MediaPlayer::ReadyState readyState)
 {
-    m_player->setReadyState(readyState);
+    m_player.setReadyState(readyState);
 }
 
 void MockMediaSourcePrivate::waitForSeekCompleted()
 {
-    m_player->waitForSeekCompleted();
+    m_player.waitForSeekCompleted();
 }
 
 void MockMediaSourcePrivate::seekCompleted()
 {
-    m_player->seekCompleted();
+    m_player.seekCompleted();
 }
 
 void MockMediaSourcePrivate::sourceBufferPrivateDidChangeActiveState(MockSourceBufferPrivate* buffer, bool active)
@@ -136,11 +135,8 @@ void MockMediaSourcePrivate::sourceBufferPrivateDidChangeActiveState(MockSourceB
     if (active && !m_activeSourceBuffers.contains(buffer))
         m_activeSourceBuffers.append(buffer);
 
-    if (!active) {
-        size_t position = m_activeSourceBuffers.find(buffer);
-        if (position != notFound)
-            m_activeSourceBuffers.remove(position);
-    }
+    if (!active)
+        m_activeSourceBuffers.removeFirst(buffer);
 }
 
 static bool MockSourceBufferPrivateHasAudio(MockSourceBufferPrivate* sourceBuffer)
@@ -171,29 +167,38 @@ void MockMediaSourcePrivate::seekToTime(const MediaTime& time)
 MediaTime MockMediaSourcePrivate::seekToTime(const MediaTime& targetTime, const MediaTime& negativeThreshold, const MediaTime& positiveThreshold)
 {
     MediaTime seekTime = targetTime;
-    for (auto it = m_activeSourceBuffers.begin(), end = m_activeSourceBuffers.end(); it != end; ++it) {
-        MediaTime sourceSeekTime = (*it)->fastSeekTimeForMediaTime(targetTime, negativeThreshold, positiveThreshold);
+    for (auto& buffer : m_activeSourceBuffers) {
+        MediaTime sourceSeekTime = buffer->fastSeekTimeForMediaTime(targetTime, negativeThreshold, positiveThreshold);
         if (abs(targetTime - sourceSeekTime) > abs(targetTime - seekTime))
             seekTime = sourceSeekTime;
     }
 
-    for (auto it = m_activeSourceBuffers.begin(), end = m_activeSourceBuffers.end(); it != end; ++it)
-        (*it)->seekToTime(seekTime);
-    
     return seekTime;
 }
 
-std::optional<PlatformVideoPlaybackQualityMetrics> MockMediaSourcePrivate::videoPlaybackQualityMetrics()
+MediaTime MockMediaSourcePrivate::currentMediaTime() const
 {
-    return PlatformVideoPlaybackQualityMetrics(
+    return m_player.currentMediaTime();
+}
+
+Optional<VideoPlaybackQualityMetrics> MockMediaSourcePrivate::videoPlaybackQualityMetrics()
+{
+    return VideoPlaybackQualityMetrics {
         m_totalVideoFrames,
         m_droppedVideoFrames,
         m_corruptedVideoFrames,
-        m_totalFrameDelay.toDouble()
-    );
+        m_totalFrameDelay.toDouble(),
+        0,
+    };
 }
 
-};
-
+#if !RELEASE_LOG_DISABLED
+WTFLogChannel& MockMediaSourcePrivate::logChannel() const
+{
+    return LogMediaSource;
+}
 #endif
 
+}
+
+#endif

@@ -30,14 +30,14 @@
 #include "VideoSinkGStreamer.h"
 
 #if ENABLE(VIDEO) && USE(GSTREAMER)
-#include "GRefPtrGStreamer.h"
-#include "GStreamerUtilities.h"
+#include "GStreamerCommon.h"
 #include "IntSize.h"
 #include <glib.h>
 #include <gst/gst.h>
 #include <gst/video/gstvideometa.h>
 #include <wtf/Condition.h>
 #include <wtf/RunLoop.h>
+#include <wtf/glib/WTFGType.h>
 
 using namespace WebCore;
 
@@ -135,18 +135,15 @@ struct _WebKitVideoSinkPrivate {
 
     VideoRenderRequestScheduler scheduler;
     GstVideoInfo info;
-    GstCaps* currentCaps;
+    GstCaps* currentCaps { nullptr };
 };
 
 #define webkit_video_sink_parent_class parent_class
-G_DEFINE_TYPE_WITH_CODE(WebKitVideoSink, webkit_video_sink, GST_TYPE_VIDEO_SINK, GST_DEBUG_CATEGORY_INIT(webkitVideoSinkDebug, "webkitsink", 0, "webkit video sink"));
+WEBKIT_DEFINE_TYPE_WITH_CODE(WebKitVideoSink, webkit_video_sink, GST_TYPE_VIDEO_SINK, GST_DEBUG_CATEGORY_INIT(webkitVideoSinkDebug, "webkitsink", 0, "webkit video sink"))
 
-
-static void webkit_video_sink_init(WebKitVideoSink* sink)
+static void webkitVideoSinkConstructed(GObject* object)
 {
-    sink->priv = G_TYPE_INSTANCE_GET_PRIVATE(sink, WEBKIT_TYPE_VIDEO_SINK, WebKitVideoSinkPrivate);
-    g_object_set(GST_BASE_SINK(sink), "enable-last-sample", FALSE, nullptr);
-    new (sink->priv) WebKitVideoSinkPrivate();
+    g_object_set(GST_BASE_SINK(object), "enable-last-sample", FALSE, nullptr);
 }
 
 static void webkitVideoSinkRepaintRequested(WebKitVideoSink* sink, GstSample* sample)
@@ -176,12 +173,6 @@ static GstFlowReturn webkitVideoSinkRender(GstBaseSink* baseSink, GstBuffer* buf
 {
     WebKitVideoSink* sink = WEBKIT_VIDEO_SINK(baseSink);
     return sink->priv->scheduler.requestRender(sink, buffer) ? GST_FLOW_OK : GST_FLOW_ERROR;
-}
-
-static void webkitVideoSinkFinalize(GObject* object)
-{
-    WEBKIT_VIDEO_SINK(object)->priv->~WebKitVideoSinkPrivate();
-    G_OBJECT_CLASS(parent_class)->finalize(object);
 }
 
 static gboolean webkitVideoSinkUnlock(GstBaseSink* baseSink)
@@ -286,9 +277,7 @@ static void webkit_video_sink_class_init(WebKitVideoSinkClass* klass)
     gst_element_class_add_pad_template(elementClass, gst_static_pad_template_get(&s_sinkTemplate));
     gst_element_class_set_metadata(elementClass, "WebKit video sink", "Sink/Video", "Sends video data from a GStreamer pipeline to WebKit", "Igalia, Alp Toker <alp@atoker.com>");
 
-    g_type_class_add_private(klass, sizeof(WebKitVideoSinkPrivate));
-
-    gobjectClass->finalize = webkitVideoSinkFinalize;
+    gobjectClass->constructed = webkitVideoSinkConstructed;
 
     baseSinkClass->unlock = webkitVideoSinkUnlock;
     baseSinkClass->unlock_stop = webkitVideoSinkUnlockStop;

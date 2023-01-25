@@ -27,26 +27,21 @@
 #include "BlobDataFileReference.h"
 
 #include "File.h"
-#include "FileMetadata.h"
+#include <wtf/FileMetadata.h>
+#include <wtf/FileSystem.h>
 
 namespace WebCore {
 
-BlobDataFileReference::BlobDataFileReference(const String& path)
+BlobDataFileReference::BlobDataFileReference(const String& path, const String& replacementPath)
     : m_path(path)
-#if ENABLE(FILE_REPLACEMENT)
-    , m_replacementShouldBeGenerated(false)
-#endif
-    , m_size(0)
-    , m_expectedModificationTime(invalidFileTime())
+    , m_replacementPath(replacementPath)
 {
 }
 
 BlobDataFileReference::~BlobDataFileReference()
 {
-#if ENABLE(FILE_REPLACEMENT)
     if (!m_replacementPath.isNull())
-        deleteFile(m_replacementPath);
-#endif
+        FileSystem::deleteFile(m_replacementPath);
 }
 
 const String& BlobDataFileReference::path()
@@ -54,10 +49,9 @@ const String& BlobDataFileReference::path()
 #if ENABLE(FILE_REPLACEMENT)
     if (m_replacementShouldBeGenerated)
         generateReplacementFile();
-
+#endif
     if (!m_replacementPath.isNull())
         return m_replacementPath;
-#endif
 
     return m_path;
 }
@@ -72,15 +66,14 @@ unsigned long long BlobDataFileReference::size()
     return m_size;
 }
 
-double BlobDataFileReference::expectedModificationTime()
+Optional<WallTime> BlobDataFileReference::expectedModificationTime()
 {
 #if ENABLE(FILE_REPLACEMENT)
     // We do not currently track modifications for generated files, because we have a snapshot.
     // Unfortunately, this is inconsistent with regular file handling - File objects should be invalidated when underlying files change.
     if (m_replacementShouldBeGenerated || !m_replacementPath.isNull())
-        return invalidFileTime();
+        return WTF::nullopt;
 #endif
-
     return m_expectedModificationTime;
 }
 
@@ -95,18 +88,25 @@ void BlobDataFileReference::startTrackingModifications()
 #endif
 
     // FIXME: Some platforms provide better ways to listen for file system object changes, consider using these.
-    FileMetadata metadata;
-    if (!getFileMetadata(m_path, metadata))
+    auto metadata = FileSystem::fileMetadataFollowingSymlinks(m_path);
+    if (!metadata)
         return;
 
-    m_expectedModificationTime = metadata.modificationTime;
+    m_expectedModificationTime = metadata.value().modificationTime;
 
 #if ENABLE(FILE_REPLACEMENT)
     if (m_replacementShouldBeGenerated)
         return;
 #endif
 
-    m_size = metadata.length;
+    // This is a registered blob with a replacement file. Get the Metadata of the replacement file.
+    if (!m_replacementPath.isNull()) {
+        metadata = FileSystem::fileMetadataFollowingSymlinks(m_replacementPath);
+        if (!metadata)
+            return;
+    }
+
+    m_size = metadata.value().length;
 }
 
 void BlobDataFileReference::prepareForFileAccess()

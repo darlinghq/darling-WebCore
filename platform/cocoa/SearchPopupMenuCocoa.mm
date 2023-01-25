@@ -26,7 +26,7 @@
 #import "config.h"
 #import "SearchPopupMenuCocoa.h"
 
-using namespace std::chrono;
+#import <wtf/cocoa/VectorCocoa.h>
 
 namespace WebCore {
 
@@ -54,16 +54,15 @@ static RetainPtr<NSMutableDictionary> readSearchFieldRecentSearchesPlist()
     return adoptNS([[NSMutableDictionary alloc] initWithContentsOfFile:searchFieldRecentSearchesPlistPath()]);
 }
 
-static system_clock::time_point toSystemClockTime(NSDate *date)
+static WallTime toSystemClockTime(NSDate *date)
 {
     ASSERT(date);
-
-    return system_clock::time_point(duration_cast<system_clock::duration>(duration<double>(date.timeIntervalSince1970)));
+    return WallTime::fromRawSeconds(date.timeIntervalSince1970);
 }
 
-static NSDate *toNSDateFromSystemClock(system_clock::time_point time)
+static NSDate *toNSDateFromSystemClock(WallTime time)
 {
-    return [NSDate dateWithTimeIntervalSince1970:duration_cast<duration<double>>(time.time_since_epoch()).count()];
+    return [NSDate dateWithTimeIntervalSince1970:time.secondsSinceEpoch().seconds()];
 }
 
 static NSMutableArray *typeCheckedRecentSearchesArray(NSMutableDictionary *itemsDictionary, NSString *name)
@@ -146,6 +145,7 @@ void saveRecentSearches(const String& name, const Vector<RecentSearch>& searchIt
 
     RetainPtr<NSDictionary> recentSearchesPlist = readSearchFieldRecentSearchesPlist();
     RetainPtr<NSMutableDictionary> itemsDictionary = [recentSearchesPlist objectForKey:itemsKey];
+
     // The NSMutableDictionary method we use to read the property list guarantees we get only
     // mutable containers, but it does not guarantee the file has a dictionary as expected.
     if (![itemsDictionary isKindOfClass:[NSDictionary class]]) {
@@ -156,10 +156,9 @@ void saveRecentSearches(const String& name, const Vector<RecentSearch>& searchIt
     if (searchItems.isEmpty())
         [itemsDictionary removeObjectForKey:name];
     else {
-        RetainPtr<NSMutableArray> items = adoptNS([[NSMutableArray alloc] initWithCapacity:searchItems.size()]);
-        for (auto& searchItem : searchItems)
-            [items addObject:adoptNS([[NSDictionary alloc] initWithObjectsAndKeys:searchItem.string, searchStringKey, toNSDateFromSystemClock(searchItem.time), dateKey, nil]).get()];
-
+        auto items = createNSArray(searchItems, [] (auto& item) {
+            return adoptNS([[NSDictionary alloc] initWithObjectsAndKeys:item.string, searchStringKey, toNSDateFromSystemClock(item.time), dateKey, nil]);
+        });
         [itemsDictionary setObject:adoptNS([[NSDictionary alloc] initWithObjectsAndKeys:items.get(), searchesKey, nil]).get() forKey:name];
     }
 
@@ -200,7 +199,7 @@ Vector<RecentSearch> loadRecentSearches(const String& name)
     return searchItems;
 }
 
-void removeRecentlyModifiedRecentSearches(std::chrono::system_clock::time_point oldestTimeToRemove)
+void removeRecentlyModifiedRecentSearches(WallTime oldestTimeToRemove)
 {
     NSDate *date = toNSDateFromSystemClock(oldestTimeToRemove);
     auto recentSearchesPlist = typeCheckedRecentSearchesRemovingRecentSearchesAddedAfterDate(date);

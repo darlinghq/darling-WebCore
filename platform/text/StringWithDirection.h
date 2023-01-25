@@ -46,11 +46,8 @@ namespace WebCore {
 // to the string.
 
 struct StringWithDirection {
-    StringWithDirection() = default;
-    StringWithDirection(const String& string, TextDirection direction) : string { string }, direction { direction } { }
-    StringWithDirection(String&& string, TextDirection direction) : string { WTFMove(string) }, direction { direction } { }
     String string;
-    TextDirection direction { LTR };
+    TextDirection direction { TextDirection::LTR };
 };
 
 inline bool operator==(const StringWithDirection& a, const StringWithDirection& b)

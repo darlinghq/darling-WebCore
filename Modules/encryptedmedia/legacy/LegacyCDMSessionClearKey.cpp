@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2015-2019 Apple Inc. All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,42 +26,36 @@
 #include "config.h"
 #include "LegacyCDMSessionClearKey.h"
 
-#include "JSMainThreadExecState.h"
+#include "JSExecState.h"
 #include "Logging.h"
 #include "TextEncoding.h"
 #include "WebKitMediaKeyError.h"
-#include <runtime/JSGlobalObject.h>
-#include <runtime/JSLock.h>
-#include <runtime/JSONObject.h>
-#include <runtime/VM.h>
-#include <wtf/NeverDestroyed.h>
+#include <JavaScriptCore/JSGlobalObjectInlines.h>
+#include <JavaScriptCore/JSLock.h>
+#include <JavaScriptCore/JSONObject.h>
+#include <JavaScriptCore/VM.h>
 #include <wtf/UUID.h>
 #include <wtf/text/Base64.h>
 
 #if ENABLE(LEGACY_ENCRYPTED_MEDIA)
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
 static VM& clearKeyVM()
 {
-    static NeverDestroyed<RefPtr<VM>> vm;
-    if (!vm.get())
-        vm.get() = VM::create();
-
-    return *vm.get();
+    static VM& vm = VM::create().leakRef();
+    return vm;
 }
 
-CDMSessionClearKey::CDMSessionClearKey(CDMSessionClient* client)
+CDMSessionClearKey::CDMSessionClearKey(LegacyCDMSessionClient* client)
     : m_client(client)
     , m_sessionId(createCanonicalUUIDString())
 {
 }
 
-CDMSessionClearKey::~CDMSessionClearKey()
-{
-}
+CDMSessionClearKey::~CDMSessionClearKey() = default;
 
 RefPtr<Uint8Array> CDMSessionClearKey::generateKeyRequest(const String& mimeType, Uint8Array* initData, String& destinationURL, unsigned short& errorCode, uint32_t& systemCode)
 {
@@ -107,15 +101,15 @@ bool CDMSessionClearKey::update(Uint8Array* rawKeysData, RefPtr<Uint8Array>& nex
         JSLockHolder lock(vm);
         auto scope = DECLARE_THROW_SCOPE(vm);
         auto* globalObject = JSGlobalObject::create(vm, JSGlobalObject::createStructure(vm, jsNull()));
-        auto& state = *globalObject->globalExec();
+        auto& lexicalGlobalObject = *globalObject;
 
-        auto keysDataValue = JSONParse(&state, rawKeysString);
+        auto keysDataValue = JSONParse(&lexicalGlobalObject, rawKeysString);
         if (scope.exception() || !keysDataValue.isObject()) {
             LOG(Media, "CDMSessionClearKey::update(%p) - failed: invalid JSON", this);
             break;
         }
 
-        auto keysArrayValue = asObject(keysDataValue)->get(&state, Identifier::fromString(&state, "keys"));
+        auto keysArrayValue = asObject(keysDataValue)->get(&lexicalGlobalObject, Identifier::fromString(vm, "keys"));
         if (scope.exception() || !isJSArray(keysArrayValue)) {
             LOG(Media, "CDMSessionClearKey::update(%p) - failed: keys array missing or empty", this);
             break;
@@ -130,7 +124,7 @@ bool CDMSessionClearKey::update(Uint8Array* rawKeysData, RefPtr<Uint8Array>& nex
 
         bool foundValidKey = false;
         for (unsigned i = 0; i < length; ++i) {
-            auto keyValue = keysArray->getIndex(&state, i);
+            auto keyValue = keysArray->getIndex(&lexicalGlobalObject, i);
 
             if (scope.exception() || !keyValue.isObject()) {
                 LOG(Media, "CDMSessionClearKey::update(%p) - failed: null keyDictionary", this);
@@ -139,12 +133,12 @@ bool CDMSessionClearKey::update(Uint8Array* rawKeysData, RefPtr<Uint8Array>& nex
 
             auto keyObject = asObject(keyValue);
 
-            auto getStringProperty = [&scope, &state, &keyObject](const char* name) -> String {
-                auto value = keyObject->get(&state, Identifier::fromString(&state, name));
+            auto getStringProperty = [&scope, &lexicalGlobalObject, &keyObject, &vm](const char* name) -> String {
+                auto value = keyObject->get(&lexicalGlobalObject, Identifier::fromString(vm, name));
                 if (scope.exception() || !value.isString())
                     return { };
 
-                auto string = asString(value)->value(&state);
+                auto string = asString(value)->value(&lexicalGlobalObject);
                 if (scope.exception())
                     return { };
                 
@@ -200,7 +194,7 @@ RefPtr<ArrayBuffer> CDMSessionClearKey::cachedKeyForKeyID(const String& keyId) c
         return nullptr;
 
     auto keyData = m_cachedKeys.get(keyId);
-    RefPtr<Uint8Array> keyDataArray = Uint8Array::create(keyData.data(), keyData.size());
+    auto keyDataArray = Uint8Array::create(keyData.data(), keyData.size());
     return keyDataArray->unsharedBuffer();
 }
 

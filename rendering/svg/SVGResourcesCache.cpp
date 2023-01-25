@@ -26,20 +26,16 @@
 
 namespace WebCore {
 
-SVGResourcesCache::SVGResourcesCache()
-{
-}
+SVGResourcesCache::SVGResourcesCache() = default;
 
-SVGResourcesCache::~SVGResourcesCache()
-{
-}
+SVGResourcesCache::~SVGResourcesCache() = default;
 
 void SVGResourcesCache::addResourcesFromRenderer(RenderElement& renderer, const RenderStyle& style)
 {
     ASSERT(!m_cache.contains(&renderer));
 
     // Build a list of all resources associated with the passed RenderObject
-    auto newResources = std::make_unique<SVGResources>();
+    auto newResources = makeUnique<SVGResources>();
     if (!newResources->buildCachedResources(renderer, style))
         return;
 
@@ -101,11 +97,11 @@ static inline bool rendererCanHaveResources(RenderObject& renderer)
 
 void SVGResourcesCache::clientStyleChanged(RenderElement& renderer, StyleDifference diff, const RenderStyle& newStyle)
 {
-    if (diff == StyleDifferenceEqual || !renderer.parent())
+    if (diff == StyleDifference::Equal || !renderer.parent())
         return;
 
     // In this case the proper SVGFE*Element will decide whether the modified CSS properties require a relayout or repaint.
-    if (renderer.isSVGResourceFilterPrimitive() && (diff == StyleDifferenceRepaint || diff == StyleDifferenceRepaintIfTextOrBorderOrOutline))
+    if (renderer.isSVGResourceFilterPrimitive() && (diff == StyleDifference::Repaint || diff == StyleDifference::RepaintIfTextOrBorderOrOutline))
         return;
 
     // Dynamic changes of CSS properties like 'clip-path' may require us to recompute the associated resources for a renderer.
@@ -120,7 +116,7 @@ void SVGResourcesCache::clientStyleChanged(RenderElement& renderer, StyleDiffere
     RenderSVGResource::markForLayoutAndParentResourceInvalidation(renderer, false);
 
     if (renderer.element() && !renderer.element()->isSVGElement())
-        renderer.element()->invalidateStyleAndLayerComposition();
+        renderer.element()->invalidateStyle();
 }
 
 void SVGResourcesCache::clientWasAddedToTree(RenderObject& renderer)
@@ -165,13 +161,35 @@ void SVGResourcesCache::resourceDestroyed(RenderSVGResourceContainer& resource)
     cache.removeResourcesFromRenderer(resource);
 
     for (auto& it : cache.m_cache) {
-        it.value->resourceDestroyed(resource);
-
-        // Mark users of destroyed resources as pending resolution based on the id of the old resource.
-        Element& resourceElement = resource.element();
-        Element* clientElement = it.key->element();
-        clientElement->document().accessSVGExtensions().addPendingResource(resourceElement.getIdAttribute(), clientElement);
+        if (it.value->resourceDestroyed(resource)) {
+            // Mark users of destroyed resources as pending resolution based on the id of the old resource.
+            auto& clientElement = *it.key->element();
+            clientElement.document().accessSVGExtensions().addPendingResource(resource.element().getIdAttribute(), clientElement);
+        }
     }
+}
+
+SVGResourcesCache::SetStyleForScope::SetStyleForScope(RenderElement& renderer, const RenderStyle& scopedStyle, const RenderStyle& newStyle)
+    : m_renderer(renderer)
+    , m_scopedStyle(scopedStyle)
+    , m_needsNewStyle(scopedStyle != newStyle && rendererCanHaveResources(renderer))
+{
+    setStyle(newStyle);
+}
+
+SVGResourcesCache::SetStyleForScope::~SetStyleForScope()
+{
+    setStyle(m_scopedStyle);
+}
+
+void SVGResourcesCache::SetStyleForScope::setStyle(const RenderStyle& style)
+{
+    if (!m_needsNewStyle)
+        return;
+
+    auto& cache = resourcesCacheFromRenderer(m_renderer);
+    cache.removeResourcesFromRenderer(m_renderer);
+    cache.addResourcesFromRenderer(m_renderer, style);
 }
 
 }

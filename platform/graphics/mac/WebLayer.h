@@ -23,12 +23,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef WebLayer_h
-#define WebLayer_h
-
 #include <QuartzCore/QuartzCore.h>
 
-#ifdef __OBJC__
 @interface WebSimpleLayer : CALayer {
     BOOL _isRenderingInContext;
 }
@@ -37,6 +33,3 @@
 
 @interface WebLayer : WebSimpleLayer
 @end
-#endif
-
-#endif // WebLayer_h

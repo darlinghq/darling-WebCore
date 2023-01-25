@@ -27,10 +27,53 @@
 
 #if USE(LIBWEBRTC)
 
+#include "EventNames.h"
 #include "RTCDataChannel.h"
+#include "RTCDataChannelEvent.h"
 #include <wtf/MainThread.h>
 
 namespace WebCore {
+
+webrtc::DataChannelInit LibWebRTCDataChannelHandler::fromRTCDataChannelInit(const RTCDataChannelInit& options)
+{
+    webrtc::DataChannelInit init;
+    if (options.ordered)
+        init.ordered = *options.ordered;
+    if (options.maxPacketLifeTime)
+        init.maxRetransmitTime = *options.maxPacketLifeTime;
+    if (options.maxRetransmits)
+        init.maxRetransmits = *options.maxRetransmits;
+    init.protocol = options.protocol.utf8().data();
+    if (options.negotiated)
+        init.negotiated = *options.negotiated;
+    if (options.id)
+        init.id = *options.id;
+    return init;
+}
+
+static inline String fromStdString(const std::string& value)
+{
+    return String::fromUTF8(value.data(), value.length());
+}
+
+Ref<RTCDataChannelEvent> LibWebRTCDataChannelHandler::channelEvent(Document& document, rtc::scoped_refptr<webrtc::DataChannelInterface>&& dataChannel)
+{
+    auto protocol = dataChannel->protocol();
+    auto label = dataChannel->label();
+
+    RTCDataChannelInit init;
+    init.ordered = dataChannel->ordered();
+    init.maxPacketLifeTime = dataChannel->maxRetransmitTime();
+    init.maxRetransmits = dataChannel->maxRetransmits();
+    init.protocol = fromStdString(protocol);
+    init.negotiated = dataChannel->negotiated();
+    init.id = dataChannel->id();
+
+    auto handler =  makeUnique<LibWebRTCDataChannelHandler>(WTFMove(dataChannel));
+    auto channel = RTCDataChannel::create(document, WTFMove(handler), fromStdString(label), WTFMove(init));
+
+    return RTCDataChannelEvent::create(eventNames().datachannelEvent, Event::CanBubble::No, Event::IsCancelable::No, WTFMove(channel));
+}
 
 LibWebRTCDataChannelHandler::~LibWebRTCDataChannelHandler()
 {
@@ -43,16 +86,17 @@ void LibWebRTCDataChannelHandler::setClient(RTCDataChannelHandlerClient& client)
     ASSERT(!m_client);
     m_client = &client;
     m_channel->RegisterObserver(this);
+    checkState();
 }
 
-bool LibWebRTCDataChannelHandler::sendStringData(const String& text)
+bool LibWebRTCDataChannelHandler::sendStringData(const CString& utf8Text)
 {
-    return m_channel->Send({rtc::CopyOnWriteBuffer(text.utf8().data(), text.length()), false});
+    return m_channel->Send({ rtc::CopyOnWriteBuffer(utf8Text.data(), utf8Text.length()), false });
 }
 
 bool LibWebRTCDataChannelHandler::sendRawData(const char* data, size_t length)
 {
-    return m_channel->Send({rtc::CopyOnWriteBuffer(data, length), true});
+    return m_channel->Send({ rtc::CopyOnWriteBuffer(data, length), true });
 }
 
 void LibWebRTCDataChannelHandler::close()
@@ -68,7 +112,11 @@ void LibWebRTCDataChannelHandler::OnStateChange()
 {
     if (!m_client)
         return;
+    checkState();
+}
 
+void LibWebRTCDataChannelHandler::checkState()
+{
     RTCDataChannelState state;
     switch (m_channel->state()) {
     case webrtc::DataChannelInterface::kConnecting:
@@ -96,24 +144,20 @@ void LibWebRTCDataChannelHandler::OnMessage(const webrtc::DataBuffer& buffer)
 
     std::unique_ptr<webrtc::DataBuffer> protectedBuffer(new webrtc::DataBuffer(buffer));
     callOnMainThread([protectedClient = makeRef(*m_client), buffer = WTFMove(protectedBuffer)] {
-        // FIXME: Ensure this is correct by adding some tests with non-ASCII characters.
-        const char* data = reinterpret_cast<const char*>(buffer->data.data());
+        const char* data = reinterpret_cast<const char*>(buffer->data.data<char>());
         if (buffer->binary)
             protectedClient->didReceiveRawData(data, buffer->size());
         else
-            protectedClient->didReceiveStringData(String(data, buffer->size()));
+            protectedClient->didReceiveStringData(String::fromUTF8(data, buffer->size()));
     });
 }
 
-void LibWebRTCDataChannelHandler::OnBufferedAmountChange(uint64_t previousAmount)
+void LibWebRTCDataChannelHandler::OnBufferedAmountChange(uint64_t amount)
 {
     if (!m_client)
         return;
 
-    if (previousAmount <= m_channel->buffered_amount())
-        return;
-
-    callOnMainThread([protectedClient = makeRef(*m_client), amount = m_channel->buffered_amount()] {
+    callOnMainThread([protectedClient = makeRef(*m_client), amount] {
         protectedClient->bufferedAmountIsDecreasing(static_cast<size_t>(amount));
     });
 }

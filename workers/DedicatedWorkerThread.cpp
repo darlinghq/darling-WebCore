@@ -38,25 +38,23 @@
 
 namespace WebCore {
 
-DedicatedWorkerThread::DedicatedWorkerThread(const URL& url, const String& identifier, const String& userAgent, const String& sourceCode, WorkerLoaderProxy& workerLoaderProxy, WorkerObjectProxy& workerObjectProxy, WorkerThreadStartMode startMode, const ContentSecurityPolicyResponseHeaders& contentSecurityPolicyResponseHeaders, bool shouldBypassMainWorldContentSecurityPolicy, const SecurityOrigin& topOrigin, MonotonicTime timeOrigin, IDBClient::IDBConnectionProxy* connectionProxy, SocketProvider* socketProvider, JSC::RuntimeFlags runtimeFlags)
-    : WorkerThread(url, identifier, userAgent, sourceCode, workerLoaderProxy, workerObjectProxy, startMode, contentSecurityPolicyResponseHeaders, shouldBypassMainWorldContentSecurityPolicy, topOrigin, timeOrigin, connectionProxy, socketProvider, runtimeFlags)
+DedicatedWorkerThread::DedicatedWorkerThread(const WorkerParameters& params, const String& sourceCode, WorkerLoaderProxy& workerLoaderProxy, WorkerDebuggerProxy& workerDebuggerProxy, WorkerObjectProxy& workerObjectProxy, WorkerThreadStartMode startMode, const SecurityOrigin& topOrigin, IDBClient::IDBConnectionProxy* connectionProxy, SocketProvider* socketProvider, JSC::RuntimeFlags runtimeFlags)
+    : WorkerThread(params, sourceCode, workerLoaderProxy, workerDebuggerProxy, workerObjectProxy, startMode, topOrigin, connectionProxy, socketProvider, runtimeFlags)
     , m_workerObjectProxy(workerObjectProxy)
 {
 }
 
-DedicatedWorkerThread::~DedicatedWorkerThread()
-{
-}
+DedicatedWorkerThread::~DedicatedWorkerThread() = default;
 
-Ref<WorkerGlobalScope> DedicatedWorkerThread::createWorkerGlobalScope(const URL& url, const String& identifier, const String& userAgent, const ContentSecurityPolicyResponseHeaders& contentSecurityPolicyResponseHeaders, bool shouldBypassMainWorldContentSecurityPolicy, Ref<SecurityOrigin>&& topOrigin, MonotonicTime timeOrigin)
+Ref<WorkerGlobalScope> DedicatedWorkerThread::createWorkerGlobalScope(const WorkerParameters& params, Ref<SecurityOrigin>&& origin, Ref<SecurityOrigin>&& topOrigin)
 {
-    return DedicatedWorkerGlobalScope::create(url, identifier, userAgent, *this, contentSecurityPolicyResponseHeaders, shouldBypassMainWorldContentSecurityPolicy, WTFMove(topOrigin), timeOrigin, idbConnectionProxy(), socketProvider());
+    return DedicatedWorkerGlobalScope::create(params, WTFMove(origin), *this, WTFMove(topOrigin), idbConnectionProxy(), socketProvider());
 }
 
 void DedicatedWorkerThread::runEventLoop()
 {
     // Notify the parent object of our current active state before calling the superclass to run the event loop.
-    m_workerObjectProxy.reportPendingActivity(workerGlobalScope()->hasPendingActivity());
+    m_workerObjectProxy.reportPendingActivity(globalScope()->hasPendingActivity());
     WorkerThread::runEventLoop();
 }
 

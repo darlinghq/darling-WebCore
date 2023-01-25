@@ -26,67 +26,49 @@
 #include "config.h"
 #include "NativeImage.h"
 
-#include "Color.h"
-#include "FloatRect.h"
+#include "Direct2DOperations.h"
 #include "GeometryUtilities.h"
-#include "GraphicsContext.h"
-#include "IntSize.h"
 #include "NotImplemented.h"
+#include "PlatformContextDirect2D.h"
 #include <d2d1.h>
+#include <wincodec.h>
 
 namespace WebCore {
 
-IntSize nativeImageSize(const NativeImagePtr& image)
+static IWICImagingFactory* imagingFactory()
 {
-    return image ? IntSize(image->GetSize()) : IntSize();
+    static IWICImagingFactory* imagingFactory = nullptr;
+    if (!imagingFactory) {
+        HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&imagingFactory));
+        RELEASE_ASSERT(SUCCEEDED(hr));
+    }
+
+    return imagingFactory;
 }
 
-bool nativeImageHasAlpha(const NativeImagePtr& image)
+IntSize NativeImage::size() const
 {
-    if (!image)
-        return false;
-
-    auto alphaMode = image->GetPixelFormat().alphaMode;
-    return (alphaMode >= D2D1_ALPHA_MODE_PREMULTIPLIED) && (alphaMode <= D2D1_ALPHA_MODE_STRAIGHT);
+    return m_platformImage->GetPixelSize();
 }
 
-Color nativeImageSinglePixelSolidColor(const NativeImagePtr& image)
+bool NativeImage::hasAlpha() const
 {
-    if (!image || nativeImageSize(image) != IntSize(1, 1))
+    D2D1_PIXEL_FORMAT pixelFormat = m_platformImage->GetPixelFormat();
+    return pixelFormat.alphaMode != D2D1_ALPHA_MODE_IGNORE;
+}
+
+Color NativeImage::singlePixelSolidColor() const
+{
+    if (size() != IntSize(1, 1))
         return Color();
 
     notImplemented();
-
     return Color();
 }
 
-void drawNativeImage(const NativeImagePtr& image, GraphicsContext& context, const FloatRect& destRect, const FloatRect& srcRect, const IntSize& srcSize, CompositeOperator compositeOp, BlendMode blendMode, const ImageOrientation& orientation)
-{
-    auto platformContext = context.platformContext();
-
-    // Subsampling may have given us an image that is smaller than size().
-    IntSize subsampledImageSize = nativeImageSize(image);
-
-    // srcRect is in the coordinates of the unsubsampled image, so we have to map it to the subsampled image.
-    FloatRect adjustedSrcRect = srcRect;
-    if (subsampledImageSize != srcSize)
-        adjustedSrcRect = mapRect(srcRect, FloatRect({ }, srcSize), FloatRect({ }, subsampledImageSize));
-
-    float opacity = 1.0f;
-
-    platformContext->DrawBitmap(image.get(), destRect, opacity, D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, adjustedSrcRect);
-    context.flush();
-}
-
-void clearNativeImageSubimages(const NativeImagePtr& image)
+void NativeImage::clearSubimages()
 {
     notImplemented();
-
-#if CACHE_SUBIMAGES
-    if (image)
-        subimageCache().clearImage(image.get());
-#endif
 }
-
 
 }

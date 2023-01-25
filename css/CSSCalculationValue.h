@@ -31,7 +31,12 @@
 #pragma once
 
 #include "CSSPrimitiveValue.h"
+#include "CSSPropertyNames.h"
 #include "CalculationValue.h"
+
+namespace WTF {
+class TextStream;
+}
 
 namespace WebCore {
 
@@ -39,48 +44,55 @@ class CSSParserTokenRange;
 class CSSToLengthConversionData;
 class RenderStyle;
 
-enum CalculationCategory {
-    CalcNumber = 0,
-    CalcLength,
-    CalcPercent,
-    CalcPercentNumber,
-    CalcPercentLength,
-    CalcAngle,
-    CalcTime,
-    CalcFrequency,
-    CalcOther
+// FIXME: Unify with CSSPrimitiveValue::UnitCategory.
+enum class CalculationCategory : uint8_t {
+    Number = 0,
+    Length,
+    Percent,
+    PercentNumber,
+    PercentLength,
+    Angle,
+    Time,
+    Frequency,
+    // TODO:
+    // Flex,
+    // Resolution
+    Other
 };
 
 class CSSCalcExpressionNode : public RefCounted<CSSCalcExpressionNode> {
 public:
     enum Type {
         CssCalcPrimitiveValue = 1,
-        CssCalcOperation
+        CssCalcOperation,
+        CssCalcNegate,
+        CssCalcInvert,
     };
 
-    virtual ~CSSCalcExpressionNode() { }
+    virtual ~CSSCalcExpressionNode() = default;
     virtual bool isZero() const = 0;
     virtual std::unique_ptr<CalcExpressionNode> createCalcExpression(const CSSToLengthConversionData&) const = 0;
-    virtual double doubleValue() const = 0;
+    virtual double doubleValue(CSSUnitType) const = 0;
     virtual double computeLengthPx(const CSSToLengthConversionData&) const = 0;
-    virtual String customCSSText() const = 0;
-    virtual bool equals(const CSSCalcExpressionNode& other) const { return m_category == other.m_category && m_isInteger == other.m_isInteger; }
+    virtual bool equals(const CSSCalcExpressionNode& other) const { return m_category == other.m_category; }
     virtual Type type() const = 0;
-    virtual CSSPrimitiveValue::UnitType primitiveType() const = 0;
+    virtual CSSUnitType primitiveType() const = 0;
+
+    virtual void collectDirectComputationalDependencies(HashSet<CSSPropertyID>&) const = 0;
+    virtual void collectDirectRootComputationalDependencies(HashSet<CSSPropertyID>&) const = 0;
 
     CalculationCategory category() const { return m_category; }
-    bool isInteger() const { return m_isInteger; }
+
+    virtual void dump(TextStream&) const = 0;
 
 protected:
-    CSSCalcExpressionNode(CalculationCategory category, bool isInteger)
+    CSSCalcExpressionNode(CalculationCategory category)
         : m_category(category)
-        , m_isInteger(isInteger)
     {
     }
 
 private:
     CalculationCategory m_category;
-    bool m_isInteger;
 };
 
 class CSSCalcValue final : public CSSValue {
@@ -90,18 +102,22 @@ public:
     static RefPtr<CSSCalcValue> create(const CalculationValue&, const RenderStyle&);
 
     CalculationCategory category() const { return m_expression->category(); }
-    bool isInt() const { return m_expression->isInteger(); }
     double doubleValue() const;
-    bool isPositive() const { return m_expression->doubleValue() > 0; }
-    bool isNegative() const { return m_expression->doubleValue() < 0; }
     double computeLengthPx(const CSSToLengthConversionData&) const;
-    unsigned short primitiveType() const { return m_expression->primitiveType(); }
+    CSSUnitType primitiveType() const { return m_expression->primitiveType(); }
 
     Ref<CalculationValue> createCalculationValue(const CSSToLengthConversionData&) const;
     void setPermittedValueRange(ValueRange);
 
+    void collectDirectComputationalDependencies(HashSet<CSSPropertyID>&) const;
+    void collectDirectRootComputationalDependencies(HashSet<CSSPropertyID>&) const;
+
     String customCSSText() const;
     bool equals(const CSSCalcValue&) const;
+    
+    static bool isCalcFunction(CSSValueID);
+
+    void dump(TextStream&) const;
 
 private:
     CSSCalcValue(Ref<CSSCalcExpressionNode>&&, bool shouldClampToNonNegative);
@@ -130,6 +146,24 @@ inline void CSSCalcValue::setPermittedValueRange(ValueRange range)
     m_shouldClampToNonNegative = range != ValueRangeAll;
 }
 
+inline void CSSCalcValue::collectDirectComputationalDependencies(HashSet<CSSPropertyID>& values) const
+{
+    m_expression->collectDirectComputationalDependencies(values);
+}
+
+inline void CSSCalcValue::collectDirectRootComputationalDependencies(HashSet<CSSPropertyID>& values) const
+{
+    m_expression->collectDirectRootComputationalDependencies(values);
+}
+
+WTF::TextStream& operator<<(WTF::TextStream&, CalculationCategory);
+WTF::TextStream& operator<<(WTF::TextStream&, const CSSCalcValue&);
+
 } // namespace WebCore
 
 SPECIALIZE_TYPE_TRAITS_CSS_VALUE(CSSCalcValue, isCalcValue())
+
+#define SPECIALIZE_TYPE_TRAITS_CSSCALCEXPRESSION_NODE(ToValueTypeName, predicate) \
+SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::ToValueTypeName) \
+    static bool isType(const WebCore::CSSCalcExpressionNode& node) { return node.predicate; } \
+SPECIALIZE_TYPE_TRAITS_END()

@@ -22,35 +22,43 @@
 
 #if USE(GSTREAMER_GL)
 
-#include "GraphicsContext3D.h"
+#include "ImageOrientation.h"
+#include "TextureMapperGLHeaders.h"
+#include "TextureMapperPlatformLayerBuffer.h"
 #include "TransformationMatrix.h"
+#include <wtf/RefPtr.h>
 
 namespace WebCore {
 
 class TextureMapperShaderProgram;
-class ImageOrientation;
+struct ImageOrientation;
 
 class VideoTextureCopierGStreamer {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     enum class ColorConversion {
         ConvertBGRAToRGBA,
-        ConvertARGBToRGBA
+        ConvertARGBToRGBA,
+        NoConvert,
     };
 
     VideoTextureCopierGStreamer(ColorConversion);
     ~VideoTextureCopierGStreamer();
 
-    bool copyVideoTextureToPlatformTexture(Platform3DObject inputTexture, IntSize& frameSize, Platform3DObject outputTexture, GC3Denum outputTarget, GC3Dint level, GC3Denum internalFormat, GC3Denum format, GC3Denum type, bool flipY, ImageOrientation& sourceOrientation);
+    bool copyVideoTextureToPlatformTexture(TextureMapperPlatformLayerBuffer& inputTexture, IntSize& frameSize, GLuint outputTexture, GLenum outputTarget, GLint level, GLenum internalFormat, GLenum format, GLenum type, bool flipY, ImageOrientation sourceOrientation);
     void updateColorConversionMatrix(ColorConversion);
     void updateTextureSpaceMatrix();
     void updateTransformationMatrix();
-    Platform3DObject resultTexture() { return m_resultTexture; }
+    GLuint resultTexture() { return m_resultTexture; }
 
 private:
-    RefPtr<GraphicsContext3D> m_context3D;
     RefPtr<TextureMapperShaderProgram> m_shaderProgram;
-    Platform3DObject m_framebuffer { 0 };
-    Platform3DObject m_vbo { 0 };
+    unsigned m_shaderOptions { 0 };
+    GLuint m_framebuffer { 0 };
+    GLuint m_vbo { 0 };
+#if !USE(OPENGL_ES)
+    GLuint m_vao { 0 };
+#endif
     bool m_flipY { false };
     ImageOrientation m_orientation;
     IntSize m_size;
@@ -58,7 +66,7 @@ private:
     TransformationMatrix m_projectionMatrix;
     TransformationMatrix m_textureSpaceMatrix;
     TransformationMatrix m_colorConversionMatrix;
-    Platform3DObject m_resultTexture { 0 };
+    GLuint m_resultTexture { 0 };
 };
 
 } // namespace WebCore

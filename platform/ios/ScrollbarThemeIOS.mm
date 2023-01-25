@@ -23,15 +23,17 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "ScrollbarThemeIOS.h"
+#import "config.h"
+#import "ScrollbarThemeIOS.h"
 
-#include "GraphicsContext.h"
-#include "IntRect.h"
-#include "PlatformMouseEvent.h"
-#include "Scrollbar.h"
-#include <wtf/NeverDestroyed.h>
-#include <wtf/StdLibExtras.h>
+#if PLATFORM(IOS_FAMILY)
+
+#import "GraphicsContext.h"
+#import "IntRect.h"
+#import "PlatformMouseEvent.h"
+#import "Scrollbar.h"
+#import <wtf/NeverDestroyed.h>
+#import <wtf/StdLibExtras.h>
 
 namespace WebCore {
 
@@ -117,3 +119,5 @@ bool ScrollbarThemeIOS::paint(Scrollbar&, GraphicsContext&, const IntRect& /*dam
 }
 
 } // namespace WebCore
+
+#endif // PLATFORM(IOS_FAMILY)

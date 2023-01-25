@@ -29,13 +29,18 @@
 #include "PseudoElement.h"
 
 #include "ContentData.h"
+#include "DocumentTimeline.h"
 #include "InspectorInstrumentation.h"
+#include "KeyframeEffectStack.h"
 #include "RenderElement.h"
 #include "RenderImage.h"
 #include "RenderQuote.h"
 #include "StyleResolver.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(PseudoElement);
 
 const QualifiedName& pseudoElementTagName()
 {
@@ -43,26 +48,12 @@ const QualifiedName& pseudoElementTagName()
     return name;
 }
 
-String PseudoElement::pseudoElementNameForEvents(PseudoId pseudoId)
-{
-    static NeverDestroyed<const String> after(MAKE_STATIC_STRING_IMPL("::after"));
-    static NeverDestroyed<const String> before(MAKE_STATIC_STRING_IMPL("::before"));
-    switch (pseudoId) {
-    case AFTER:
-        return after;
-    case BEFORE:
-        return before;
-    default:
-        return emptyString();
-    }
-}
-
 PseudoElement::PseudoElement(Element& host, PseudoId pseudoId)
     : Element(pseudoElementTagName(), host.document(), CreatePseudoElement)
     , m_hostElement(&host)
     , m_pseudoId(pseudoId)
 {
-    ASSERT(pseudoId == BEFORE || pseudoId == AFTER);
+    ASSERT(pseudoId == PseudoId::Before || pseudoId == PseudoId::After);
     setHasCustomStyleResolveCallbacks();
 }
 
@@ -71,57 +62,35 @@ PseudoElement::~PseudoElement()
     ASSERT(!m_hostElement);
 }
 
+Ref<PseudoElement> PseudoElement::create(Element& host, PseudoId pseudoId)
+{
+    auto pseudoElement = adoptRef(*new PseudoElement(host, pseudoId));
+
+    InspectorInstrumentation::pseudoElementCreated(host.document().page(), pseudoElement.get());
+
+    return pseudoElement;
+}
+
 void PseudoElement::clearHostElement()
 {
     InspectorInstrumentation::pseudoElementDestroyed(document().page(), *this);
 
+    if (auto* timeline = document().existingTimeline())
+        timeline->elementWasRemoved(Styleable::fromElement(*this));
+    
     m_hostElement = nullptr;
-}
-
-std::optional<ElementStyle> PseudoElement::resolveCustomStyle(const RenderStyle& parentStyle, const RenderStyle*)
-{
-    auto* style = m_hostElement->renderer()->getCachedPseudoStyle(m_pseudoId, &parentStyle);
-    if (!style)
-        return std::nullopt;
-    return ElementStyle(RenderStyle::clonePtr(*style));
-}
-
-void PseudoElement::didAttachRenderers()
-{
-    RenderElement* renderer = this->renderer();
-    if (!renderer || renderer->style().hasFlowFrom())
-        return;
-
-    const RenderStyle& style = renderer->style();
-    ASSERT(style.contentData());
-
-    for (const ContentData* content = style.contentData(); content; content = content->next()) {
-        auto child = content->createContentRenderer(document(), style);
-        if (renderer->isChildAllowed(*child, style))
-            renderer->addChild(child.leakPtr());
-    }
 }
 
 bool PseudoElement::rendererIsNeeded(const RenderStyle& style)
 {
-    return pseudoElementRendererIsNeeded(&style);
-}
+    if (pseudoElementRendererIsNeeded(&style))
+        return true;
 
-void PseudoElement::didRecalcStyle(Style::Change)
-{
-    if (!renderer())
-        return;
-
-    // The renderers inside pseudo elements are anonymous so they don't get notified of recalcStyle and must have
-    // the style propagated downward manually similar to RenderObject::propagateStyleToAnonymousChildren.
-    RenderElement& renderer = *this->renderer();
-    for (RenderObject* child = renderer.nextInPreOrder(&renderer); child; child = child->nextInPreOrder(&renderer)) {
-        // We only manage the style for the generated content which must be images or text.
-        if (!is<RenderImage>(*child) && !is<RenderQuote>(*child))
-            continue;
-        auto createdStyle = RenderStyle::createStyleInheritingFromPseudoStyle(renderer.style());
-        downcast<RenderElement>(*child).setStyle(WTFMove(createdStyle));
+    if (m_hostElement) {
+        if (auto* stack = m_hostElement->keyframeEffectStack(pseudoId()))
+            return stack->requiresPseudoElement();
     }
+    return false;
 }
 
 } // namespace

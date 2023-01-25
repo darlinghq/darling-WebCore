@@ -38,6 +38,7 @@
 #include "HTMLNames.h"
 #include "HTMLParamElement.h"
 #include "HTMLParserIdioms.h"
+#include "MixedContentChecker.h"
 #include "SVGNames.h"
 #include "Settings.h"
 #include "TextResourceDecoder.h"
@@ -45,7 +46,7 @@
 #include <wtf/ASCIICType.h>
 #include <wtf/MainThread.h>
 #include <wtf/NeverDestroyed.h>
-#include <wtf/text/StringView.h>
+#include <wtf/text/StringConcatenateNumbers.h>
 
 namespace WebCore {
 
@@ -149,7 +150,7 @@ static bool isNameOfInlineEventHandler(const Vector<UChar, 32>& name)
 static bool isDangerousHTTPEquiv(const String& value)
 {
     String equiv = value.stripWhiteSpace();
-    return equalLettersIgnoringASCIICase(equiv, "refresh") || equalLettersIgnoringASCIICase(equiv, "set-cookie");
+    return equalLettersIgnoringASCIICase(equiv, "refresh");
 }
 
 static inline String decode16BitUnicodeEscapeSequences(const String& string)
@@ -244,7 +245,7 @@ static bool isSemicolonSeparatedAttribute(const HTMLToken::Attribute& attribute)
 static bool semicolonSeparatedValueContainsJavaScriptURL(StringView semicolonSeparatedValue)
 {
     for (auto value : semicolonSeparatedValue.split(';')) {
-        if (protocolIsJavaScript(value))
+        if (WTF::protocolIsJavaScript(value))
             return true;
     }
     return false;
@@ -274,16 +275,13 @@ void XSSAuditor::initForFragment()
 
 void XSSAuditor::init(Document* document, XSSAuditorDelegate* auditorDelegate)
 {
-    const size_t minimumLengthForSuffixTree = 512; // FIXME: Tune this parameter.
-    const int suffixTreeDepth = 5;
-
     ASSERT(isMainThread());
     if (m_state == Initialized)
         return;
     ASSERT(m_state == Uninitialized);
     m_state = Initialized;
 
-    if (Frame* frame = document->frame())
+    if (RefPtr<Frame> frame = document->frame())
         m_isEnabled = frame->settings().xssAuditorEnabled();
 
     if (!m_isEnabled)
@@ -316,10 +314,8 @@ void XSSAuditor::init(Document* document, XSSAuditorDelegate* auditorDelegate)
     if (m_decodedURL.find(isRequiredForInjection) == notFound)
         m_decodedURL = String();
 
-    String httpBodyAsString;
-    if (DocumentLoader* documentLoader = document->frame()->loader().documentLoader()) {
-        static NeverDestroyed<String> XSSProtectionHeader(MAKE_STATIC_STRING_IMPL("X-XSS-Protection"));
-        String headerValue = documentLoader->response().httpHeaderField(XSSProtectionHeader);
+    if (RefPtr<DocumentLoader> documentLoader = document->frame()->loader().documentLoader()) {
+        String headerValue = documentLoader->response().httpHeaderField(HTTPHeaderName::XXSSProtection);
         String errorDetails;
         unsigned errorPosition = 0;
         String parsedReportURL;
@@ -337,21 +333,19 @@ void XSSAuditor::init(Document* document, XSSAuditorDelegate* auditorDelegate)
             }
         }
         if (m_xssProtection == XSSProtectionDisposition::Invalid) {
-            document->addConsoleMessage(MessageSource::Security, MessageLevel::Error, "Error parsing header X-XSS-Protection: " + headerValue + ": "  + errorDetails + " at character position " + String::format("%u", errorPosition) + ". The default protections will be applied.");
+            document->addConsoleMessage(MessageSource::Security, MessageLevel::Error, makeString("Error parsing header X-XSS-Protection: ", headerValue, ": ", errorDetails, " at character position ", errorPosition, ". The default protections will be applied."));
             m_xssProtection = XSSProtectionDisposition::Enabled;
         }
 
         if (auditorDelegate)
             auditorDelegate->setReportURL(reportURL.isolatedCopy());
-        FormData* httpBody = documentLoader->originalRequest().httpBody();
+        RefPtr<FormData> httpBody = documentLoader->originalRequest().httpBody();
         if (httpBody && !httpBody->isEmpty()) {
-            httpBodyAsString = httpBody->flattenToString();
+            String httpBodyAsString = httpBody->flattenToString();
             if (!httpBodyAsString.isEmpty()) {
                 m_decodedHTTPBody = canonicalize(httpBodyAsString, TruncationStyle::None);
                 if (m_decodedHTTPBody.find(isRequiredForInjection) == notFound)
                     m_decodedHTTPBody = String();
-                if (m_decodedHTTPBody.length() >= minimumLengthForSuffixTree)
-                    m_decodedHTTPBodySuffixTree = std::make_unique<SuffixTree<ASCIICodebook>>(m_decodedHTTPBody, suffixTreeDepth);
             }
         }
     }
@@ -382,7 +376,7 @@ std::unique_ptr<XSSInfo> XSSAuditor::filterToken(const FilterTokenRequest& reque
         return nullptr;
 
     bool didBlockEntirePage = m_xssProtection == XSSProtectionDisposition::BlockEnabled;
-    return std::make_unique<XSSInfo>(m_documentURL, didBlockEntirePage, m_didSendValidXSSProtectionHeader);
+    return makeUnique<XSSInfo>(m_documentURL.string(), didBlockEntirePage, m_didSendValidXSSProtectionHeader);
 }
 
 bool XSSAuditor::filterStartToken(const FilterTokenRequest& request)
@@ -447,8 +441,9 @@ bool XSSAuditor::filterScriptToken(const FilterTokenRequest& request)
 
     bool didBlockScript = false;
     if (m_wasScriptTagFoundInRequest) {
-        didBlockScript |= eraseAttributeIfInjected(request, srcAttr, blankURL().string(), TruncationStyle::SrcLikeAttribute);
-        didBlockScript |= eraseAttributeIfInjected(request, XLinkNames::hrefAttr, blankURL().string(), TruncationStyle::SrcLikeAttribute);
+        didBlockScript |= eraseAttributeIfInjected(request, srcAttr, aboutBlankURL().string(), TruncationStyle::SrcLikeAttribute);
+        didBlockScript |= eraseAttributeIfInjected(request, SVGNames::hrefAttr, aboutBlankURL().string(), TruncationStyle::SrcLikeAttribute);
+        didBlockScript |= eraseAttributeIfInjected(request, XLinkNames::hrefAttr, aboutBlankURL().string(), TruncationStyle::SrcLikeAttribute);
     }
 
     return didBlockScript;
@@ -461,7 +456,7 @@ bool XSSAuditor::filterObjectToken(const FilterTokenRequest& request)
 
     bool didBlockScript = false;
     if (isContainedInRequest(canonicalizedSnippetForTagName(request))) {
-        didBlockScript |= eraseAttributeIfInjected(request, dataAttr, blankURL().string(), TruncationStyle::SrcLikeAttribute);
+        didBlockScript |= eraseAttributeIfInjected(request, dataAttr, aboutBlankURL().string(), TruncationStyle::SrcLikeAttribute);
         didBlockScript |= eraseAttributeIfInjected(request, typeAttr);
         didBlockScript |= eraseAttributeIfInjected(request, classidAttr);
     }
@@ -481,7 +476,7 @@ bool XSSAuditor::filterParamToken(const FilterTokenRequest& request)
     if (!HTMLParamElement::isURLParameter(String(nameAttribute.value)))
         return false;
 
-    return eraseAttributeIfInjected(request, valueAttr, blankURL().string(), TruncationStyle::SrcLikeAttribute);
+    return eraseAttributeIfInjected(request, valueAttr, aboutBlankURL().string(), TruncationStyle::SrcLikeAttribute);
 }
 
 bool XSSAuditor::filterEmbedToken(const FilterTokenRequest& request)
@@ -492,7 +487,7 @@ bool XSSAuditor::filterEmbedToken(const FilterTokenRequest& request)
     bool didBlockScript = false;
     if (isContainedInRequest(canonicalizedSnippetForTagName(request))) {
         didBlockScript |= eraseAttributeIfInjected(request, codeAttr, String(), TruncationStyle::SrcLikeAttribute);
-        didBlockScript |= eraseAttributeIfInjected(request, srcAttr, blankURL().string(), TruncationStyle::SrcLikeAttribute);
+        didBlockScript |= eraseAttributeIfInjected(request, srcAttr, aboutBlankURL().string(), TruncationStyle::SrcLikeAttribute);
         didBlockScript |= eraseAttributeIfInjected(request, typeAttr);
     }
     return didBlockScript;
@@ -544,7 +539,7 @@ bool XSSAuditor::filterFormToken(const FilterTokenRequest& request)
     ASSERT(request.token.type() == HTMLToken::StartTag);
     ASSERT(hasName(request.token, formTag));
 
-    return eraseAttributeIfInjected(request, actionAttr, blankURL().string());
+    return eraseAttributeIfInjected(request, actionAttr, aboutBlankURL().string());
 }
 
 bool XSSAuditor::filterInputToken(const FilterTokenRequest& request)
@@ -552,7 +547,7 @@ bool XSSAuditor::filterInputToken(const FilterTokenRequest& request)
     ASSERT(request.token.type() == HTMLToken::StartTag);
     ASSERT(hasName(request.token, inputTag));
 
-    return eraseAttributeIfInjected(request, formactionAttr, blankURL().string(), TruncationStyle::SrcLikeAttribute);
+    return eraseAttributeIfInjected(request, formactionAttr, aboutBlankURL().string(), TruncationStyle::SrcLikeAttribute);
 }
 
 bool XSSAuditor::filterButtonToken(const FilterTokenRequest& request)
@@ -560,7 +555,7 @@ bool XSSAuditor::filterButtonToken(const FilterTokenRequest& request)
     ASSERT(request.token.type() == HTMLToken::StartTag);
     ASSERT(hasName(request.token, buttonTag));
 
-    return eraseAttributeIfInjected(request, formactionAttr, blankURL().string(), TruncationStyle::SrcLikeAttribute);
+    return eraseAttributeIfInjected(request, formactionAttr, aboutBlankURL().string(), TruncationStyle::SrcLikeAttribute);
 }
 
 bool XSSAuditor::eraseDangerousAttributesIfInjected(const FilterTokenRequest& request)
@@ -573,7 +568,7 @@ bool XSSAuditor::eraseDangerousAttributesIfInjected(const FilterTokenRequest& re
         bool isInlineEventHandler = isNameOfInlineEventHandler(attribute.name);
         // FIXME: It would be better if we didn't create a new String for every attribute in the document.
         String strippedValue = stripLeadingAndTrailingHTMLSpaces(String(attribute.value));
-        bool valueContainsJavaScriptURL = (!isInlineEventHandler && protocolIsJavaScript(strippedValue)) || (isSemicolonSeparatedAttribute(attribute) && semicolonSeparatedValueContainsJavaScriptURL(strippedValue));
+        bool valueContainsJavaScriptURL = (!isInlineEventHandler && WTF::protocolIsJavaScript(strippedValue)) || (isSemicolonSeparatedAttribute(attribute) && semicolonSeparatedValueContainsJavaScriptURL(strippedValue));
         if (!isInlineEventHandler && !valueContainsJavaScriptURL)
             continue;
         if (!isContainedInRequest(canonicalize(snippetFromAttribute(request, attribute), TruncationStyle::ScriptLikeAttribute)))
@@ -711,15 +706,26 @@ String XSSAuditor::canonicalizedSnippetForJavaScript(const FilterTokenRequest& r
     return result;
 }
 
+SuffixTree<ASCIICodebook>* XSSAuditor::decodedHTTPBodySuffixTree()
+{
+    const unsigned minimumLengthForSuffixTree = 512; // FIXME: Tune this parameter.
+    const unsigned suffixTreeDepth = 5;
+
+    if (!m_decodedHTTPBodySuffixTree && m_decodedHTTPBody.length() >= minimumLengthForSuffixTree)
+        m_decodedHTTPBodySuffixTree = makeUnique<SuffixTree<ASCIICodebook>>(m_decodedHTTPBody, suffixTreeDepth);
+    return m_decodedHTTPBodySuffixTree.get();
+}
+
 bool XSSAuditor::isContainedInRequest(const String& decodedSnippet)
 {
     if (decodedSnippet.isEmpty())
         return false;
-    if (m_decodedURL.find(decodedSnippet, 0, false) != notFound)
+    if (m_decodedURL.containsIgnoringASCIICase(decodedSnippet))
         return true;
-    if (m_decodedHTTPBodySuffixTree && !m_decodedHTTPBodySuffixTree->mightContain(decodedSnippet))
+    auto* decodedHTTPBodySuffixTree = this->decodedHTTPBodySuffixTree();
+    if (decodedHTTPBodySuffixTree && !decodedHTTPBodySuffixTree->mightContain(decodedSnippet))
         return false;
-    return m_decodedHTTPBody.find(decodedSnippet, 0, false) != notFound;
+    return m_decodedHTTPBody.containsIgnoringASCIICase(decodedSnippet);
 }
 
 bool XSSAuditor::isLikelySafeResource(const String& url)
@@ -727,7 +733,7 @@ bool XSSAuditor::isLikelySafeResource(const String& url)
     // Give empty URLs and about:blank a pass. Making a resourceURL from an
     // empty string below will likely later fail the "no query args test" as
     // it inherits the document's query args.
-    if (url.isEmpty() || url == blankURL().string())
+    if (url.isEmpty() || url == aboutBlankURL().string())
         return true;
 
     // If the resource is loaded from the same host as the enclosing page, it's

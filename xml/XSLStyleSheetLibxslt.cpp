@@ -36,17 +36,10 @@
 #include <libxml/uri.h>
 #include <libxslt/xsltutils.h>
 #include <wtf/CheckedArithmetic.h>
+#include <wtf/unicode/CharacterNames.h>
 
 #if OS(DARWIN) && !PLATFORM(GTK)
-#include <wtf/SoftLinking.h>
-#endif
-
-#if OS(DARWIN) && !PLATFORM(GTK)
-SOFT_LINK_LIBRARY(libxslt)
-SOFT_LINK(libxslt, xsltIsBlank, int, (xmlChar *str), (str))
-SOFT_LINK(libxslt, xsltGetNsProp, xmlChar *, (xmlNodePtr node, const xmlChar *name, const xmlChar *nameSpace), (node, name, nameSpace))
-SOFT_LINK(libxslt, xsltParseStylesheetDoc, xsltStylesheetPtr, (xmlDocPtr doc), (doc))
-SOFT_LINK(libxslt, xsltLoadStylesheetPI, xsltStylesheetPtr, (xmlDocPtr doc), (doc))
+#include "SoftLinkLibxslt.h"
 #endif
 
 namespace WebCore {
@@ -138,8 +131,7 @@ CachedResourceLoader* XSLStyleSheet::cachedResourceLoader()
 bool XSLStyleSheet::parseString(const String& string)
 {
     // Parse in a single chunk into an xmlDocPtr
-    const UChar BOM = 0xFEFF;
-    const unsigned char BOMHighByte = *reinterpret_cast<const unsigned char*>(&BOM);
+    const unsigned char BOMHighByte = *reinterpret_cast<const unsigned char*>(&byteOrderMark);
     clearXSLStylesheetDocument();
 
     PageConsoleClient* console = nullptr;
@@ -153,7 +145,7 @@ bool XSLStyleSheet::parseString(const String& string)
     const char* buffer = reinterpret_cast<const char*>(upconvertedCharacters.get());
     Checked<unsigned, RecordOverflow> unsignedSize = string.length();
     unsignedSize *= sizeof(UChar);
-    if (unsignedSize.hasOverflowed() || unsignedSize.unsafeGet() > std::numeric_limits<int>::max())
+    if (unsignedSize.hasOverflowed() || unsignedSize.unsafeGet() > static_cast<unsigned>(std::numeric_limits<int>::max()))
         return false;
 
     int size = static_cast<int>(unsignedSize.unsafeGet());
@@ -239,7 +231,7 @@ void XSLStyleSheet::loadChildSheets()
 
 void XSLStyleSheet::loadChildSheet(const String& href)
 {
-    auto childRule = std::make_unique<XSLImportRule>(this, href);
+    auto childRule = makeUnique<XSLImportRule>(this, href);
     m_children.append(childRule.release());
     m_children.last()->loadSheet();
 }

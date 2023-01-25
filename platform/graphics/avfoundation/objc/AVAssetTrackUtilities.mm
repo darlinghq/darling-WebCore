@@ -29,30 +29,13 @@
 #if ENABLE(VIDEO) && USE(AVFOUNDATION)
 
 #import "FourCC.h"
-#import "IOPSLibSPI.h"
+#import "SystemBattery.h"
+#import "VideoToolboxSoftLink.h"
 #import <AVFoundation/AVAssetTrack.h>
 
-#import "CoreMediaSoftLink.h"
-#import "VideoToolboxSoftLink.h"
+#import <pal/cf/CoreMediaSoftLink.h>
 
 namespace WebCore {
-
-static bool systemHasBattery()
-{
-    RetainPtr<CFTypeRef> powerSourcesInfo = adoptCF(IOPSCopyPowerSourcesInfo());
-    if (!powerSourcesInfo)
-        return false;
-    RetainPtr<CFArrayRef> powerSourcesList = adoptCF(IOPSCopyPowerSourcesList(powerSourcesInfo.get()));
-    if (!powerSourcesList)
-        return false;
-    for (CFIndex i = 0, count = CFArrayGetCount(powerSourcesList.get()); i < count; ++i) {
-        CFDictionaryRef description = IOPSGetPowerSourceDescription(powerSourcesInfo.get(), CFArrayGetValueAtIndex(powerSourcesList.get(), i));
-        CFTypeRef value = CFDictionaryGetValue(description, CFSTR(kIOPSTypeKey));
-        if (!value || CFEqual(value, CFSTR(kIOPSInternalBatteryType)))
-            return true;
-    }
-    return false;
-}
 
 static Vector<FourCC> contentTypesToCodecs(const Vector<ContentType>& contentTypes)
 {
@@ -108,13 +91,12 @@ bool assetTrackMeetsHardwareDecodeRequirements(AVAssetTrack *track, const Vector
 {
     Vector<FourCC> codecs;
     for (NSUInteger i = 0, count = track.formatDescriptions.count; i < count; ++i) {
-        CMFormatDescriptionRef description = (CMFormatDescriptionRef)track.formatDescriptions[i];
-        if (CMFormatDescriptionGetMediaType(description) == kCMMediaType_Video)
-            codecs.append(FourCC(CMFormatDescriptionGetMediaSubType(description)));
+        CMFormatDescriptionRef description = (__bridge CMFormatDescriptionRef)track.formatDescriptions[i];
+        if (PAL::CMFormatDescriptionGetMediaType(description) == kCMMediaType_Video)
+            codecs.append(FourCC(PAL::CMFormatDescriptionGetMediaSubType(description)));
     }
     return codecsMeetHardwareDecodeRequirements(codecs, contentTypesRequiringHardwareDecode);
 }
-
 
 }
 

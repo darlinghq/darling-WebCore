@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012, 2013 Apple Inc. All rights reserved.
+ * Copyright (C) 2012-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,7 +25,7 @@
 
 #import "config.h"
 
-#if ENABLE(VIDEO) && USE(AVFOUNDATION) && HAVE(AVFOUNDATION_MEDIA_SELECTION_GROUP)
+#if ENABLE(VIDEO) && USE(AVFOUNDATION)
 
 #import "InbandTextTrackPrivateAVFObjC.h"
 
@@ -39,42 +39,8 @@
 #import <AVFoundation/AVPlayerItem.h>
 #import <AVFoundation/AVPlayerItemOutput.h>
 #import <objc/runtime.h>
-#import <wtf/SoftLinking.h>
 
-SOFT_LINK_FRAMEWORK_OPTIONAL(AVFoundation)
-
-SOFT_LINK_CLASS(AVFoundation, AVPlayer)
-SOFT_LINK_CLASS(AVFoundation, AVPlayerItem)
-SOFT_LINK_CLASS(AVFoundation, AVMetadataItem)
-SOFT_LINK_CLASS(AVFoundation, AVPlayerItemLegibleOutput)
-#define AVMediaCharacteristicVisual getAVMediaCharacteristicVisual()
-#define AVMediaCharacteristicAudible getAVMediaCharacteristicAudible()
-#define AVMediaTypeClosedCaption getAVMediaTypeClosedCaption()
-#define AVMediaCharacteristicContainsOnlyForcedSubtitles getAVMediaCharacteristicContainsOnlyForcedSubtitles()
-#define AVMediaCharacteristicIsMainProgramContent getAVMediaCharacteristicIsMainProgramContent()
-#define AVMediaCharacteristicEasyToRead getAVMediaCharacteristicEasyToRead()
-
-SOFT_LINK_POINTER(AVFoundation, AVMediaTypeClosedCaption, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMediaCharacteristicLegible, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMetadataCommonKeyTitle, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMetadataKeySpaceCommon, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMediaTypeSubtitle, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMediaCharacteristicTranscribesSpokenDialogForAccessibility, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMediaCharacteristicDescribesMusicAndSoundForAccessibility, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMediaCharacteristicContainsOnlyForcedSubtitles, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMediaCharacteristicIsMainProgramContent, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVMediaCharacteristicEasyToRead, NSString *)
-
-#define AVPlayer getAVPlayerClass()
-#define AVPlayerItem getAVPlayerItemClass()
-#define AVMetadataItem getAVMetadataItemClass()
-#define AVPlayerItemLegibleOutput getAVPlayerItemLegibleOutputClass()
-#define AVMediaCharacteristicLegible getAVMediaCharacteristicLegible()
-#define AVMetadataCommonKeyTitle getAVMetadataCommonKeyTitle()
-#define AVMetadataKeySpaceCommon getAVMetadataKeySpaceCommon()
-#define AVMediaTypeSubtitle getAVMediaTypeSubtitle()
-#define AVMediaCharacteristicTranscribesSpokenDialogForAccessibility getAVMediaCharacteristicTranscribesSpokenDialogForAccessibility()
-#define AVMediaCharacteristicDescribesMusicAndSoundForAccessibility getAVMediaCharacteristicDescribesMusicAndSoundForAccessibility()
+#import <pal/cocoa/AVFoundationSoftLink.h>
 
 namespace WebCore {
 
@@ -93,28 +59,28 @@ void InbandTextTrackPrivateAVFObjC::disconnect()
 InbandTextTrackPrivate::Kind InbandTextTrackPrivateAVFObjC::kind() const
 {
     if (!m_mediaSelectionOption)
-        return InbandTextTrackPrivate::None;
+        return Kind::None;
 
     NSString *mediaType = [m_mediaSelectionOption mediaType];
     
     if ([mediaType isEqualToString:AVMediaTypeClosedCaption])
-        return InbandTextTrackPrivate::Captions;
+        return Kind::Captions;
     if ([mediaType isEqualToString:AVMediaTypeSubtitle]) {
 
         if ([m_mediaSelectionOption hasMediaCharacteristic:AVMediaCharacteristicContainsOnlyForcedSubtitles])
-            return InbandTextTrackPrivate::Forced;
+            return Kind::Forced;
 
         // An "SDH" track is a subtitle track created for the deaf or hard-of-hearing. "captions" in WebVTT are
         // "labeled as appropriate for the hard-of-hearing", so tag SDH sutitles as "captions".
         if ([m_mediaSelectionOption hasMediaCharacteristic:AVMediaCharacteristicTranscribesSpokenDialogForAccessibility])
-            return InbandTextTrackPrivate::Captions;
+            return Kind::Captions;
         if ([m_mediaSelectionOption hasMediaCharacteristic:AVMediaCharacteristicDescribesMusicAndSoundForAccessibility])
-            return InbandTextTrackPrivate::Captions;
+            return Kind::Captions;
         
-        return InbandTextTrackPrivate::Subtitles;
+        return Kind::Subtitles;
     }
 
-    return InbandTextTrackPrivate::Captions;
+    return Kind::Captions;
 }
 
 bool InbandTextTrackPrivateAVFObjC::isClosedCaptions() const
@@ -163,17 +129,17 @@ bool InbandTextTrackPrivateAVFObjC::isEasyToRead() const
     return [m_mediaSelectionOption hasMediaCharacteristic:AVMediaCharacteristicEasyToRead];
 }
 
-AtomicString InbandTextTrackPrivateAVFObjC::label() const
+AtomString InbandTextTrackPrivateAVFObjC::label() const
 {
     if (!m_mediaSelectionOption)
         return emptyAtom();
 
     NSString *title = 0;
 
-    NSArray *titles = [AVMetadataItem metadataItemsFromArray:[m_mediaSelectionOption.get() commonMetadata] withKey:AVMetadataCommonKeyTitle keySpace:AVMetadataKeySpaceCommon];
+    NSArray *titles = [PAL::getAVMetadataItemClass() metadataItemsFromArray:[m_mediaSelectionOption.get() commonMetadata] withKey:AVMetadataCommonKeyTitle keySpace:AVMetadataKeySpaceCommon];
     if ([titles count]) {
         // If possible, return a title in one of the user's preferred languages.
-        NSArray *titlesForPreferredLanguages = [AVMetadataItem metadataItemsFromArray:titles filteredAndSortedAccordingToPreferredLanguages:[NSLocale preferredLanguages]];
+        NSArray *titlesForPreferredLanguages = [PAL::getAVMetadataItemClass() metadataItemsFromArray:titles filteredAndSortedAccordingToPreferredLanguages:[NSLocale preferredLanguages]];
         if ([titlesForPreferredLanguages count])
             title = [[titlesForPreferredLanguages objectAtIndex:0] stringValue];
 
@@ -181,10 +147,10 @@ AtomicString InbandTextTrackPrivateAVFObjC::label() const
             title = [[titles objectAtIndex:0] stringValue];
     }
 
-    return title ? AtomicString(title) : emptyAtom();
+    return title ? AtomString(title) : emptyAtom();
 }
 
-AtomicString InbandTextTrackPrivateAVFObjC::language() const
+AtomString InbandTextTrackPrivateAVFObjC::language() const
 {
     if (!m_mediaSelectionOption)
         return emptyAtom();

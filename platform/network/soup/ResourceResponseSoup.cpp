@@ -27,6 +27,8 @@
 #include "HTTPHeaderNames.h"
 #include "HTTPParsers.h"
 #include "MIMETypeRegistry.h"
+#include "URLSoup.h"
+#include <unicode/uset.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/WTFString.h>
 
@@ -40,14 +42,14 @@ void ResourceResponse::updateSoupMessageHeaders(SoupMessageHeaders* soupHeaders)
 
 void ResourceResponse::updateFromSoupMessage(SoupMessage* soupMessage)
 {
-    m_url = URL(soup_message_get_uri(soupMessage));
+    m_url = soupURIToURL(soup_message_get_uri(soupMessage));
 
     switch (soup_message_get_http_version(soupMessage)) {
     case SOUP_HTTP_1_0:
-        m_httpVersion = AtomicString("HTTP/1.0", AtomicString::ConstructFromLiteral);
+        m_httpVersion = AtomString("HTTP/1.0", AtomString::ConstructFromLiteral);
         break;
     case SOUP_HTTP_1_1:
-        m_httpVersion = AtomicString("HTTP/1.1", AtomicString::ConstructFromLiteral);
+        m_httpVersion = AtomString("HTTP/1.1", AtomString::ConstructFromLiteral);
         break;
     }
     m_httpStatusCode = soupMessage->status_code;
@@ -94,11 +96,45 @@ CertificateInfo ResourceResponse::platformCertificateInfo() const
     return CertificateInfo(m_certificate.get(), m_tlsErrors);
 }
 
+static String sanitizeFilename(const String& filename)
+{
+    if (filename.isEmpty())
+        return filename;
+
+    // Strip leading/trailing whitespaces, path separators and dots
+    auto result = filename.stripLeadingAndTrailingCharacters([](UChar character) -> bool {
+        return isSpaceOrNewline(character) || character == '/' || character == '\\' || character == '.';
+    });
+
+    if (result.isEmpty())
+        return result;
+
+    // Replace control, formatting and dangerous characters in filenames.
+    static USet* illegalCharacterSet = nullptr;
+    if (!illegalCharacterSet) {
+        UErrorCode errorCode = U_ZERO_ERROR;
+        String illegalCharacters = "[[\"~*/:<>?\\\\|][:Cc:][:Cf:]]"_s;
+        illegalCharacterSet = uset_openPattern(StringView(illegalCharacters).upconvertedCharacters(), illegalCharacters.length(), &errorCode);
+        ASSERT(U_SUCCESS(errorCode));
+    }
+
+    HashSet<UChar32> illegalCharactersInFilename;
+    for (unsigned i = 0; i < result.length(); ++i) {
+        auto character = result[i];
+        if (uset_contains(illegalCharacterSet, character))
+            illegalCharactersInFilename.add(character);
+    }
+    for (auto character : illegalCharactersInFilename)
+        result = result.replace(character, '_');
+
+    return result;
+}
+
 String ResourceResponse::platformSuggestedFilename() const
 {
     String contentDisposition(httpHeaderField(HTTPHeaderName::ContentDisposition));
     if (contentDisposition.isEmpty())
-        return String();
+        return { };
 
     if (contentDisposition.is8Bit())
         contentDisposition = String::fromUTF8WithLatin1Fallback(contentDisposition.characters8(), contentDisposition.length());
@@ -107,8 +143,8 @@ String ResourceResponse::platformSuggestedFilename() const
     GRefPtr<GHashTable> params;
     soup_message_headers_get_content_disposition(soupHeaders, nullptr, &params.outPtr());
     soup_message_headers_free(soupHeaders);
-    char* filename = params ? static_cast<char*>(g_hash_table_lookup(params.get(), "filename")) : nullptr;
-    return filename ? String::fromUTF8(filename) : String();
+    auto filename = params ? String::fromUTF8(static_cast<char*>(g_hash_table_lookup(params.get(), "filename"))) : String();
+    return sanitizeFilename(filename);
 }
 
 }

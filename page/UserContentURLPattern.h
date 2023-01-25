@@ -25,12 +25,10 @@
  
 #pragma once
 
-#include <wtf/Vector.h>
+#include <wtf/Forward.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
-
-class URL;
 
 class UserContentURLPattern {
 public:
@@ -52,7 +50,7 @@ public:
 
     bool matchSubdomains() const { return m_matchSubdomains; }
     
-    static bool matchesPatterns(const URL&, const Vector<String>& whitelist, const Vector<String>& blacklist);
+    static bool matchesPatterns(const URL&, const Vector<String>& allowlist, const Vector<String>& blocklist);
 
 private:
     WEBCORE_EXPORT bool parse(const String& pattern);

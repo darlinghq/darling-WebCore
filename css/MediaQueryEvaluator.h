@@ -28,18 +28,31 @@
 #pragma once
 
 #include "MediaQueryExpression.h"
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
 class Document;
-class Frame;
 class MediaQuerySet;
 class RenderStyle;
-class StyleResolver;
 
 struct MediaQueryResult {
     MediaQueryExpression expression;
     bool result;
+};
+
+struct MediaQueryDynamicResults {
+    Vector<MediaQueryResult> viewport;
+    Vector<MediaQueryResult> appearance;
+    Vector<MediaQueryResult> accessibilitySettings;
+
+    void append(const MediaQueryDynamicResults& other)
+    {
+        viewport.appendVector(other.viewport);
+        appearance.appendVector(other.appearance);
+        accessibilitySettings.appendVector(other.accessibilitySettings);
+    }
+    bool isEmpty() const { return viewport.isEmpty() && appearance.isEmpty() && accessibilitySettings.isEmpty(); }
 };
 
 // Some of the constructors are used for cases where the device characteristics are not known.
@@ -61,20 +74,18 @@ public:
     bool mediaTypeMatch(const String& mediaTypeToMatch) const;
     bool mediaTypeMatchSpecific(const char* mediaTypeToMatch) const;
 
-    // Evaluates a list of media queries.
-    WEBCORE_EXPORT bool evaluate(const MediaQuerySet&, StyleResolver* = nullptr) const;
-
     // Evaluates media query subexpression, ie "and (media-feature: value)" part.
     bool evaluate(const MediaQueryExpression&) const;
+    bool evaluateForChanges(const MediaQueryDynamicResults&) const;
 
-    // Evaluates a list of media queries and fills in a vector with any viewport-dependent results found.
-    bool evaluate(const MediaQuerySet&, Vector<MediaQueryResult>&) const;
+    enum class Mode { Normal, AlwaysMatchDynamic };
+    WEBCORE_EXPORT bool evaluate(const MediaQuerySet&, MediaQueryDynamicResults* = nullptr, Mode = Mode::Normal) const;
 
     static bool mediaAttributeMatches(Document&, const String& attributeValue);
 
 private:
     String m_mediaType;
-    Frame* m_frame { nullptr }; // not owned
+    WeakPtr<const Document> m_document;
     const RenderStyle* m_style { nullptr };
     bool m_fallbackResult { false };
 };

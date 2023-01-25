@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007, 2008, 2009, 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2007-2018 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -21,9 +21,9 @@
 #pragma once
 
 #include <memory>
-#include <wtf/Forward.h>
 #include <wtf/HashMap.h>
 #include <wtf/Vector.h>
+#include <wtf/text/AtomStringHash.h>
 
 namespace WebCore {
 
@@ -31,21 +31,22 @@ class HTMLInputElement;
 class RadioButtonGroup;
 
 class RadioButtonGroups {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     RadioButtonGroups();
     ~RadioButtonGroups();
-    void addButton(HTMLInputElement*);
-    void updateCheckedState(HTMLInputElement*);
-    void requiredAttributeChanged(HTMLInputElement*);
-    void removeButton(HTMLInputElement*);
-    HTMLInputElement* checkedButtonForGroup(const AtomicString& groupName) const;
-    bool hasCheckedButton(const HTMLInputElement*) const;
-    bool isInRequiredGroup(HTMLInputElement*) const;
-    Vector<HTMLInputElement*> groupMembers(const HTMLInputElement&) const;
+    void addButton(HTMLInputElement&);
+    void updateCheckedState(HTMLInputElement&);
+    void requiredStateChanged(HTMLInputElement&);
+    void removeButton(HTMLInputElement&);
+    RefPtr<HTMLInputElement> checkedButtonForGroup(const AtomString& groupName) const;
+    bool hasCheckedButton(const HTMLInputElement&) const;
+    bool isInRequiredGroup(HTMLInputElement&) const;
+    Vector<Ref<HTMLInputElement>> groupMembers(const HTMLInputElement&) const;
 
 private:
-    typedef HashMap<AtomicStringImpl*, std::unique_ptr<RadioButtonGroup>> NameToGroupMap;
-    std::unique_ptr<NameToGroupMap> m_nameToGroupMap;
+    typedef HashMap<AtomString, std::unique_ptr<RadioButtonGroup>> NameToGroupMap;
+    NameToGroupMap m_nameToGroupMap;
 };
 
 } // namespace WebCore

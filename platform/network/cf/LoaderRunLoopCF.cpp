@@ -41,7 +41,7 @@ namespace WebCore {
 
 static CFRunLoopRef loaderRunLoopObject = 0;
 
-static StaticLock loaderRunLoopMutex;
+static Lock loaderRunLoopMutex;
 static StaticCondition loaderRunLoopConditionVariable;
 
 static void emptyPerform(void*) 
@@ -52,12 +52,12 @@ CFRunLoopRef loaderRunLoop()
 {
     ASSERT(isMainThread());
 
-    std::unique_lock<StaticLock> lock(loaderRunLoopMutex);
+    std::unique_lock<Lock> lock(loaderRunLoopMutex);
 
     if (!loaderRunLoopObject) {
         Thread::create("WebCore: CFNetwork Loader", [] {
             {
-                std::lock_guard<StaticLock> lock(loaderRunLoopMutex);
+                auto locker = holdLock(loaderRunLoopMutex);
 
                 loaderRunLoopObject = CFRunLoopGetCurrent();
 
@@ -74,7 +74,7 @@ CFRunLoopRef loaderRunLoop()
                 AutodrainedPool pool;
                 result = CFRunLoopRunInMode(kCFRunLoopDefaultMode, std::numeric_limits<double>::max(), true);
             } while (result != kCFRunLoopRunStopped && result != kCFRunLoopRunFinished);
-        });
+        }, ThreadType::Network);
 
         loaderRunLoopConditionVariable.wait(lock, [] { return loaderRunLoopObject; });
     }

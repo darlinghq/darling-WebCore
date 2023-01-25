@@ -29,6 +29,7 @@
 #include "config.h"
 #include "SpatialNavigation.h"
 
+#include "Frame.h"
 #include "FrameTree.h"
 #include "FrameView.h"
 #include "HTMLAreaElement.h"
@@ -36,7 +37,6 @@
 #include "HTMLMapElement.h"
 #include "HTMLSelectElement.h"
 #include "IntRect.h"
-#include "MainFrame.h"
 #include "Node.h"
 #include "Page.h"
 #include "RenderInline.h"
@@ -108,7 +108,7 @@ static RectsAlignment alignmentForRects(FocusDirection direction, const LayoutRe
 
 static inline bool isHorizontalMove(FocusDirection direction)
 {
-    return direction == FocusDirectionLeft || direction == FocusDirectionRight;
+    return direction == FocusDirection::Left || direction == FocusDirection::Right;
 }
 
 static inline LayoutUnit start(FocusDirection direction, const LayoutRect& rect)
@@ -139,19 +139,19 @@ static bool areRectsFullyAligned(FocusDirection direction, const LayoutRect& a, 
     LayoutUnit aStart, bStart, aEnd, bEnd;
 
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         aStart = a.x();
         bEnd = b.maxX();
         break;
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         aStart = b.x();
         bEnd = a.maxX();
         break;
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         aStart = a.y();
         bEnd = b.y();
         break;
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         aStart = b.y();
         bEnd = a.y();
         break;
@@ -239,13 +239,13 @@ static bool areRectsMoreThanFullScreenApart(FocusDirection direction, const Layo
     ASSERT(isRectInDirection(direction, curRect, targetRect));
 
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         return curRect.x() - targetRect.maxX() > viewSize.width();
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         return targetRect.x() - curRect.maxX() > viewSize.width();
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         return curRect.y() - targetRect.maxY() > viewSize.height();
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         return targetRect.y() - curRect.maxY() > viewSize.height();
     default:
         ASSERT_NOT_REACHED();
@@ -268,13 +268,13 @@ static inline bool rightOf(const LayoutRect& a, const LayoutRect& b)
 static bool isRectInDirection(FocusDirection direction, const LayoutRect& curRect, const LayoutRect& targetRect)
 {
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         return targetRect.maxX() <= curRect.x();
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         return targetRect.x() >= curRect.maxX();
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         return targetRect.maxY() <= curRect.y();
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         return targetRect.y() >= curRect.maxY();
     default:
         ASSERT_NOT_REACHED();
@@ -302,18 +302,18 @@ bool hasOffscreenRect(Node* node, FocusDirection direction)
     // If the container has overflow:hidden, we cannot scroll, so we do not pass direction
     // and we do not adjust for scrolling.
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         containerViewportRect.setX(containerViewportRect.x() - Scrollbar::pixelsPerLineStep());
         containerViewportRect.setWidth(containerViewportRect.width() + Scrollbar::pixelsPerLineStep());
         break;
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         containerViewportRect.setWidth(containerViewportRect.width() + Scrollbar::pixelsPerLineStep());
         break;
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         containerViewportRect.setY(containerViewportRect.y() - Scrollbar::pixelsPerLineStep());
         containerViewportRect.setHeight(containerViewportRect.height() + Scrollbar::pixelsPerLineStep());
         break;
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         containerViewportRect.setHeight(containerViewportRect.height() + Scrollbar::pixelsPerLineStep());
         break;
     default:
@@ -336,19 +336,19 @@ bool scrollInDirection(Frame* frame, FocusDirection direction)
     ASSERT(frame);
 
     if (frame && canScrollInDirection(frame->document(), direction)) {
-        LayoutUnit dx = 0;
-        LayoutUnit dy = 0;
+        LayoutUnit dx;
+        LayoutUnit dy;
         switch (direction) {
-        case FocusDirectionLeft:
+        case FocusDirection::Left:
             dx = - Scrollbar::pixelsPerLineStep();
             break;
-        case FocusDirectionRight:
+        case FocusDirection::Right:
             dx = Scrollbar::pixelsPerLineStep();
             break;
-        case FocusDirectionUp:
+        case FocusDirection::Up:
             dy = - Scrollbar::pixelsPerLineStep();
             break;
-        case FocusDirectionDown:
+        case FocusDirection::Down:
             dy = Scrollbar::pixelsPerLineStep();
             break;
         default:
@@ -372,20 +372,20 @@ bool scrollInDirection(Node* container, FocusDirection direction)
         return false;
 
     if (canScrollInDirection(container, direction)) {
-        LayoutUnit dx = 0;
-        LayoutUnit dy = 0;
+        LayoutUnit dx;
+        LayoutUnit dy;
         switch (direction) {
-        case FocusDirectionLeft:
+        case FocusDirection::Left:
             dx = - std::min<LayoutUnit>(Scrollbar::pixelsPerLineStep(), container->renderBox()->scrollLeft());
             break;
-        case FocusDirectionRight:
+        case FocusDirection::Right:
             ASSERT(container->renderBox()->scrollWidth() > (container->renderBox()->scrollLeft() + container->renderBox()->clientWidth()));
             dx = std::min<LayoutUnit>(Scrollbar::pixelsPerLineStep(), container->renderBox()->scrollWidth() - (container->renderBox()->scrollLeft() + container->renderBox()->clientWidth()));
             break;
-        case FocusDirectionUp:
+        case FocusDirection::Up:
             dy = - std::min<LayoutUnit>(Scrollbar::pixelsPerLineStep(), container->renderBox()->scrollTop());
             break;
-        case FocusDirectionDown:
+        case FocusDirection::Down:
             ASSERT(container->renderBox()->scrollHeight() - (container->renderBox()->scrollTop() + container->renderBox()->clientHeight()));
             dy = std::min<LayoutUnit>(Scrollbar::pixelsPerLineStep(), container->renderBox()->scrollHeight() - (container->renderBox()->scrollTop() + container->renderBox()->clientHeight()));
             break;
@@ -453,14 +453,14 @@ bool canScrollInDirection(const Node* container, FocusDirection direction)
         return false;
 
     switch (direction) {
-    case FocusDirectionLeft:
-        return (container->renderer()->style().overflowX() != OHIDDEN && container->renderBox()->scrollLeft() > 0);
-    case FocusDirectionUp:
-        return (container->renderer()->style().overflowY() != OHIDDEN && container->renderBox()->scrollTop() > 0);
-    case FocusDirectionRight:
-        return (container->renderer()->style().overflowX() != OHIDDEN && container->renderBox()->scrollLeft() + container->renderBox()->clientWidth() < container->renderBox()->scrollWidth());
-    case FocusDirectionDown:
-        return (container->renderer()->style().overflowY() != OHIDDEN && container->renderBox()->scrollTop() + container->renderBox()->clientHeight() < container->renderBox()->scrollHeight());
+    case FocusDirection::Left:
+        return (container->renderer()->style().overflowX() != Overflow::Hidden && container->renderBox()->scrollLeft() > 0);
+    case FocusDirection::Up:
+        return (container->renderer()->style().overflowY() != Overflow::Hidden && container->renderBox()->scrollTop() > 0);
+    case FocusDirection::Right:
+        return (container->renderer()->style().overflowX() != Overflow::Hidden && container->renderBox()->scrollLeft() + container->renderBox()->clientWidth() < container->renderBox()->scrollWidth());
+    case FocusDirection::Down:
+        return (container->renderer()->style().overflowY() != Overflow::Hidden && container->renderBox()->scrollTop() + container->renderBox()->clientHeight() < container->renderBox()->scrollHeight());
     default:
         ASSERT_NOT_REACHED();
         return false;
@@ -474,9 +474,9 @@ bool canScrollInDirection(const Frame* frame, FocusDirection direction)
     ScrollbarMode verticalMode;
     ScrollbarMode horizontalMode;
     frame->view()->calculateScrollbarModesForLayout(horizontalMode, verticalMode);
-    if ((direction == FocusDirectionLeft || direction == FocusDirectionRight) && ScrollbarAlwaysOff == horizontalMode)
+    if ((direction == FocusDirection::Left || direction == FocusDirection::Right) && ScrollbarAlwaysOff == horizontalMode)
         return false;
-    if ((direction == FocusDirectionUp || direction == FocusDirectionDown) &&  ScrollbarAlwaysOff == verticalMode)
+    if ((direction == FocusDirection::Up || direction == FocusDirection::Down) &&  ScrollbarAlwaysOff == verticalMode)
         return false;
     LayoutSize size = frame->view()->totalContentsSize();
     LayoutPoint scrollPosition = frame->view()->scrollPosition();
@@ -484,13 +484,13 @@ bool canScrollInDirection(const Frame* frame, FocusDirection direction)
 
     // FIXME: wrong in RTL documents.
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         return scrollPosition.x() > 0;
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         return scrollPosition.y() > 0;
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         return rect.width() + scrollPosition.x() < size.width();
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         return rect.height() + scrollPosition.y() < size.height();
     default:
         ASSERT_NOT_REACHED();
@@ -505,7 +505,7 @@ static LayoutRect rectToAbsoluteCoordinates(Frame* initialFrame, const LayoutRec
     for (Frame* frame = initialFrame; frame; frame = frame->tree().parent()) {
         if (Element* element = frame->ownerElement()) {
             do {
-                rect.move(element->offsetLeft(), element->offsetTop());
+                rect.move(LayoutUnit(element->offsetLeft()), LayoutUnit(element->offsetTop()));
             } while ((element = element->offsetParent()));
             rect.moveBy((-frame->view()->scrollPosition()));
         }
@@ -544,19 +544,19 @@ LayoutRect frameRectInAbsoluteCoordinates(Frame* frame)
 void entryAndExitPointsForDirection(FocusDirection direction, const LayoutRect& startingRect, const LayoutRect& potentialRect, LayoutPoint& exitPoint, LayoutPoint& entryPoint)
 {
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         exitPoint.setX(startingRect.x());
         entryPoint.setX(potentialRect.maxX());
         break;
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         exitPoint.setY(startingRect.y());
         entryPoint.setY(potentialRect.maxY());
         break;
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         exitPoint.setX(startingRect.maxX());
         entryPoint.setX(potentialRect.x());
         break;
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         exitPoint.setY(startingRect.maxY());
         entryPoint.setY(potentialRect.y());
         break;
@@ -565,8 +565,8 @@ void entryAndExitPointsForDirection(FocusDirection direction, const LayoutRect& 
     }
 
     switch (direction) {
-    case FocusDirectionLeft:
-    case FocusDirectionRight:
+    case FocusDirection::Left:
+    case FocusDirection::Right:
         if (below(startingRect, potentialRect)) {
             exitPoint.setY(startingRect.y());
             entryPoint.setY(potentialRect.maxY());
@@ -578,8 +578,8 @@ void entryAndExitPointsForDirection(FocusDirection direction, const LayoutRect& 
             entryPoint.setY(exitPoint.y());
         }
         break;
-    case FocusDirectionUp:
-    case FocusDirectionDown:
+    case FocusDirection::Up:
+    case FocusDirection::Down:
         if (rightOf(startingRect, potentialRect)) {
             exitPoint.setX(startingRect.x());
             entryPoint.setX(potentialRect.maxX());
@@ -627,13 +627,13 @@ bool isValidCandidate(FocusDirection direction, const FocusCandidate& current, F
     LayoutRect candidateRect = candidate.rect;
 
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         return candidateRect.x() < currentRect.maxX();
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         return candidateRect.y() < currentRect.maxY();
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         return candidateRect.maxX() > currentRect.x();
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         return candidateRect.maxY() > currentRect.y();
     default:
         ASSERT_NOT_REACHED();
@@ -644,7 +644,7 @@ bool isValidCandidate(FocusDirection direction, const FocusCandidate& current, F
 void distanceDataForNode(FocusDirection direction, const FocusCandidate& current, FocusCandidate& candidate)
 {
     if (areElementsOnSameLine(current, candidate)) {
-        if ((direction == FocusDirectionUp && current.rect.y() > candidate.rect.y()) || (direction == FocusDirectionDown && candidate.rect.y() > current.rect.y())) {
+        if ((direction == FocusDirection::Up && current.rect.y() > candidate.rect.y()) || (direction == FocusDirection::Down && candidate.rect.y() > current.rect.y())) {
             candidate.distance = 0;
             candidate.alignment = Full;
             return;
@@ -660,24 +660,24 @@ void distanceDataForNode(FocusDirection direction, const FocusCandidate& current
 
     LayoutPoint exitPoint;
     LayoutPoint entryPoint;
-    LayoutUnit sameAxisDistance = 0;
-    LayoutUnit otherAxisDistance = 0;
+    LayoutUnit sameAxisDistance;
+    LayoutUnit otherAxisDistance;
     entryAndExitPointsForDirection(direction, currentRect, nodeRect, exitPoint, entryPoint);
 
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         sameAxisDistance = exitPoint.x() - entryPoint.x();
         otherAxisDistance = absoluteValue(exitPoint.y() - entryPoint.y());
         break;
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         sameAxisDistance = exitPoint.y() - entryPoint.y();
         otherAxisDistance = absoluteValue(exitPoint.x() - entryPoint.x());
         break;
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         sameAxisDistance = entryPoint.x() - exitPoint.x();
         otherAxisDistance = absoluteValue(entryPoint.y() - exitPoint.y());
         break;
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         sameAxisDistance = entryPoint.y() - exitPoint.y();
         otherAxisDistance = absoluteValue(entryPoint.x() - exitPoint.x());
         break;
@@ -705,10 +705,12 @@ bool canBeScrolledIntoView(FocusDirection direction, const FocusCandidate& candi
     ASSERT(candidate.visibleNode && candidate.isOffscreen);
     LayoutRect candidateRect = candidate.rect;
     for (Node* parentNode = candidate.visibleNode->parentNode(); parentNode; parentNode = parentNode->parentNode()) {
+        if (!parentNode->renderer())
+            continue;
         LayoutRect parentRect = nodeRectInAbsoluteCoordinates(parentNode);
         if (!candidateRect.intersects(parentRect)) {
-            if (((direction == FocusDirectionLeft || direction == FocusDirectionRight) && parentNode->renderer()->style().overflowX() == OHIDDEN)
-                || ((direction == FocusDirectionUp || direction == FocusDirectionDown) && parentNode->renderer()->style().overflowY() == OHIDDEN))
+            if (((direction == FocusDirection::Left || direction == FocusDirection::Right) && parentNode->renderer()->style().overflowX() == Overflow::Hidden)
+                || ((direction == FocusDirection::Up || direction == FocusDirection::Down) && parentNode->renderer()->style().overflowY() == Overflow::Hidden))
                 return false;
         }
         if (parentNode == candidate.enclosingScrollableBox)
@@ -725,18 +727,18 @@ LayoutRect virtualRectForDirection(FocusDirection direction, const LayoutRect& s
 {
     LayoutRect virtualStartingRect = startingRect;
     switch (direction) {
-    case FocusDirectionLeft:
+    case FocusDirection::Left:
         virtualStartingRect.setX(virtualStartingRect.maxX() - width);
         virtualStartingRect.setWidth(width);
         break;
-    case FocusDirectionUp:
+    case FocusDirection::Up:
         virtualStartingRect.setY(virtualStartingRect.maxY() - width);
         virtualStartingRect.setHeight(width);
         break;
-    case FocusDirectionRight:
+    case FocusDirection::Right:
         virtualStartingRect.setWidth(width);
         break;
-    case FocusDirectionDown:
+    case FocusDirection::Down:
         virtualStartingRect.setHeight(width);
         break;
     default:

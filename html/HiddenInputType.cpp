@@ -32,8 +32,8 @@
 #include "config.h"
 #include "HiddenInputType.h"
 
+#include "DOMFormData.h"
 #include "FormController.h"
-#include "FormDataList.h"
 #include "HTMLInputElement.h"
 #include "HTMLNames.h"
 #include "InputTypeNames.h"
@@ -43,28 +43,23 @@ namespace WebCore {
 
 using namespace HTMLNames;
 
-const AtomicString& HiddenInputType::formControlType() const
+const AtomString& HiddenInputType::formControlType() const
 {
     return InputTypeNames::hidden();
 }
 
 FormControlState HiddenInputType::saveFormControlState() const
 {
-    // valueAttributeWasUpdatedAfterParsing() never be true for form
-    // controls create by createElement() or cloneNode(). It's ok for
-    // now because we restore values only to form controls created by
-    // parsing.
-    return element().valueAttributeWasUpdatedAfterParsing() ? FormControlState(element().value()) : FormControlState();
+    // valueAttributeWasUpdatedAfterParsing() never be true for form controls create by createElement() or cloneNode().
+    // It's OK for now because we restore values only to form controls created by parsing.
+    ASSERT(element());
+    return element()->valueAttributeWasUpdatedAfterParsing() ? FormControlState { { element()->value() } } : FormControlState { };
 }
 
 void HiddenInputType::restoreFormControlState(const FormControlState& state)
 {
-    element().setAttributeWithoutSynchronization(valueAttr, state[0]);
-}
-
-bool HiddenInputType::supportsValidation() const
-{
-    return false;
+    ASSERT(element());
+    element()->setAttributeWithoutSynchronization(valueAttr, state[0]);
 }
 
 RenderPtr<RenderElement> HiddenInputType::createInputRenderer(RenderStyle&&)
@@ -73,8 +68,9 @@ RenderPtr<RenderElement> HiddenInputType::createInputRenderer(RenderStyle&&)
     return nullptr;
 }
 
-void HiddenInputType::accessKeyAction(bool)
+bool HiddenInputType::accessKeyAction(bool)
 {
+    return false;
 }
 
 bool HiddenInputType::rendererIsNeeded()
@@ -89,21 +85,20 @@ bool HiddenInputType::storesValueSeparateFromAttribute()
 
 void HiddenInputType::setValue(const String& sanitizedValue, bool, TextFieldEventBehavior)
 {
-    element().setAttributeWithoutSynchronization(valueAttr, sanitizedValue);
+    ASSERT(element());
+    element()->setAttributeWithoutSynchronization(valueAttr, sanitizedValue);
 }
 
-bool HiddenInputType::isHiddenType() const
+bool HiddenInputType::appendFormData(DOMFormData& formData, bool isMultipartForm) const
 {
-    return true;
-}
+    ASSERT(element());
+    auto name = element()->name();
 
-bool HiddenInputType::appendFormData(FormDataList& encoding, bool isMultipartForm) const
-{
-    if (equalIgnoringASCIICase(element().name(), "_charset_")) {
-        encoding.appendData(element().name(), String(encoding.encoding().name()));
+    if (equalIgnoringASCIICase(name, "_charset_")) {
+        formData.append(name, String { formData.encoding().name() });
         return true;
     }
-    return InputType::appendFormData(encoding, isMultipartForm);
+    return InputType::appendFormData(formData, isMultipartForm);
 }
 
 bool HiddenInputType::shouldRespectHeightAndWidthAttributes()

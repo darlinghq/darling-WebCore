@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2017-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,25 +26,70 @@
 #include "config.h"
 #include "WebCoreJSClientData.h"
 
+#include "DOMGCOutputConstraint.h"
+#include "DOMIsoSubspaces.h"
+#include "JSAudioWorkletGlobalScope.h"
 #include "JSDOMBinding.h"
-#include <heap/HeapInlines.h>
-#include <heap/MarkingConstraint.h>
-#include <heap/MarkedAllocatorInlines.h>
-#include <heap/MarkedBlockInlines.h>
-#include <heap/SubspaceInlines.h>
-#include <heap/VisitingTimeout.h>
-#include <runtime/VM.h>
+#include "JSDOMBuiltinConstructorBase.h"
+#include "JSDOMWindow.h"
+#include "JSDOMWindowProperties.h"
+#include "JSDedicatedWorkerGlobalScope.h"
+#include "JSIDBSerializationGlobalObject.h"
+#include "JSPaintWorkletGlobalScope.h"
+#include "JSRemoteDOMWindow.h"
+#include "JSServiceWorkerGlobalScope.h"
+#include "JSWindowProxy.h"
+#include "JSWorkerGlobalScope.h"
+#include "JSWorkletGlobalScope.h"
+#include <JavaScriptCore/FastMallocAlignedMemoryAllocator.h>
+#include <JavaScriptCore/HeapInlines.h>
+#include <JavaScriptCore/IsoHeapCellType.h>
+#include <JavaScriptCore/JSDestructibleObjectHeapCellType.h>
+#include <JavaScriptCore/MarkingConstraint.h>
+#include <JavaScriptCore/SubspaceInlines.h>
+#include <JavaScriptCore/VM.h>
+#include "runtime_array.h"
+#include "runtime_method.h"
+#include "runtime_object.h"
 #include <wtf/MainThread.h>
 
-using namespace JSC;
-
 namespace WebCore {
+using namespace JSC;
 
 JSVMClientData::JSVMClientData(VM& vm)
     : m_builtinFunctions(vm)
-    , m_builtinNames(&vm)
-    , m_outputConstraintSpace("WebCore Wrapper w/ Output Constraint", vm.heap)
-    , m_globalObjectOutputConstraintSpace("WebCore Global Object w/ Output Constraint", vm.heap)
+    , m_builtinNames(vm)
+    , m_runtimeArrayHeapCellType(JSC::IsoHeapCellType::create<RuntimeArray>())
+    , m_runtimeObjectHeapCellType(JSC::IsoHeapCellType::create<JSC::Bindings::RuntimeObject>())
+    , m_windowProxyHeapCellType(JSC::IsoHeapCellType::create<JSWindowProxy>())
+    , m_heapCellTypeForJSDOMWindow(JSC::IsoHeapCellType::create<JSDOMWindow>())
+    , m_heapCellTypeForJSDedicatedWorkerGlobalScope(JSC::IsoHeapCellType::create<JSDedicatedWorkerGlobalScope>())
+    , m_heapCellTypeForJSRemoteDOMWindow(JSC::IsoHeapCellType::create<JSRemoteDOMWindow>())
+    , m_heapCellTypeForJSWorkerGlobalScope(JSC::IsoHeapCellType::create<JSWorkerGlobalScope>())
+#if ENABLE(SERVICE_WORKER)
+    , m_heapCellTypeForJSServiceWorkerGlobalScope(JSC::IsoHeapCellType::create<JSServiceWorkerGlobalScope>())
+#endif
+    , m_heapCellTypeForJSWorkletGlobalScope(JSC::IsoHeapCellType::create<JSWorkletGlobalScope>())
+#if ENABLE(CSS_PAINTING_API)
+    , m_heapCellTypeForJSPaintWorkletGlobalScope(JSC::IsoHeapCellType::create<JSPaintWorkletGlobalScope>())
+#endif
+#if ENABLE(WEB_AUDIO)
+    , m_heapCellTypeForJSAudioWorkletGlobalScope(JSC::IsoHeapCellType::create<JSAudioWorkletGlobalScope>())
+#endif
+#if ENABLE(INDEXED_DATABASE)
+    , m_heapCellTypeForJSIDBSerializationGlobalObject(JSC::IsoHeapCellType::create<JSIDBSerializationGlobalObject>())
+#endif
+    , m_domBuiltinConstructorSpace ISO_SUBSPACE_INIT(vm.heap, vm.cellHeapCellType.get(), JSDOMBuiltinConstructorBase)
+    , m_domConstructorSpace ISO_SUBSPACE_INIT(vm.heap, vm.cellHeapCellType.get(), JSDOMConstructorBase)
+    , m_domWindowPropertiesSpace ISO_SUBSPACE_INIT(vm.heap, vm.cellHeapCellType.get(), JSDOMWindowProperties)
+    , m_runtimeArraySpace ISO_SUBSPACE_INIT(vm.heap, m_runtimeArrayHeapCellType.get(), RuntimeArray)
+    , m_runtimeMethodSpace ISO_SUBSPACE_INIT(vm.heap, vm.cellHeapCellType.get(), RuntimeMethod) // Hash:0xf70c4a85
+    , m_runtimeObjectSpace ISO_SUBSPACE_INIT(vm.heap, m_runtimeObjectHeapCellType.get(), JSC::Bindings::RuntimeObject)
+    , m_windowProxySpace ISO_SUBSPACE_INIT(vm.heap, m_windowProxyHeapCellType.get(), JSWindowProxy)
+#if ENABLE(INDEXED_DATABASE)
+    , m_idbSerializationSpace ISO_SUBSPACE_INIT(vm.heap, m_heapCellTypeForJSIDBSerializationGlobalObject.get(), JSIDBSerializationGlobalObject)
+#endif
+    , m_subspaces(makeUnique<DOMIsoSubspaces>())
 {
 }
 
@@ -60,57 +105,46 @@ JSVMClientData::~JSVMClientData()
 void JSVMClientData::getAllWorlds(Vector<Ref<DOMWrapperWorld>>& worlds)
 {
     ASSERT(worlds.isEmpty());
-    
+
     worlds.reserveInitialCapacity(m_worldSet.size());
-    for (auto it = m_worldSet.begin(), end = m_worldSet.end(); it != end; ++it)
-        worlds.uncheckedAppend(*(*it));
+
+    // It is necessary to order the `DOMWrapperWorld`s because certain callers expect the main world
+    // to be the first item in the list, as they use the main world as an indicator of when the page
+    // is ready to start evaluating JavaScript. For example, Web Inspector waits for the main world
+    // change to clear any injected scripts and debugger/breakpoint state.
+
+    auto& mainNormalWorld = mainThreadNormalWorld();
+
+    // Add main normal world.
+    if (m_worldSet.contains(&mainNormalWorld))
+        worlds.uncheckedAppend(mainNormalWorld);
+
+    // Add other normal worlds.
+    for (auto* world : m_worldSet) {
+        if (world->type() != DOMWrapperWorld::Type::Normal)
+            continue;
+        if (world == &mainNormalWorld)
+            continue;
+        worlds.uncheckedAppend(*world);
+    }
+
+    // Add non-normal worlds.
+    for (auto* world : m_worldSet) {
+        if (world->type() == DOMWrapperWorld::Type::Normal)
+            continue;
+        worlds.uncheckedAppend(*world);
+    }
 }
 
-void JSVMClientData::initNormalWorld(VM* vm)
+void JSVMClientData::initNormalWorld(VM* vm, WorkerThreadType type)
 {
     JSVMClientData* clientData = new JSVMClientData(*vm);
     vm->clientData = clientData; // ~VM deletes this pointer.
-    
-    auto constraint = std::make_unique<MarkingConstraint>(
-        "Wcoc", "WebCore Output Constraints",
-        [vm, clientData, lastExecutionVersion = vm->heap.mutatorExecutionVersion()]
-        (SlotVisitor& slotVisitor, const VisitingTimeout&) mutable {
-            Heap& heap = vm->heap;
-            
-            if (heap.mutatorExecutionVersion() == lastExecutionVersion)
-                return;
-            
-            lastExecutionVersion = heap.mutatorExecutionVersion();
 
-            // We have to manage the visit count here ourselves. We need to know that if this adds
-            // opaque roots then we cannot declare termination yet. The way we signal this to the
-            // constraint solver is by adding to the visit count.
-            
-            size_t numOpaqueRootsBefore = heap.numOpaqueRoots();
+    vm->heap.addMarkingConstraint(makeUnique<DOMGCOutputConstraint>(*vm, *clientData));
 
-            // FIXME: Make this parallel!
-            unsigned numRevisited = 0;
-            clientData->forEachOutputConstraintSpace(
-                [&] (Subspace& subspace) {
-                    subspace.forEachMarkedCell(
-                        [&] (HeapCell* heapCell, HeapCell::Kind) {
-                            JSCell* cell = static_cast<JSCell*>(heapCell);
-                            cell->methodTable(*vm)->visitOutputConstraints(cell, slotVisitor);
-                            numRevisited++;
-                        });
-                });
-            if (Options::logGC())
-                dataLog("(", numRevisited, ")");
-            
-            slotVisitor.mergeIfNecessary();
-            
-            slotVisitor.addToVisitCount(heap.numOpaqueRoots() - numOpaqueRootsBefore);
-        },
-        ConstraintVolatility::SeldomGreyed);
-    vm->heap.addMarkingConstraint(WTFMove(constraint));
-        
-    clientData->m_normalWorld = DOMWrapperWorld::create(*vm, true);
-    vm->m_typedArrayController = adoptRef(new WebCoreTypedArrayController());
+    clientData->m_normalWorld = DOMWrapperWorld::create(*vm, DOMWrapperWorld::Type::Normal);
+    vm->m_typedArrayController = adoptRef(new WebCoreTypedArrayController(type == WorkerThreadType::DedicatedWorker || type == WorkerThreadType::Worklet));
 }
 
 } // namespace WebCore

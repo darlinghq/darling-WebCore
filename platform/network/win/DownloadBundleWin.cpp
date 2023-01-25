@@ -43,7 +43,7 @@ static uint32_t magicNumber()
 
 const String& fileExtension()
 {
-    DEPRECATED_DEFINE_STATIC_LOCAL(const String, extension, (ASCIILiteral(".download")));
+    static const NeverDestroyed<String> extension { ".download"_s };
     return extension;
 }
 
@@ -58,9 +58,9 @@ bool appendResumeData(const char* resumeBytes, uint32_t resumeLength, const Stri
         return false;
     }
 
-    String nullifiedPath = bundlePath;
+    auto nullifiedPath = bundlePath.wideCharacters();
     FILE* bundle = 0;
-    if (_wfopen_s(&bundle, nullifiedPath.charactersWithNullTermination().data(), TEXT("ab")) || !bundle) {
+    if (_wfopen_s(&bundle, nullifiedPath.data(), TEXT("ab")) || !bundle) {
         LOG_ERROR("Failed to open file %s to append resume data", bundlePath.ascii().data());
         return false;
     }
@@ -97,9 +97,9 @@ bool extractResumeData(const String& bundlePath, Vector<char>& resumeData)
     }
 
     // Open a handle to the bundle file
-    String nullifiedPath = bundlePath;
+    auto nullifiedPath = bundlePath.wideCharacters();
     FILE* bundle = 0;
-    if (_wfopen_s(&bundle, nullifiedPath.charactersWithNullTermination().data(), TEXT("r+b")) || !bundle) {
+    if (_wfopen_s(&bundle, nullifiedPath.data(), TEXT("r+b")) || !bundle) {
         LOG_ERROR("Failed to open file %s to get resume data", bundlePath.ascii().data());
         return false;
     }

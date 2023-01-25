@@ -26,11 +26,10 @@
 #include "config.h"
 
 #include "BitmapImage.h"
-#include "GUniquePtrGtk.h"
 #include "GdkCairoUtilities.h"
 #include "SharedBuffer.h"
 #include <cairo.h>
-#include <gtk/gtk.h>
+#include <gdk/gdk.h>
 #include <wtf/glib/GRefPtr.h>
 #include <wtf/glib/GUniquePtr.h>
 
@@ -43,46 +42,46 @@ static Ref<Image> loadImageFromGResource(const char* iconName)
     GRefPtr<GBytes> data = adoptGRef(g_resources_lookup_data(path.get(), G_RESOURCE_LOOKUP_FLAGS_NONE, nullptr));
     ASSERT(data);
     icon->setData(SharedBuffer::create(static_cast<const unsigned char*>(g_bytes_get_data(data.get(), nullptr)), g_bytes_get_size(data.get())), true);
-    return WTFMove(icon);
-}
-
-static Ref<SharedBuffer> loadResourceSharedBuffer(const char* filename)
-{
-    GUniqueOutPtr<gchar> content;
-    gsize length;
-    if (!g_file_get_contents(filename, &content.outPtr(), &length, nullptr))
-        return SharedBuffer::create();
-
-    return SharedBuffer::create(content.get(), length);
+    return icon;
 }
 
 void BitmapImage::invalidatePlatformData()
 {
 }
 
-static Ref<Image> loadMissingImageIconFromTheme(const char* name)
-{
-    int iconSize = g_str_has_suffix(name, "@2x") ? 32 : 16;
-    auto icon = BitmapImage::create();
-    GUniquePtr<GtkIconInfo> iconInfo(gtk_icon_theme_lookup_icon(gtk_icon_theme_get_default(), GTK_STOCK_MISSING_IMAGE, iconSize, GTK_ICON_LOOKUP_NO_SVG));
-    if (iconInfo) {
-        auto buffer = loadResourceSharedBuffer(gtk_icon_info_get_filename(iconInfo.get()));
-        icon->setData(WTFMove(buffer), true);
-        return WTFMove(icon);
-    }
-
-    return loadImageFromGResource(name);
-}
-
 Ref<Image> Image::loadPlatformResource(const char* name)
 {
-    return g_str_has_prefix(name, "missingImage") ? loadMissingImageIconFromTheme(name) : loadImageFromGResource(name);
+    return loadImageFromGResource(name);
 }
 
 GdkPixbuf* BitmapImage::getGdkPixbuf()
 {
-    RefPtr<cairo_surface_t> surface = nativeImageForCurrentFrame();
-    return surface ? cairoSurfaceToGdkPixbuf(surface.get()) : 0;
+    if (auto nativeImage = nativeImageForCurrentFrame()) {
+        auto& surface = nativeImage->platformImage();
+        return cairoSurfaceToGdkPixbuf(surface.get());
+    }
+    return nullptr;
 }
+
+#if USE(GTK4)
+GdkTexture* BitmapImage::gdkTexture()
+{
+    auto nativeImage = nativeImageForCurrentFrame();
+    if (!nativeImage)
+        return nullptr;
+
+    auto& surface = nativeImage->platformImage();
+
+    ASSERT(cairo_image_surface_get_format(surface.get()) == CAIRO_FORMAT_ARGB32);
+    auto width = cairo_image_surface_get_width(surface.get());
+    auto height = cairo_image_surface_get_height(surface.get());
+    auto stride = cairo_image_surface_get_stride(surface.get());
+    auto* data = cairo_image_surface_get_data(surface.get());
+    GRefPtr<GBytes> bytes = adoptGRef(g_bytes_new_with_free_func(data, height * stride, [](gpointer data) {
+        cairo_surface_destroy(static_cast<cairo_surface_t*>(data));
+    }, const_cast<PlatformImagePtr&>(surface).leakRef()));
+    return gdk_memory_texture_new(width, height, GDK_MEMORY_DEFAULT, bytes.get(), stride);
+}
+#endif
 
 }

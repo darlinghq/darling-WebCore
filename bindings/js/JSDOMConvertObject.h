@@ -27,6 +27,7 @@
 
 #include "IDLTypes.h"
 #include "JSDOMConvertBase.h"
+#include <JavaScriptCore/StrongInlines.h>
 
 namespace WebCore {
 
@@ -35,17 +36,27 @@ template<> struct Converter<IDLObject> : DefaultConverter<IDLObject> {
     static constexpr bool conversionHasSideEffects = false;
 
     template<typename ExceptionThrower = DefaultExceptionThrower>
-    static JSC::Strong<JSC::JSObject> convert(JSC::ExecState& state, JSC::JSValue value, ExceptionThrower&& exceptionThrower = ExceptionThrower())
+    static JSC::Strong<JSC::JSObject> convert(JSC::JSGlobalObject& lexicalGlobalObject, JSC::JSValue value, ExceptionThrower&& exceptionThrower = ExceptionThrower())
     {
-        JSC::VM& vm = state.vm();
+        JSC::VM& vm = JSC::getVM(&lexicalGlobalObject);
         auto scope = DECLARE_THROW_SCOPE(vm);
 
         if (!value.isObject()) {
-            exceptionThrower(state, scope);
+            exceptionThrower(lexicalGlobalObject, scope);
             return { };
         }
         
         return { vm, JSC::asObject(value) };
+    }
+};
+
+template<> struct JSConverter<IDLObject> {
+    static constexpr bool needsState = false;
+    static constexpr bool needsGlobalObject = false;
+
+    static JSC::JSValue convert(const JSC::Strong<JSC::JSObject>& value)
+    {
+        return value.get();
     }
 };
 

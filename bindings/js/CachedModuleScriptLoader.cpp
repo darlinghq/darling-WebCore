@@ -31,6 +31,8 @@
 #include "DOMWrapperWorld.h"
 #include "Frame.h"
 #include "JSDOMBinding.h"
+#include "JSDOMPromiseDeferred.h"
+#include "ModuleFetchParameters.h"
 #include "ResourceLoaderOptions.h"
 #include "ScriptController.h"
 #include "ScriptModuleLoader.h"
@@ -38,15 +40,16 @@
 
 namespace WebCore {
 
-Ref<CachedModuleScriptLoader> CachedModuleScriptLoader::create(CachedModuleScriptLoaderClient& client, DeferredPromise& promise, CachedScriptFetcher& scriptFetcher)
+Ref<CachedModuleScriptLoader> CachedModuleScriptLoader::create(CachedModuleScriptLoaderClient& client, DeferredPromise& promise, CachedScriptFetcher& scriptFetcher, RefPtr<ModuleFetchParameters>&& parameters)
 {
-    return adoptRef(*new CachedModuleScriptLoader(client, promise, scriptFetcher));
+    return adoptRef(*new CachedModuleScriptLoader(client, promise, scriptFetcher, WTFMove(parameters)));
 }
 
-CachedModuleScriptLoader::CachedModuleScriptLoader(CachedModuleScriptLoaderClient& client, DeferredPromise& promise, CachedScriptFetcher& scriptFetcher)
+CachedModuleScriptLoader::CachedModuleScriptLoader(CachedModuleScriptLoaderClient& client, DeferredPromise& promise, CachedScriptFetcher& scriptFetcher, RefPtr<ModuleFetchParameters>&& parameters)
     : m_client(&client)
     , m_promise(&promise)
     , m_scriptFetcher(scriptFetcher)
+    , m_parameters(WTFMove(parameters))
 {
 }
 
@@ -61,16 +64,18 @@ CachedModuleScriptLoader::~CachedModuleScriptLoader()
 bool CachedModuleScriptLoader::load(Document& document, const URL& sourceURL)
 {
     ASSERT(!m_cachedScript);
-    m_cachedScript = m_scriptFetcher->requestModuleScript(document, sourceURL);
+    String integrity = m_parameters ? m_parameters->integrity() : String { };
+    m_cachedScript = m_scriptFetcher->requestModuleScript(document, sourceURL, WTFMove(integrity));
     if (!m_cachedScript)
         return false;
+    m_sourceURL = sourceURL;
 
     // If the content is already cached, this immediately calls notifyFinished.
     m_cachedScript->addClient(*this);
     return true;
 }
 
-void CachedModuleScriptLoader::notifyFinished(CachedResource& resource)
+void CachedModuleScriptLoader::notifyFinished(CachedResource& resource, const NetworkLoadMetrics&)
 {
     ASSERT_UNUSED(resource, &resource == m_cachedScript);
     ASSERT(m_cachedScript);

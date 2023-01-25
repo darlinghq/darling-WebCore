@@ -25,31 +25,32 @@
 
 #pragma once
 
-#include "WorkerGlobalScope.h"
-#include "WorkerReportingProxy.h"
+#include "WorkerDebuggerProxy.h"
+#include "WorkerOrWorkletGlobalScope.h"
 #include "WorkerThread.h"
-#include <inspector/InspectorFrontendChannel.h>
+#include <JavaScriptCore/InspectorFrontendChannel.h>
 
 namespace WebCore {
 
 class WorkerToPageFrontendChannel final : public Inspector::FrontendChannel {
     WTF_MAKE_FAST_ALLOCATED;
 public:
-    explicit WorkerToPageFrontendChannel(WorkerGlobalScope& workerGlobalScope)
-        : m_workerGlobalScope(workerGlobalScope)
+    explicit WorkerToPageFrontendChannel(WorkerOrWorkletGlobalScope& globalScope)
+        : m_globalScope(globalScope)
     {
     }
-    ~WorkerToPageFrontendChannel() { }
+    ~WorkerToPageFrontendChannel() override = default;
 
 private:
     ConnectionType connectionType() const override { return ConnectionType::Local; }
 
     void sendMessageToFrontend(const String& message) override
     {
-        m_workerGlobalScope.thread().workerReportingProxy().postMessageToPageInspector(message);
+        if (auto* workerDebuggerProxy = m_globalScope.workerOrWorkletThread()->workerDebuggerProxy())
+            workerDebuggerProxy->postMessageToDebugger(message);
     }
 
-    WorkerGlobalScope& m_workerGlobalScope;
+    WorkerOrWorkletGlobalScope& m_globalScope;
 };
 
 } // namespace WebCore

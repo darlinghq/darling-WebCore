@@ -23,13 +23,13 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#if !PLATFORM(IOS)
+#import "config.h"
+#import "WebCoreFullScreenWarningView.h"
 
-#include "WebCoreFullScreenWarningView.h"
+#if PLATFORM(MAC) && ENABLE(FULLSCREEN_API)
 
-#include "LocalizedStrings.h"
-#include <wtf/text/WTFString.h>
+#import "LocalizedStrings.h"
+#import <wtf/text/WTFString.h>
 
 static const CGFloat WarningViewTextWhite = 0.9;
 static const CGFloat WarningViewTextAlpha = 1;
@@ -106,4 +106,4 @@ static const CGFloat WarningViewShadowRadius = 5;
 }
 @end
 
-#endif // !PLATFORM(IOS)
+#endif // PLATFORM(MAC) && ENABLE(FULLSCREEN_API)

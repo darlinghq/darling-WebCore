@@ -30,21 +30,11 @@
 
 namespace WebCore {
 
-PasteboardWriterData::PasteboardWriterData()
-{
-}
+PasteboardWriterData::PasteboardWriterData() = default;
+PasteboardWriterData::~PasteboardWriterData() = default;
 
-PasteboardWriterData::~PasteboardWriterData()
-{
-}
-
-PasteboardWriterData::WebContent::WebContent()
-{
-}
-
-PasteboardWriterData::WebContent::~WebContent()
-{
-}
+PasteboardWriterData::WebContent::WebContent() = default;
+PasteboardWriterData::WebContent::~WebContent() = default;
 
 bool PasteboardWriterData::isEmpty() const
 {
@@ -58,7 +48,7 @@ void PasteboardWriterData::setPlainText(PlainText plainText)
     m_plainText = WTFMove(plainText);
 }
 
-void PasteboardWriterData::setURL(URL url)
+void PasteboardWriterData::setURLData(URLData url)
 {
     ASSERT(!m_url);
 

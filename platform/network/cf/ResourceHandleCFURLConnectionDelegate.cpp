@@ -28,18 +28,10 @@
 
 #if USE(CFURLCONNECTION)
 
-#include "CFNetworkSPI.h"
 #include "FormDataStreamCFNet.h"
 #include "NetworkingContext.h"
 #include "ResourceHandle.h"
-
-#if PLATFORM(COCOA)
-#include "WebCoreSystemInterface.h"
-#endif
-
-#if PLATFORM(WIN)
-#include <WebKitSystemInterface/WebKitSystemInterface.h>
-#endif
+#include <pal/spi/win/CFNetworkSPIWin.h>
 
 namespace WebCore {
 
@@ -48,9 +40,7 @@ ResourceHandleCFURLConnectionDelegate::ResourceHandleCFURLConnectionDelegate(Res
 {
 }
 
-ResourceHandleCFURLConnectionDelegate::~ResourceHandleCFURLConnectionDelegate()
-{
-}
+ResourceHandleCFURLConnectionDelegate::~ResourceHandleCFURLConnectionDelegate() = default;
 
 void ResourceHandleCFURLConnectionDelegate::releaseHandle()
 {
@@ -148,7 +138,7 @@ ResourceRequest ResourceHandleCFURLConnectionDelegate::createResourceRequest(CFU
 {
     ResourceRequest request;
     CFHTTPMessageRef httpMessage = CFURLResponseGetHTTPResponse(redirectResponse);
-    if (httpMessage && CFHTTPMessageGetResponseStatusCode(httpMessage) == 307) {
+    if (httpMessage && (CFHTTPMessageGetResponseStatusCode(httpMessage) == 307 || CFHTTPMessageGetResponseStatusCode(httpMessage) == 308)) {
         RetainPtr<CFStringRef> lastHTTPMethod = m_handle->lastHTTPMethod().createCFString();
         RetainPtr<CFStringRef> newMethod = adoptCF(CFURLRequestCopyHTTPRequestMethod(cfRequest));
         if (CFStringCompareWithOptions(lastHTTPMethod.get(), newMethod.get(), CFRangeMake(0, CFStringGetLength(lastHTTPMethod.get())), kCFCompareCaseInsensitive)) {

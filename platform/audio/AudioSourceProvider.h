@@ -43,7 +43,9 @@ public:
     // If a client is set, we call it back when the audio format is available or changes.
     virtual void setClient(AudioSourceProviderClient*) { };
 
-    virtual ~AudioSourceProvider() { }
+    virtual bool isHandlingAVPlayer() const { return false; }
+
+    virtual ~AudioSourceProvider() = default;
 };
 
 } // WebCore

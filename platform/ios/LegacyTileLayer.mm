@@ -23,18 +23,17 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "LegacyTileLayer.h"
+#import "config.h"
+#import "LegacyTileLayer.h"
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
-#include "LegacyTileCache.h"
-#include "LegacyTileGrid.h"
-#include "WebCoreThread.h"
-#include <wtf/SetForScope.h>
+#import "LegacyTileCache.h"
+#import "LegacyTileGrid.h"
+#import "WebCoreThread.h"
+#import <wtf/SetForScope.h>
 
-using namespace WebCore;
-
+using WebCore::LegacyTileCache;
 @implementation LegacyTileHostLayer
 
 - (id)initWithTileGrid:(WebCore::LegacyTileGrid*)tileGrid
@@ -60,12 +59,15 @@ using namespace WebCore;
         WebThreadLock();
 
     CGRect dirtyRect = CGContextGetClipBoundingBox(context);
-    _tileGrid->tileCache().setOverrideVisibleRect(FloatRect(dirtyRect));
-    _tileGrid->tileCache().doLayoutTiles();
+    auto useExistingTiles = _tileGrid->tileCache().setOverrideVisibleRect(WebCore::FloatRect(dirtyRect));
+    if (!useExistingTiles)
+        _tileGrid->tileCache().doLayoutTiles();
 
     [super renderInContext:context];
 
-    _tileGrid->tileCache().setOverrideVisibleRect(std::nullopt);
+    _tileGrid->tileCache().clearOverrideVisibleRect();
+    if (!useExistingTiles)
+        _tileGrid->tileCache().doLayoutTiles();
 }
 @end
 
@@ -123,4 +125,4 @@ using namespace WebCore;
 
 @end
 
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY)

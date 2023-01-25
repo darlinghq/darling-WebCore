@@ -23,12 +23,12 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "IntPoint.h"
+#import "config.h"
+#import "IntPoint.h"
 
 namespace WebCore {
 
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
 #ifndef NSGEOMETRY_TYPES_SAME_AS_CGGEOMETRY_TYPES
 
 IntPoint::IntPoint(const NSPoint& p) : m_x(static_cast<int>(p.x)), m_y(static_cast<int>(p.y))
@@ -41,6 +41,6 @@ IntPoint::operator NSPoint() const
 }
 
 #endif
-#endif // !PLATFORM(IOS)
+#endif // !PLATFORM(IOS_FAMILY)
 
 }

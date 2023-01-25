@@ -36,24 +36,23 @@
 namespace WebCore {
 
 class DOMWindow;
-class Frame;
-class URL;
 
-class Location : public ScriptWrappable, public RefCounted<Location>, public DOMWindowProperty {
+class Location final : public ScriptWrappable, public RefCounted<Location>, public DOMWindowProperty {
+    WTF_MAKE_ISO_ALLOCATED(Location);
 public:
-    static Ref<Location> create(Frame* frame) { return adoptRef(*new Location(frame)); }
+    static Ref<Location> create(DOMWindow& window) { return adoptRef(*new Location(window)); }
 
     ExceptionOr<void> setHref(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
     String href() const;
 
     ExceptionOr<void> assign(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
-    void replace(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
+    ExceptionOr<void> replace(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
     void reload(DOMWindow& activeWindow);
 
     ExceptionOr<void> setProtocol(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
     String protocol() const;
     ExceptionOr<void> setHost(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
-    String host() const;
+    WEBCORE_EXPORT String host() const;
     ExceptionOr<void> setHostname(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
     String hostname() const;
     ExceptionOr<void> setPort(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
@@ -71,7 +70,7 @@ public:
     Ref<DOMStringList> ancestorOrigins() const;
 
 private:
-    explicit Location(Frame*);
+    explicit Location(DOMWindow&);
 
     ExceptionOr<void> setLocation(DOMWindow& activeWindow, DOMWindow& firstWindow, const String&);
 

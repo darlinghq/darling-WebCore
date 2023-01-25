@@ -20,18 +20,19 @@
 #include "config.h"
 #include "FEDropShadow.h"
 
+#include "ColorSerialization.h"
 #include "FEGaussianBlur.h"
 #include "Filter.h"
 #include "GraphicsContext.h"
+#include "ImageData.h"
 #include "ShadowBlur.h"
-#include "TextStream.h"
-#include <runtime/Uint8ClampedArray.h>
 #include <wtf/MathExtras.h>
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
     
 FEDropShadow::FEDropShadow(Filter& filter, float stdX, float stdY, float dx, float dy, const Color& shadowColor, float shadowOpacity)
-    : FilterEffect(filter)
+    : FilterEffect(filter, Type::DropShadow)
     , m_stdX(stdX)
     , m_stdY(stdY)
     , m_dx(dx)
@@ -52,10 +53,10 @@ void FEDropShadow::determineAbsolutePaintRect()
 
     FloatRect absolutePaintRect = inputEffect(0)->absolutePaintRect();
     FloatRect absoluteOffsetPaintRect(absolutePaintRect);
-    absoluteOffsetPaintRect.move(filter.applyHorizontalScale(m_dx), filter.applyVerticalScale(m_dy));
+    absoluteOffsetPaintRect.move(filter.scaledByFilterResolution({ m_dx, m_dy }));
     absolutePaintRect.unite(absoluteOffsetPaintRect);
 
-    IntSize kernelSize = FEGaussianBlur::calculateKernelSize(filter, FloatPoint(m_stdX, m_stdY));
+    IntSize kernelSize = FEGaussianBlur::calculateKernelSize(filter, { m_stdX, m_stdY });
 
     // We take the half kernel size and multiply it with three, because we run box blur three times.
     absolutePaintRect.inflateX(3 * kernelSize.width() * 0.5f);
@@ -78,15 +79,16 @@ void FEDropShadow::platformApplySoftware()
         return;
 
     Filter& filter = this->filter();
-    FloatSize blurRadius(2 * filter.applyHorizontalScale(m_stdX), 2 * filter.applyVerticalScale(m_stdY));
+    
+    FloatSize blurRadius = 2 * filter.scaledByFilterResolution({ m_stdX, m_stdY });
     blurRadius.scale(filter.filterScale());
-    FloatSize offset(filter.applyHorizontalScale(m_dx), filter.applyVerticalScale(m_dy));
+    FloatSize offset = filter.scaledByFilterResolution({ m_dx, m_dy });
 
     FloatRect drawingRegion = drawingRegionOfInputImage(in->absolutePaintRect());
     FloatRect drawingRegionWithOffset(drawingRegion);
     drawingRegionWithOffset.move(offset);
 
-    ImageBuffer* sourceImage = in->asImageBuffer();
+    ImageBuffer* sourceImage = in->imageBufferResult();
     if (!sourceImage)
         return;
 
@@ -98,31 +100,42 @@ void FEDropShadow::platformApplySoftware()
     ShadowBlur contextShadow(blurRadius, offset, m_shadowColor);
 
     // TODO: Direct pixel access to ImageBuffer would avoid copying the ImageData.
-    IntRect shadowArea(IntPoint(), resultImage->internalSize());
-    RefPtr<Uint8ClampedArray> srcPixelArray = resultImage->getPremultipliedImageData(shadowArea, nullptr, ImageBuffer::BackingStoreCoordinateSystem);
+    IntRect shadowArea(IntPoint(), resultImage->logicalSize());
+    auto imageData = resultImage->getImageData(AlphaPremultiplication::Premultiplied, shadowArea);
+    if (!imageData)
+        return;
 
-    contextShadow.blurLayerImage(srcPixelArray->data(), shadowArea.size(), 4 * shadowArea.size().width());
+    auto* srcPixelArray = imageData->data();
+    contextShadow.blurLayerImage(srcPixelArray->data(), imageData->size(), 4 * imageData->size().width());
+    
+    resultImage->putImageData(AlphaPremultiplication::Premultiplied, *imageData, shadowArea);
 
-    resultImage->putByteArray(Premultiplied, srcPixelArray.get(), shadowArea.size(), shadowArea, IntPoint(), ImageBuffer::BackingStoreCoordinateSystem);
-
-    resultContext.setCompositeOperation(CompositeSourceIn);
+    resultContext.setCompositeOperation(CompositeOperator::SourceIn);
     resultContext.fillRect(FloatRect(FloatPoint(), absolutePaintRect().size()), m_shadowColor);
-    resultContext.setCompositeOperation(CompositeDestinationOver);
+    resultContext.setCompositeOperation(CompositeOperator::DestinationOver);
 
     resultImage->context().drawImageBuffer(*sourceImage, drawingRegion);
 }
 
-void FEDropShadow::dump()
+IntOutsets FEDropShadow::outsets() const
 {
+    IntSize outsetSize = FEGaussianBlur::calculateOutsetSize({ m_stdX, m_stdY });
+    return {
+        std::max<int>(0, outsetSize.height() - m_dy),
+        std::max<int>(0, outsetSize.width() + m_dx),
+        std::max<int>(0, outsetSize.height() + m_dy),
+        std::max<int>(0, outsetSize.width() - m_dx)
+    };
 }
 
-TextStream& FEDropShadow::externalRepresentation(TextStream& ts, int indent) const
+TextStream& FEDropShadow::externalRepresentation(TextStream& ts, RepresentationType representation) const
 {
-    writeIndent(ts, indent);
-    ts << "[feDropShadow";
-    FilterEffect::externalRepresentation(ts);
-    ts << " stdDeviation=\"" << m_stdX << ", " << m_stdY << "\" dx=\"" << m_dx << "\" dy=\"" << m_dy << "\" flood-color=\"" << m_shadowColor.nameForRenderTreeAsText() <<"\" flood-opacity=\"" << m_shadowOpacity << "]\n";
-    inputEffect(0)->externalRepresentation(ts, indent + 1);
+    ts << indent <<"[feDropShadow";
+    FilterEffect::externalRepresentation(ts, representation);
+    ts << " stdDeviation=\"" << m_stdX << ", " << m_stdY << "\" dx=\"" << m_dx << "\" dy=\"" << m_dy << "\" flood-color=\"" << serializationForRenderTreeAsText(m_shadowColor) <<"\" flood-opacity=\"" << m_shadowOpacity << "]\n";
+
+    TextStream::IndentScope indentScope(ts);
+    inputEffect(0)->externalRepresentation(ts, representation);
     return ts;
 }
     

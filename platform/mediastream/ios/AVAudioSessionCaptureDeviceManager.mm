@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2017-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,51 +23,59 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "AVAudioSessionCaptureDeviceManager.h"
+#import "config.h"
+#import "AVAudioSessionCaptureDeviceManager.h"
 
-#if ENABLE(MEDIA_STREAM) && PLATFORM(IOS)
+#if ENABLE(MEDIA_STREAM) && PLATFORM(IOS_FAMILY)
 
-#include "AVAudioSessionCaptureDevice.h"
-#include <AVFoundation/AVAudioSession.h>
-#include <wtf/SoftLinking.h>
-#include <wtf/Vector.h>
+#import "AVAudioSessionCaptureDevice.h"
+#import "Logging.h"
+#import "RealtimeMediaSourceCenter.h"
+#import <AVFoundation/AVAudioSession.h>
+#import <pal/spi/cocoa/AVFoundationSPI.h>
+#import <wtf/Assertions.h>
+#import <wtf/BlockPtr.h>
+#import <wtf/MainThread.h>
+#import <wtf/Vector.h>
 
-SOFT_LINK_FRAMEWORK(AVFoundation)
-SOFT_LINK_CLASS(AVFoundation, AVAudioSession)
-#define AVAudioSession getAVAudioSessionClass()
-
-void* AvailableInputsContext = &AvailableInputsContext;
+#import <pal/cocoa/AVFoundationSoftLink.h>
 
 @interface WebAVAudioSessionAvailableInputsListener : NSObject {
-    WTF::Function<void()> _callback;
+    WebCore::AVAudioSessionCaptureDeviceManager* _callback;
 }
 @end
 
 @implementation WebAVAudioSessionAvailableInputsListener
-- (id)initWithCallback:(WTF::Function<void()>&&)callback
+- (id)initWithCallback:(WebCore::AVAudioSessionCaptureDeviceManager *)callback audioSession:(AVAudioSession *)session
 {
     self = [super init];
     if (!self)
         return nil;
 
-    _callback = WTFMove(callback);
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(routeDidChange:) name:PAL::get_AVFoundation_AVAudioSessionRouteChangeNotification() object:session];
+
+    _callback = callback;
+
     return self;
 }
 
 - (void)invalidate
 {
     _callback = nullptr;
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
-- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey, id> *)change context:(void *)context
+- (void)routeDidChange:(NSNotification *)notification
 {
-    UNUSED_PARAM(keyPath);
-    UNUSED_PARAM(object);
-    UNUSED_PARAM(change);
-    if (context == AvailableInputsContext && _callback)
-        _callback();
+    if (!_callback)
+        return;
+
+    callOnWebThreadOrDispatchAsyncOnMainThread([protectedSelf = retainPtr(self)]() mutable {
+        if (auto* callback = protectedSelf->_callback)
+            callback->scheduleUpdateCaptureDevices();
+    });
 }
+
 @end
 
 namespace WebCore {
@@ -78,63 +86,188 @@ AVAudioSessionCaptureDeviceManager& AVAudioSessionCaptureDeviceManager::singleto
     return manager;
 }
 
+AVAudioSessionCaptureDeviceManager::AVAudioSessionCaptureDeviceManager()
+    : m_dispatchQueue(dispatch_queue_create("com.apple.WebKit.AVAudioSessionCaptureDeviceManager", DISPATCH_QUEUE_SERIAL))
+{
+    dispatch_async(m_dispatchQueue, makeBlockPtr([this, locker = holdLock(m_lock)] {
+        createAudioSession();
+    }).get());
+}
+
+void AVAudioSessionCaptureDeviceManager::createAudioSession()
+{
+    ASSERT(m_lock.isLocked());
+
+#if !PLATFORM(MACCATALYST)
+    m_audioSession = adoptNS([[PAL::getAVAudioSessionClass() alloc] initAuxiliarySession]);
+#else
+    // FIXME: Figure out if this is correct for Catalyst, where auxiliary session isn't available.
+    m_audioSession = [PAL::getAVAudioSessionClass() sharedInstance];
+#endif
+
+    NSError *error = nil;
+    auto options = AVAudioSessionCategoryOptionAllowBluetooth | AVAudioSessionCategoryOptionMixWithOthers;
+    [m_audioSession setCategory:AVAudioSessionCategoryPlayAndRecord mode:AVAudioSessionModeVideoChat options:options error:&error];
+    if (error)
+        RELEASE_LOG_ERROR(WebRTC, "Failed to set audio session category with error: %@.", error.localizedDescription);
+}
+
 AVAudioSessionCaptureDeviceManager::~AVAudioSessionCaptureDeviceManager()
 {
+    dispatch_release(m_dispatchQueue);
     [m_listener invalidate];
     m_listener = nullptr;
 }
 
-Vector<CaptureDevice>& AVAudioSessionCaptureDeviceManager::captureDevices()
+const Vector<CaptureDevice>& AVAudioSessionCaptureDeviceManager::captureDevices()
 {
     if (!m_devices)
         refreshAudioCaptureDevices();
     return m_devices.value();
 }
 
-Vector<AVAudioSessionCaptureDevice>& AVAudioSessionCaptureDeviceManager::audioSessionCaptureDevices()
+Optional<CaptureDevice> AVAudioSessionCaptureDeviceManager::captureDeviceWithPersistentID(CaptureDevice::DeviceType type, const String& deviceID)
 {
-    if (!m_audioSessionCaptureDevices)
-        refreshAudioCaptureDevices();
-    return m_audioSessionCaptureDevices.value();
-}
-
-std::optional<AVAudioSessionCaptureDevice> AVAudioSessionCaptureDeviceManager::audioSessionDeviceWithUID(const String& deviceID)
-{
-    if (!m_audioSessionCaptureDevices)
-        refreshAudioCaptureDevices();
-
-    for (auto& device : audioSessionCaptureDevices()) {
+    ASSERT_UNUSED(type, type == CaptureDevice::DeviceType::Microphone);
+    for (auto& device : captureDevices()) {
         if (device.persistentId() == deviceID)
             return device;
     }
-    return std::nullopt;
+    return WTF::nullopt;
+}
+
+Optional<AVAudioSessionCaptureDevice> AVAudioSessionCaptureDeviceManager::audioSessionDeviceWithUID(const String& deviceID)
+{
+    if (!m_audioSessionCaptureDevices)
+        refreshAudioCaptureDevices();
+
+    for (auto& device : *m_audioSessionCaptureDevices) {
+        if (device.persistentId() == deviceID)
+            return device;
+    }
+    return WTF::nullopt;
+}
+
+void AVAudioSessionCaptureDeviceManager::scheduleUpdateCaptureDevices()
+{
+    getCaptureDevices([] (auto) { });
 }
 
 void AVAudioSessionCaptureDeviceManager::refreshAudioCaptureDevices()
 {
-    if (!m_listener) {
-        m_listener = adoptNS([[WebAVAudioSessionAvailableInputsListener alloc] initWithCallback:[this] {
-            refreshAudioCaptureDevices();
-        }]);
-        [[AVAudioSession sharedInstance] addObserver:m_listener.get() forKeyPath:@"availableInputs" options:0 context:AvailableInputsContext];
+    if (m_audioSessionState == AudioSessionState::Inactive) {
+        m_audioSessionState = AudioSessionState::Active;
+
+        dispatch_sync(m_dispatchQueue, makeBlockPtr([this] {
+            activateAudioSession();
+        }).get());
     }
 
     Vector<AVAudioSessionCaptureDevice> newAudioDevices;
-    Vector<CaptureDevice> newDevices;
+    dispatch_sync(m_dispatchQueue, makeBlockPtr([&] {
+        newAudioDevices = retrieveAudioSessionCaptureDevices();
+    }).get());
+    setAudioCaptureDevices(WTFMove(newAudioDevices).isolatedCopy());
+}
 
-    for (AVAudioSessionPortDescription *portDescription in [AVAudioSession sharedInstance].availableInputs) {
-        auto audioDevice = AVAudioSessionCaptureDevice::create(portDescription);
-        newDevices.append(audioDevice);
-        newAudioDevices.append(WTFMove(audioDevice));
+void AVAudioSessionCaptureDeviceManager::getCaptureDevices(CompletionHandler<void(Vector<CaptureDevice>&&)>&& completion)
+{
+    if (m_audioSessionState == AudioSessionState::Inactive) {
+        m_audioSessionState = AudioSessionState::Active;
+
+        dispatch_async(m_dispatchQueue, makeBlockPtr([this] {
+            activateAudioSession();
+        }).get());
     }
 
+    dispatch_async(m_dispatchQueue, makeBlockPtr([this, completion = WTFMove(completion)] () mutable {
+        auto newAudioDevices = retrieveAudioSessionCaptureDevices();
+        callOnWebThreadOrDispatchAsyncOnMainThread(makeBlockPtr([this, completion = WTFMove(completion), newAudioDevices = WTFMove(newAudioDevices).isolatedCopy()] () mutable {
+            setAudioCaptureDevices(WTFMove(newAudioDevices));
+            completion(copyToVector(*m_devices));
+        }).get());
+    }).get());
+}
+
+void AVAudioSessionCaptureDeviceManager::activateAudioSession()
+{
+    if (!m_listener)
+        m_listener = adoptNS([[WebAVAudioSessionAvailableInputsListener alloc] initWithCallback:this audioSession:m_audioSession.get()]);
+
+    NSError *error = nil;
+    [m_audioSession setActive:YES withOptions:0 error:&error];
+    if (error)
+        RELEASE_LOG_ERROR(WebRTC, "Failed to activate audio session with error: %@.", error.localizedDescription);
+}
+
+Vector<AVAudioSessionCaptureDevice> AVAudioSessionCaptureDeviceManager::retrieveAudioSessionCaptureDevices() const
+{
+    auto *defaultInput = [m_audioSession currentRoute].inputs.firstObject;
+    auto availableInputs = [m_audioSession availableInputs];
+
+    Vector<AVAudioSessionCaptureDevice> newAudioDevices;
+    newAudioDevices.reserveInitialCapacity(availableInputs.count);
+    for (AVAudioSessionPortDescription *portDescription in availableInputs)
+        newAudioDevices.uncheckedAppend(AVAudioSessionCaptureDevice::create(portDescription, defaultInput));
+
+    return newAudioDevices;
+}
+
+void AVAudioSessionCaptureDeviceManager::setAudioCaptureDevices(Vector<AVAudioSessionCaptureDevice>&& newAudioDevices)
+{
+    bool firstTime = !m_devices;
+    bool haveDeviceChanges = !m_devices || newAudioDevices.size() != m_devices->size();
+    if (!haveDeviceChanges) {
+        for (size_t i = 0; i < newAudioDevices.size(); ++i) {
+            auto& oldState = (*m_devices)[i];
+            auto& newState = newAudioDevices[i];
+            if (newState.type() != oldState.type() || newState.persistentId() != oldState.persistentId() || newState.enabled() != oldState.enabled() || newState.isDefault() != oldState.isDefault())
+                haveDeviceChanges = true;
+        }
+    }
+
+    if (!haveDeviceChanges && !firstTime)
+        return;
+
+    auto newDevices = copyToVectorOf<CaptureDevice>(newAudioDevices);
     m_audioSessionCaptureDevices = WTFMove(newAudioDevices);
+    std::sort(newDevices.begin(), newDevices.end(), [] (auto& first, auto& second) -> bool {
+        return first.isDefault() && !second.isDefault();
+    });
     m_devices = WTFMove(newDevices);
 
-    for (auto& observer : m_observers.values())
-        observer();
+    if (!firstTime)
+        deviceChanged();
+}
+
+void AVAudioSessionCaptureDeviceManager::enableAllDevicesQuery()
+{
+    if (m_audioSessionState != AudioSessionState::NotNeeded)
+        return;
+
+    m_audioSessionState = AudioSessionState::Inactive;
+    refreshAudioCaptureDevices();
+}
+
+void AVAudioSessionCaptureDeviceManager::disableAllDevicesQuery()
+{
+    if (m_audioSessionState == AudioSessionState::NotNeeded)
+        return;
+
+    if (m_audioSessionState == AudioSessionState::Active) {
+        dispatch_async(m_dispatchQueue, makeBlockPtr([this] {
+            if (m_audioSessionState != AudioSessionState::NotNeeded)
+                return;
+            NSError *error = nil;
+            [m_audioSession setActive:NO withOptions:0 error:&error];
+            if (error)
+                RELEASE_LOG_ERROR(WebRTC, "Failed to disactivate audio session with error: %@.", error.localizedDescription);
+        }).get());
+    }
+
+    m_audioSessionState = AudioSessionState::NotNeeded;
 }
 
 } // namespace WebCore
 
-#endif // ENABLE(MEDIA_STREAM) && PLATFORM(MAC)
+#endif // ENABLE(MEDIA_STREAM) && PLATFORM(IOS_FAMILY)

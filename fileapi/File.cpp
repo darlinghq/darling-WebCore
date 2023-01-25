@@ -27,72 +27,94 @@
 #include "File.h"
 
 #include "BlobURL.h"
-#include "FileMetadata.h"
-#include "FileSystem.h"
 #include "MIMETypeRegistry.h"
 #include "ThreadableBlobRegistry.h"
-#include <wtf/CurrentTime.h>
 #include <wtf/DateMath.h>
+#include <wtf/FileMetadata.h>
+#include <wtf/FileSystem.h>
+#include <wtf/IsoMallocInlines.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
-File::File(const String& path)
-    : Blob(uninitializedContructor)
-    , m_path(path)
+WTF_MAKE_ISO_ALLOCATED_IMPL(File);
+
+Ref<File> File::createWithRelativePath(ScriptExecutionContext* context, const String& path, const String& relativePath)
 {
-    m_internalURL = BlobURL::createInternalURL();
-    m_size = -1;
-    computeNameAndContentType(m_path, String(), m_name, m_type);
-    ThreadableBlobRegistry::registerFileBlobURL(m_internalURL, path, m_type);
+    auto file = File::create(context, path);
+    file->setRelativePath(relativePath);
+    return file;
 }
 
-File::File(const String& path, const String& nameOverride)
-    : Blob(uninitializedContructor)
-    , m_path(path)
+Ref<File> File::create(ScriptExecutionContext* context, const String& path, const String& replacementPath, const String& nameOverride)
 {
-    m_internalURL = BlobURL::createInternalURL();
-    m_size = -1;
-    computeNameAndContentType(m_path, nameOverride, m_name, m_type);
-    ThreadableBlobRegistry::registerFileBlobURL(m_internalURL, path, m_type);
+    String name;
+    String type;
+    String effectivePath = !replacementPath.isNull() ? replacementPath : path;
+    computeNameAndContentType(effectivePath, nameOverride, name, type);
+
+    auto internalURL = BlobURL::createInternalURL();
+    ThreadableBlobRegistry::registerFileBlobURL(internalURL, path, replacementPath, type);
+
+    auto file = adoptRef(*new File(context, WTFMove(internalURL), WTFMove(type), WTFMove(effectivePath), WTFMove(name)));
+    file->suspendIfNeeded();
+    return file;
 }
 
-File::File(DeserializationContructor, const String& path, const URL& url, const String& type, const String& name)
-    : Blob(deserializationContructor, url, type, -1, path)
+File::File(ScriptExecutionContext* context, URL&& url, String&& type, String&& path, String&& name)
+    : Blob(uninitializedContructor, context, WTFMove(url), WTFMove(type))
+    , m_path(WTFMove(path))
+    , m_name(WTFMove(name))
+{
+}
+
+File::File(DeserializationContructor, ScriptExecutionContext* context, const String& path, const URL& url, const String& type, const String& name, const Optional<int64_t>& lastModified)
+    : Blob(deserializationContructor, context, url, type, { }, path)
     , m_path(path)
     , m_name(name)
+    , m_lastModifiedDateOverride(lastModified)
 {
 }
 
-static BlobPropertyBag convertPropertyBag(const File::PropertyBag& initialBag)
-{
-    BlobPropertyBag bag;
-    bag.type = initialBag.type;
-    return bag;
-}
-
-File::File(Vector<BlobPartVariant>&& blobPartVariants, const String& filename, const PropertyBag& propertyBag)
-    : Blob(WTFMove(blobPartVariants), convertPropertyBag(propertyBag))
+File::File(ScriptExecutionContext& context, Vector<BlobPartVariant>&& blobPartVariants, const String& filename, const PropertyBag& propertyBag)
+    : Blob(context, WTFMove(blobPartVariants), propertyBag)
     , m_name(filename)
-    , m_overrideLastModifiedDate(propertyBag.lastModified.value_or(currentTimeMS()))
+    , m_lastModifiedDateOverride(propertyBag.lastModified.valueOr(WallTime::now().secondsSinceEpoch().milliseconds()))
 {
 }
 
-double File::lastModified() const
+File::File(ScriptExecutionContext* context, const Blob& blob, const String& name)
+    : Blob(referencingExistingBlobConstructor, context, blob)
+    , m_name(name)
 {
-    if (m_overrideLastModifiedDate)
-        return m_overrideLastModifiedDate.value();
+    ASSERT(!blob.isFile());
+}
 
-    double result;
+File::File(ScriptExecutionContext* context, const File& file, const String& name)
+    : Blob(referencingExistingBlobConstructor, context, file)
+    , m_path(file.path())
+    , m_relativePath(file.relativePath())
+    , m_name(!name.isNull() ? name : file.name())
+    , m_lastModifiedDateOverride(file.m_lastModifiedDateOverride)
+    , m_isDirectory(file.isDirectory())
+{
+}
+
+int64_t File::lastModified() const
+{
+    if (m_lastModifiedDateOverride)
+        return m_lastModifiedDateOverride.value();
+
+    int64_t result;
 
     // FIXME: This does sync-i/o on the main thread and also recalculates every time the method is called.
     // The i/o should be performed on a background thread,
     // and the result should be cached along with an asynchronous monitor for changes to the file.
-    time_t modificationTime;
-    if (getFileModificationTime(m_path, modificationTime) && isValidFileTime(modificationTime))
-        result = modificationTime * msPerSecond;
+    auto modificationTime = FileSystem::getFileModificationTime(m_path);
+    if (modificationTime)
+        result = modificationTime->secondsSinceEpoch().millisecondsAs<int64_t>();
     else
-        result = currentTime() * msPerSecond;
+        result = WallTime::now().secondsSinceEpoch().millisecondsAs<int64_t>();
 
     return WTF::timeClip(result);
 }
@@ -105,10 +127,13 @@ void File::computeNameAndContentType(const String& path, const String& nameOverr
         return;
     }
 #endif
-    effectiveName = nameOverride.isNull() ? pathGetFileName(path) : nameOverride;
+    effectiveName = nameOverride.isEmpty() ? FileSystem::pathGetFileName(path) : nameOverride;
     size_t index = effectiveName.reverseFind('.');
-    if (index != notFound)
-        effectiveContentType = MIMETypeRegistry::getMIMETypeForExtension(effectiveName.substring(index + 1));
+    if (index != notFound) {
+        callOnMainThreadAndWait([&effectiveContentType, &effectiveName, index] {
+            effectiveContentType = MIMETypeRegistry::mimeTypeForExtension(effectiveName.substring(index + 1)).isolatedCopy();
+        });
+    }
 }
 
 String File::contentTypeForFile(const String& path)
@@ -118,6 +143,18 @@ String File::contentTypeForFile(const String& path)
     computeNameAndContentType(path, String(), name, type);
 
     return type;
+}
+
+bool File::isDirectory() const
+{
+    if (!m_isDirectory)
+        m_isDirectory = FileSystem::fileIsDirectory(m_path, FileSystem::ShouldFollowSymbolicLinks::Yes);
+    return *m_isDirectory;
+}
+
+const char* File::activeDOMObjectName() const
+{
+    return "File";
 }
 
 } // namespace WebCore

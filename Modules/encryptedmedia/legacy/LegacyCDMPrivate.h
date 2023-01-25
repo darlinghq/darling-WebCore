@@ -31,17 +31,18 @@
 
 namespace WebCore {
 
-class CDMSession;
-class CDMSessionClient;
+class LegacyCDMSession;
+class LegacyCDMSessionClient;
 
 class CDMPrivateInterface {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
-    CDMPrivateInterface() { }
-    virtual ~CDMPrivateInterface() { }
+    CDMPrivateInterface() = default;
+    virtual ~CDMPrivateInterface() = default;
 
     virtual bool supportsMIMEType(const String&) = 0;
 
-    virtual std::unique_ptr<CDMSession> createSession(CDMSessionClient*) = 0;
+    virtual std::unique_ptr<LegacyCDMSession> createSession(LegacyCDMSessionClient*) = 0;
 };
 
 } // namespace WebCore

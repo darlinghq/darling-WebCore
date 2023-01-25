@@ -26,12 +26,11 @@
 #import "config.h"
 #import "WAKWindow.h"
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
 #import "LegacyTileCache.h"
 #import "PlatformScreen.h"
 #import "WAKViewInternal.h"
-#import "WebCoreSystemInterface.h"
 #import "WebCoreThreadRun.h"
 #import "WebEvent.h"
 #import "WKContentObservation.h"
@@ -210,6 +209,18 @@ static id<OrientationProvider> gOrientationProvider;
     return (NSSelectionDirection)0;
 }
 
+- (BOOL)resignFirstResponder
+{
+    BOOL shouldResign = [super resignFirstResponder];
+    if (shouldResign && _responderView && WKViewResignFirstResponder([_responderView _viewRef])) {
+        _nextResponder = nil;
+        [_responderView release];
+        _responderView = nil;
+        return YES;
+    }
+    return NO;
+}
+
 - (BOOL)makeFirstResponder:(NSResponder *)aResponder
 {
     if (![aResponder isKindOfClass:[WAKView class]])
@@ -329,32 +340,28 @@ static id<OrientationProvider> gOrientationProvider;
     currentEvent = [anEvent retain];
 
     switch (anEvent.type) {
-        case WebEventMouseMoved:
-        case WebEventScrollWheel:
-            if (WAKView *hitView = [_contentView hitTest:(anEvent.locationInWindow)])
-                [hitView handleEvent:anEvent];
-            break;
+    case WebEventMouseMoved:
+    case WebEventScrollWheel:
+        if (WAKView *hitView = [_contentView hitTest:(anEvent.locationInWindow)])
+            [hitView handleEvent:anEvent];
+        break;
 
-        case WebEventMouseUp:
-        case WebEventKeyDown:
-        case WebEventKeyUp:
-        case WebEventTouchChange:
-            [_responderView handleEvent:anEvent];
-            break;
+    case WebEventMouseUp:
+    case WebEventKeyDown:
+    case WebEventKeyUp:
+    case WebEventTouchChange:
+        [_responderView handleEvent:anEvent];
+        break;
 
-        case WebEventMouseDown:
-        case WebEventTouchBegin:
-        case WebEventTouchEnd:
-        case WebEventTouchCancel:
-            if (WAKView *hitView = [_contentView hitTest:(anEvent.locationInWindow)]) {
-                [self makeFirstResponder:hitView];
-                [hitView handleEvent:anEvent];
-            }
-            break;
-
-        default:
-            ASSERT_NOT_REACHED();
-            break;
+    case WebEventMouseDown:
+    case WebEventTouchBegin:
+    case WebEventTouchEnd:
+    case WebEventTouchCancel:
+        if (WAKView *hitView = [_contentView hitTest:(anEvent.locationInWindow)]) {
+            [self makeFirstResponder:hitView];
+            [hitView handleEvent:anEvent];
+        }
+        break;
     }
 
     [currentEvent release];
@@ -366,8 +373,10 @@ static id<OrientationProvider> gOrientationProvider;
     WebThreadRun(^{
         [self sendEvent:anEvent];
 
-        if (aContentChange)
-            *aContentChange = WKObservedContentChange();
+        if (aContentChange) {
+            // We always make the decision asynchronously. See EventHandler::mouseMoved.
+            *aContentChange = WKContentIndeterminateChange;
+        }
     });
 }
 
@@ -683,7 +692,7 @@ static id<OrientationProvider> gOrientationProvider;
     CGRect savedFrozenVisibleRect = _frozenVisibleRect;
     NSLog(@"=================");
     if (!CGRectIsNull(_frozenVisibleRect)) {
-        NSLog(@"VISIBLE RECT IS CACHED: [%6.1f %6.1f %6.1f %6.1f]", _frozenVisibleRect.origin.x, _frozenVisibleRect.origin.y, _frozenVisibleRect.size.width, _frozenVisibleRect.size.height);
+        NSLog(@"Visibility::Visible RECT IS CACHED: [%6.1f %6.1f %6.1f %6.1f]", _frozenVisibleRect.origin.x, _frozenVisibleRect.origin.y, _frozenVisibleRect.size.width, _frozenVisibleRect.size.height);
         _frozenVisibleRect = CGRectNull;
     }
     CGRect visibleRect = [self visibleRect];
@@ -733,4 +742,4 @@ static id<OrientationProvider> gOrientationProvider;
 
 @end
 
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY)

@@ -23,8 +23,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef GeneratedImage_h
-#define GeneratedImage_h
+#pragma once
 
 #include "FloatSize.h"
 #include "Image.h"
@@ -41,15 +40,14 @@ public:
     bool hasRelativeHeight() const override { return true; }
     void computeIntrinsicDimensions(Length& intrinsicWidth, Length& intrinsicHeight, FloatSize& intrinsicRatio) override;
 
-    FloatSize size() const override { return m_size; }
+    FloatSize size(ImageOrientation = ImageOrientation::FromImage) const override { return m_size; }
 
     // Assume that generated content has no decoded data we need to worry about
     void destroyDecodedData(bool /*destroyAll*/ = true) override { }
 
 protected:
-    ImageDrawResult draw(GraphicsContext&, const FloatRect& dstRect, const FloatRect& srcRect, CompositeOperator, BlendMode, DecodingMode, ImageOrientationDescription) override = 0;
-    void drawPattern(GraphicsContext&, const FloatRect& destRect, const FloatRect& srcRect, const AffineTransform& patternTransform,
-        const FloatPoint& phase, const FloatSize& spacing, CompositeOperator, BlendMode) override = 0;
+    ImageDrawResult draw(GraphicsContext&, const FloatRect& dstRect, const FloatRect& srcRect, const ImagePaintingOptions& = { }) override = 0;
+    void drawPattern(GraphicsContext&, const FloatRect& destRect, const FloatRect& srcRect, const AffineTransform& patternTransform, const FloatPoint& phase, const FloatSize& spacing, const ImagePaintingOptions& = { }) override = 0;
 
     // FIXME: Implement this to be less conservative.
     bool currentFrameKnownToBeOpaque() const override { return false; }
@@ -64,4 +62,4 @@ private:
 
 }
 
-#endif
+SPECIALIZE_TYPE_TRAITS_IMAGE(GeneratedImage)

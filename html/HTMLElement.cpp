@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 1999 Lars Knoll (knoll@kde.org)
  *           (C) 1999 Antti Koivisto (koivisto@kde.org)
- * Copyright (C) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2004-2020 Apple Inc. All rights reserved.
  * Copyright (C) 2009 Torch Mobile Inc. All rights reserved. (http://www.torchmobile.com/)
  * Copyright (C) 2011 Motorola Mobility. All rights reserved.
  *
@@ -29,20 +29,22 @@
 #include "CSSPropertyNames.h"
 #include "CSSValueKeywords.h"
 #include "CSSValuePool.h"
+#include "Chrome.h"
+#include "ChromeClient.h"
 #include "DOMTokenList.h"
 #include "DocumentFragment.h"
 #include "ElementAncestorIterator.h"
+#include "EnterKeyHint.h"
 #include "Event.h"
+#include "EventHandler.h"
 #include "EventListener.h"
 #include "EventNames.h"
-#include "ExceptionCode.h"
 #include "Frame.h"
 #include "FrameLoader.h"
 #include "FrameView.h"
 #include "HTMLBDIElement.h"
 #include "HTMLBRElement.h"
 #include "HTMLButtonElement.h"
-#include "HTMLCollection.h"
 #include "HTMLDocument.h"
 #include "HTMLElementFactory.h"
 #include "HTMLFieldSetElement.h"
@@ -58,21 +60,24 @@
 #include "NodeTraversal.h"
 #include "RenderElement.h"
 #include "ScriptController.h"
+#include "ScriptDisallowedScope.h"
 #include "ShadowRoot.h"
 #include "SimulatedClick.h"
 #include "StyleProperties.h"
-#include "SubframeLoader.h"
 #include "Text.h"
 #include "XMLNames.h"
 #include "markup.h"
+#include <wtf/IsoMallocInlines.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/text/CString.h>
+#include <wtf/text/StringBuilder.h>
 
 namespace WebCore {
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(HTMLElement);
+
 using namespace HTMLNames;
-using namespace WTF;
 
 Ref<HTMLElement> HTMLElement::create(const QualifiedName& tagName, Document& document)
 {
@@ -81,7 +86,7 @@ Ref<HTMLElement> HTMLElement::create(const QualifiedName& tagName, Document& doc
 
 String HTMLElement::nodeName() const
 {
-    // FIXME: Would be nice to have an AtomicString lookup based off uppercase
+    // FIXME: Would be nice to have an AtomString lookup based off uppercase
     // ASCII characters that does not have to copy the string on a hit in the hash.
     if (document().isHTMLDocument()) {
         if (LIKELY(!tagQName().hasPrefix()))
@@ -100,7 +105,7 @@ static inline CSSValueID unicodeBidiAttributeForDirAuto(HTMLElement& element)
     return CSSValueIsolate;
 }
 
-unsigned HTMLElement::parseBorderWidthAttribute(const AtomicString& value) const
+unsigned HTMLElement::parseBorderWidthAttribute(const AtomString& value) const
 {
     if (auto optionalBorderWidth = parseHTMLNonNegativeInteger(value))
         return optionalBorderWidth.value();
@@ -108,13 +113,13 @@ unsigned HTMLElement::parseBorderWidthAttribute(const AtomicString& value) const
     return hasTagName(tableTag) ? 1 : 0;
 }
 
-void HTMLElement::applyBorderAttributeToStyle(const AtomicString& value, MutableStyleProperties& style)
+void HTMLElement::applyBorderAttributeToStyle(const AtomString& value, MutableStyleProperties& style)
 {
-    addPropertyToPresentationAttributeStyle(style, CSSPropertyBorderWidth, parseBorderWidthAttribute(value), CSSPrimitiveValue::CSS_PX);
+    addPropertyToPresentationAttributeStyle(style, CSSPropertyBorderWidth, parseBorderWidthAttribute(value), CSSUnitType::CSS_PX);
     addPropertyToPresentationAttributeStyle(style, CSSPropertyBorderStyle, CSSValueSolid);
 }
 
-void HTMLElement::mapLanguageAttributeToLocale(const AtomicString& value, MutableStyleProperties& style)
+void HTMLElement::mapLanguageAttributeToLocale(const AtomString& value, MutableStyleProperties& style)
 {
     if (!value.isEmpty()) {
         // Have to quote so the locale id is treated as a string instead of as a CSS keyword.
@@ -132,7 +137,7 @@ bool HTMLElement::isPresentationAttribute(const QualifiedName& name) const
     return StyledElement::isPresentationAttribute(name);
 }
 
-static bool isLTROrRTLIgnoringCase(const AtomicString& dirAttributeValue)
+static bool isLTROrRTLIgnoringCase(const AtomString& dirAttributeValue)
 {
     return equalLettersIgnoringASCIICase(dirAttributeValue, "rtl") || equalLettersIgnoringASCIICase(dirAttributeValue, "ltr");
 }
@@ -144,7 +149,7 @@ enum class ContentEditableType {
     PlaintextOnly
 };
 
-static inline ContentEditableType contentEditableType(const AtomicString& value)
+static inline ContentEditableType contentEditableType(const AtomString& value)
 {
     if (value.isNull())
         return ContentEditableType::Inherit;
@@ -163,7 +168,7 @@ static ContentEditableType contentEditableType(const HTMLElement& element)
     return contentEditableType(element.attributeWithoutSynchronization(contenteditableAttr));
 }
 
-void HTMLElement::collectStyleForPresentationAttribute(const QualifiedName& name, const AtomicString& value, MutableStyleProperties& style)
+void HTMLElement::collectStyleForPresentationAttribute(const QualifiedName& name, const AtomString& value, MutableStyleProperties& style)
 {
     if (name == alignAttr) {
         if (equalLettersIgnoringASCIICase(value, "middle"))
@@ -185,7 +190,7 @@ void HTMLElement::collectStyleForPresentationAttribute(const QualifiedName& name
             addPropertyToPresentationAttributeStyle(style, CSSPropertyWordWrap, CSSValueBreakWord);
             addPropertyToPresentationAttributeStyle(style, CSSPropertyWebkitNbspMode, CSSValueSpace);
             addPropertyToPresentationAttributeStyle(style, CSSPropertyLineBreak, CSSValueAfterWhiteSpace);
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
             addPropertyToPresentationAttributeStyle(style, CSSPropertyWebkitTextSizeAdjust, CSSValueNone);
 #endif
             break;
@@ -203,10 +208,15 @@ void HTMLElement::collectStyleForPresentationAttribute(const QualifiedName& name
         if (equalLettersIgnoringASCIICase(value, "auto"))
             addPropertyToPresentationAttributeStyle(style, CSSPropertyUnicodeBidi, unicodeBidiAttributeForDirAuto(*this));
         else {
-            if (isLTROrRTLIgnoringCase(value))
+            auto unicodeBidiValue = CSSValueEmbed;
+
+            if (isLTROrRTLIgnoringCase(value)) {
                 addPropertyToPresentationAttributeStyle(style, CSSPropertyDirection, value);
+                unicodeBidiValue = CSSValueIsolate;
+            } 
+
             if (!hasTagName(bdiTag) && !hasTagName(bdoTag) && !hasTagName(outputTag))
-                addPropertyToPresentationAttributeStyle(style, CSSPropertyUnicodeBidi, CSSValueEmbed);
+                addPropertyToPresentationAttributeStyle(style, CSSPropertyUnicodeBidi, unicodeBidiValue);
         }
     } else if (name.matches(XMLNames::langAttr))
         mapLanguageAttributeToLocale(value, style);
@@ -223,114 +233,129 @@ HTMLElement::EventHandlerNameMap HTMLElement::createEventHandlerNameMap()
     EventHandlerNameMap map;
 
     static const QualifiedName* const table[] = {
-        &onabortAttr,
-        &onanimationendAttr,
-        &onanimationiterationAttr,
-        &onanimationstartAttr,
-        &onautocompleteAttr,
-        &onautocompleteerrorAttr,
-        &onbeforecopyAttr,
-        &onbeforecutAttr,
-        &onbeforeinputAttr,
-        &onbeforeloadAttr,
-        &onbeforepasteAttr,
-        &onblurAttr,
-        &oncanplayAttr,
-        &oncanplaythroughAttr,
-        &onchangeAttr,
-        &onclickAttr,
-        &oncontextmenuAttr,
-        &oncopyAttr,
-        &oncutAttr,
-        &ondblclickAttr,
-        &ondragAttr,
-        &ondragendAttr,
-        &ondragenterAttr,
-        &ondragleaveAttr,
-        &ondragoverAttr,
-        &ondragstartAttr,
-        &ondropAttr,
-        &ondurationchangeAttr,
-        &onemptiedAttr,
-        &onendedAttr,
-        &onerrorAttr,
-        &onfocusAttr,
-        &onfocusinAttr,
-        &onfocusoutAttr,
-        &ongesturechangeAttr,
-        &ongestureendAttr,
-        &ongesturestartAttr,
-        &oninputAttr,
-        &oninvalidAttr,
-        &onkeydownAttr,
-        &onkeypressAttr,
-        &onkeyupAttr,
-        &onloadAttr,
-        &onloadeddataAttr,
-        &onloadedmetadataAttr,
-        &onloadstartAttr,
-        &onmousedownAttr,
-        &onmouseenterAttr,
-        &onmouseleaveAttr,
-        &onmousemoveAttr,
-        &onmouseoutAttr,
-        &onmouseoverAttr,
-        &onmouseupAttr,
-        &onmousewheelAttr,
-        &onpasteAttr,
-        &onpauseAttr,
-        &onplayAttr,
-        &onplayingAttr,
-        &onprogressAttr,
-        &onratechangeAttr,
-        &onresetAttr,
-        &onresizeAttr,
-        &onscrollAttr,
-        &onsearchAttr,
-        &onseekedAttr,
-        &onseekingAttr,
-        &onselectAttr,
-        &onselectstartAttr,
-        &onstalledAttr,
-        &onsubmitAttr,
-        &onsuspendAttr,
-        &ontimeupdateAttr,
-        &ontoggleAttr,
-        &ontouchcancelAttr,
-        &ontouchendAttr,
-        &ontouchforcechangeAttr,
-        &ontouchmoveAttr,
-        &ontouchstartAttr,
-        &ontransitionendAttr,
-        &onvolumechangeAttr,
-        &onwaitingAttr,
-        &onwebkitbeginfullscreenAttr,
-        &onwebkitcurrentplaybacktargetiswirelesschangedAttr,
-        &onwebkitendfullscreenAttr,
-        &onwebkitfullscreenchangeAttr,
-        &onwebkitfullscreenerrorAttr,
-        &onwebkitkeyaddedAttr,
-        &onwebkitkeyerrorAttr,
-        &onwebkitkeymessageAttr,
-        &onwebkitmouseforcechangedAttr,
-        &onwebkitmouseforcedownAttr,
-        &onwebkitmouseforcewillbeginAttr,
-        &onwebkitmouseforceupAttr,
-        &onwebkitneedkeyAttr,
-        &onwebkitplaybacktargetavailabilitychangedAttr,
-        &onwebkitpresentationmodechangedAttr,
-        &onwebkitwillrevealbottomAttr,
-        &onwebkitwillrevealleftAttr,
-        &onwebkitwillrevealrightAttr,
-        &onwebkitwillrevealtopAttr,
-        &onwheelAttr,
+        &onabortAttr.get(),
+        &onanimationendAttr.get(),
+        &onanimationiterationAttr.get(),
+        &onanimationstartAttr.get(),
+        &onanimationcancelAttr.get(),
+        &onautocompleteAttr.get(),
+        &onautocompleteerrorAttr.get(),
+        &onbeforecopyAttr.get(),
+        &onbeforecutAttr.get(),
+        &onbeforeinputAttr.get(),
+        &onbeforeloadAttr.get(),
+        &onbeforepasteAttr.get(),
+        &onblurAttr.get(),
+        &oncanplayAttr.get(),
+        &oncanplaythroughAttr.get(),
+        &onchangeAttr.get(),
+        &onclickAttr.get(),
+        &oncontextmenuAttr.get(),
+        &oncopyAttr.get(),
+        &oncutAttr.get(),
+        &ondblclickAttr.get(),
+        &ondragAttr.get(),
+        &ondragendAttr.get(),
+        &ondragenterAttr.get(),
+        &ondragleaveAttr.get(),
+        &ondragoverAttr.get(),
+        &ondragstartAttr.get(),
+        &ondropAttr.get(),
+        &ondurationchangeAttr.get(),
+        &onemptiedAttr.get(),
+        &onendedAttr.get(),
+        &onerrorAttr.get(),
+        &onfocusAttr.get(),
+        &onfocusinAttr.get(),
+        &onfocusoutAttr.get(),
+        &ongesturechangeAttr.get(),
+        &ongestureendAttr.get(),
+        &ongesturestartAttr.get(),
+        &ongotpointercaptureAttr.get(),
+        &oninputAttr.get(),
+        &oninvalidAttr.get(),
+        &onkeydownAttr.get(),
+        &onkeypressAttr.get(),
+        &onkeyupAttr.get(),
+        &onloadAttr.get(),
+        &onloadeddataAttr.get(),
+        &onloadedmetadataAttr.get(),
+        &onloadstartAttr.get(),
+        &onlostpointercaptureAttr.get(),
+        &onmousedownAttr.get(),
+        &onmouseenterAttr.get(),
+        &onmouseleaveAttr.get(),
+        &onmousemoveAttr.get(),
+        &onmouseoutAttr.get(),
+        &onmouseoverAttr.get(),
+        &onmouseupAttr.get(),
+        &onmousewheelAttr.get(),
+        &onpasteAttr.get(),
+        &onpauseAttr.get(),
+        &onplayAttr.get(),
+        &onplayingAttr.get(),
+        &onpointerdownAttr.get(),
+        &onpointermoveAttr.get(),
+        &onpointerupAttr.get(),
+        &onpointercancelAttr.get(),
+        &onpointeroverAttr.get(),
+        &onpointeroutAttr.get(),
+        &onpointerenterAttr.get(),
+        &onpointerleaveAttr.get(),
+        &onprogressAttr.get(),
+        &onratechangeAttr.get(),
+        &onresetAttr.get(),
+        &onresizeAttr.get(),
+        &onscrollAttr.get(),
+        &onsearchAttr.get(),
+        &onseekedAttr.get(),
+        &onseekingAttr.get(),
+        &onselectAttr.get(),
+        &onselectstartAttr.get(),
+        &onslotchangeAttr.get(),
+        &onstalledAttr.get(),
+        &onsubmitAttr.get(),
+        &onsuspendAttr.get(),
+        &ontimeupdateAttr.get(),
+        &ontoggleAttr.get(),
+        &ontouchcancelAttr.get(),
+        &ontouchendAttr.get(),
+        &ontouchforcechangeAttr.get(),
+        &ontouchmoveAttr.get(),
+        &ontouchstartAttr.get(),
+        &ontransitioncancelAttr.get(),
+        &ontransitionendAttr.get(),
+        &ontransitionrunAttr.get(),
+        &ontransitionstartAttr.get(),
+        &onvolumechangeAttr.get(),
+        &onwaitingAttr.get(),
+        &onwebkitbeginfullscreenAttr.get(),
+        &onwebkitcurrentplaybacktargetiswirelesschangedAttr.get(),
+        &onwebkitendfullscreenAttr.get(),
+        &onwebkitfullscreenchangeAttr.get(),
+        &onwebkitfullscreenerrorAttr.get(),
+        &onwebkitkeyaddedAttr.get(),
+        &onwebkitkeyerrorAttr.get(),
+        &onwebkitkeymessageAttr.get(),
+        &onwebkitmouseforcechangedAttr.get(),
+        &onwebkitmouseforcedownAttr.get(),
+        &onwebkitmouseforcewillbeginAttr.get(),
+        &onwebkitmouseforceupAttr.get(),
+        &onwebkitneedkeyAttr.get(),
+        &onwebkitplaybacktargetavailabilitychangedAttr.get(),
+        &onwebkitpresentationmodechangedAttr.get(),
+        &onwebkitwillrevealbottomAttr.get(),
+        &onwebkitwillrevealleftAttr.get(),
+        &onwebkitwillrevealrightAttr.get(),
+        &onwebkitwillrevealtopAttr.get(),
+        &onwheelAttr.get(),
     };
 
     populateEventHandlerNameMap(map, table);
 
     struct UnusualMapping {
         const QualifiedName& attributeName;
-        const AtomicString& eventName;
+        const AtomString& eventName;
     };
 
     const UnusualMapping unusualPairsTable[] = {
@@ -357,13 +382,13 @@ void HTMLElement::populateEventHandlerNameMap(EventHandlerNameMap& map, const Qu
 
         // Remove the "on" prefix. Requires some memory allocation and computing a hash, but by not
         // using pointers from eventNames(), the passed-in table can be initialized at compile time.
-        AtomicString eventName = attributeName.string().substring(2);
+        AtomString eventName = attributeName.string().substring(2);
 
         map.add(attributeName.impl(), WTFMove(eventName));
     }
 }
 
-const AtomicString& HTMLElement::eventNameForEventHandlerAttribute(const QualifiedName& attributeName, const EventHandlerNameMap& map)
+const AtomString& HTMLElement::eventNameForEventHandlerAttribute(const QualifiedName& attributeName, const EventHandlerNameMap& map)
 {
     ASSERT(!attributeName.localName().isNull());
 
@@ -372,7 +397,7 @@ const AtomicString& HTMLElement::eventNameForEventHandlerAttribute(const Qualifi
         return nullAtom();
 
     // Fast early return for names that don't start with "on".
-    AtomicStringImpl& localName = *attributeName.localName().impl();
+    AtomStringImpl& localName = *attributeName.localName().impl();
     if (localName.length() < 3 || localName[0] != 'o' || localName[1] != 'n')
         return nullAtom();
 
@@ -380,7 +405,7 @@ const AtomicString& HTMLElement::eventNameForEventHandlerAttribute(const Qualifi
     return it == map.end() ? nullAtom() : it->value;
 }
 
-const AtomicString& HTMLElement::eventNameForEventHandlerAttribute(const QualifiedName& attributeName)
+const AtomString& HTMLElement::eventNameForEventHandlerAttribute(const QualifiedName& attributeName)
 {
     static NeverDestroyed<EventHandlerNameMap> map = createEventHandlerNameMap();
     return eventNameForEventHandlerAttribute(attributeName, map.get());
@@ -403,7 +428,7 @@ Node::Editability HTMLElement::editabilityFromContentEditableAttr(const Node& no
         }
     }
 
-    auto* containingShadowRoot = node.containingShadowRoot();
+    auto containingShadowRoot = makeRefPtr(node.containingShadowRoot());
     if (containingShadowRoot && containingShadowRoot->mode() == ShadowRootMode::UserAgent)
         return Editability::ReadOnly;
 
@@ -419,7 +444,7 @@ bool HTMLElement::matchesReadWritePseudoClass() const
     return editabilityFromContentEditableAttr(*this) != Editability::ReadOnly;
 }
 
-void HTMLElement::parseAttribute(const QualifiedName& name, const AtomicString& value)
+void HTMLElement::parseAttribute(const QualifiedName& name, const AtomString& value)
 {
     if (name == dirAttr) {
         dirAttributeChanged(value);
@@ -428,10 +453,18 @@ void HTMLElement::parseAttribute(const QualifiedName& name, const AtomicString& 
 
     if (name == tabindexAttr) {
         if (value.isEmpty())
-            clearTabIndexExplicitlyIfNeeded();
+            setTabIndexExplicitly(WTF::nullopt);
         else if (auto optionalTabIndex = parseHTMLInteger(value))
             setTabIndexExplicitly(optionalTabIndex.value());
         return;
+    }
+    
+    if (name == inputmodeAttr) {
+        auto& document = this->document();
+        if (this == document.focusedElement()) {
+            if (auto* page = document.page())
+                page->chrome().client().focusedElementDidChangeInputMode(*this, canonicalInputMode());
+        }
     }
 
     auto& eventName = eventNameForEventHandlerAttribute(name);
@@ -444,7 +477,7 @@ static Ref<DocumentFragment> textToFragment(Document& document, const String& te
     auto fragment = DocumentFragment::create(document);
 
     // It's safe to dispatch events on the new fragment since author scripts have no access to it yet.
-    NoEventDispatchAssertion::EventAllowedScope allowedScope(fragment);
+    ScriptDisallowedScope::EventAllowedScope allowedScope(fragment);
 
     for (unsigned start = 0, length = text.length(); start < length; ) {
         // Find next line break.
@@ -478,11 +511,11 @@ static Ref<DocumentFragment> textToFragment(Document& document, const String& te
 // or the empty string if the attribute is in a state that has no associated keyword value or if the attribute is
 // not in a defined state (e.g. the attribute is missing and there is no missing value default).
 // http://www.whatwg.org/specs/web-apps/current-work/multipage/common-dom-interfaces.html#limited-to-only-known-values
-static inline const AtomicString& toValidDirValue(const AtomicString& value)
+static inline const AtomString& toValidDirValue(const AtomString& value)
 {
-    static NeverDestroyed<AtomicString> ltrValue("ltr", AtomicString::ConstructFromLiteral);
-    static NeverDestroyed<AtomicString> rtlValue("rtl", AtomicString::ConstructFromLiteral);
-    static NeverDestroyed<AtomicString> autoValue("auto", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> ltrValue("ltr", AtomString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> rtlValue("rtl", AtomString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> autoValue("auto", AtomString::ConstructFromLiteral);
     if (equalLettersIgnoringASCIICase(value, "ltr"))
         return ltrValue;
     if (equalLettersIgnoringASCIICase(value, "rtl"))
@@ -492,12 +525,12 @@ static inline const AtomicString& toValidDirValue(const AtomicString& value)
     return nullAtom();
 }
 
-const AtomicString& HTMLElement::dir() const
+const AtomString& HTMLElement::dir() const
 {
     return toValidDirValue(attributeWithoutSynchronization(dirAttr));
 }
 
-void HTMLElement::setDir(const AtomicString& value)
+void HTMLElement::setDir(const AtomString& value)
 {
     setAttributeWithoutSynchronization(dirAttr, value);
 }
@@ -507,10 +540,7 @@ ExceptionOr<void> HTMLElement::setInnerText(const String& text)
     // FIXME: This doesn't take whitespace collapsing into account at all.
 
     if (!text.contains('\n') && !text.contains('\r')) {
-        if (text.isEmpty())
-            replaceAllChildren(nullptr);
-        else
-            replaceAllChildren(document().createTextNode(text));
+        replaceAllChildrenWithNewText(text);
         return { };
     }
 
@@ -520,21 +550,21 @@ ExceptionOr<void> HTMLElement::setInnerText(const String& text)
     auto* r = renderer();
     if ((r && r->style().preserveNewline()) || (isConnected() && isTextControlInnerTextElement())) {
         if (!text.contains('\r')) {
-            replaceAllChildren(document().createTextNode(text));
+            replaceAllChildrenWithNewText(text);
             return { };
         }
         String textWithConsistentLineBreaks = text;
         textWithConsistentLineBreaks.replace("\r\n", "\n");
         textWithConsistentLineBreaks.replace('\r', '\n');
-        replaceAllChildren(document().createTextNode(textWithConsistentLineBreaks));
+        replaceAllChildrenWithNewText(textWithConsistentLineBreaks);
         return { };
     }
 
     // Add text nodes and <br> elements.
     auto fragment = textToFragment(document(), text);
-    // FIXME: This should use replaceAllChildren() once it accepts DocumentFragments as input.
+    // FIXME: This should use a variant of replaceAllChildrenWithNewText() which accepts DocumentFragments as input.
     // It's safe to dispatch events on the new fragment since author scripts have no access to it yet.
-    NoEventDispatchAssertion::EventAllowedScope allowedScope(fragment.get());
+    ScriptDisallowedScope::EventAllowedScope allowedScope(fragment.get());
     return replaceChildrenWithFragment(*this, WTFMove(fragment));
 }
 
@@ -542,7 +572,7 @@ ExceptionOr<void> HTMLElement::setOuterText(const String& text)
 {
     RefPtr<ContainerNode> parent = parentNode();
     if (!parent)
-        return Exception { NO_MODIFICATION_ALLOWED_ERR };
+        return Exception { NoModificationAllowedError };
 
     RefPtr<Node> prev = previousSibling();
     RefPtr<Node> next = nextSibling();
@@ -555,19 +585,19 @@ ExceptionOr<void> HTMLElement::setOuterText(const String& text)
         newChild = Text::create(document(), text);
 
     if (!parentNode())
-        return Exception { HIERARCHY_REQUEST_ERR };
+        return Exception { HierarchyRequestError };
 
     auto replaceResult = parent->replaceChild(*newChild, *this);
     if (replaceResult.hasException())
         return replaceResult.releaseException();
 
     RefPtr<Node> node = next ? next->previousSibling() : nullptr;
-    if (is<Text>(node.get())) {
+    if (is<Text>(node)) {
         auto result = mergeWithNextTextNode(downcast<Text>(*node));
         if (result.hasException())
             return result.releaseException();
     }
-    if (is<Text>(prev.get())) {
+    if (is<Text>(prev)) {
         auto result = mergeWithNextTextNode(downcast<Text>(*prev));
         if (result.hasException())
             return result.releaseException();
@@ -575,7 +605,7 @@ ExceptionOr<void> HTMLElement::setOuterText(const String& text)
     return { };
 }
 
-void HTMLElement::applyAlignmentAttributeToStyle(const AtomicString& alignment, MutableStyleProperties& style)
+void HTMLElement::applyAlignmentAttributeToStyle(const AtomString& alignment, MutableStyleProperties& style)
 {
     // Vertical alignment with respect to the current baseline of the text
     // right or left means floating images.
@@ -624,29 +654,47 @@ String HTMLElement::contentEditable() const
 {
     switch (contentEditableType(*this)) {
     case ContentEditableType::Inherit:
-        return ASCIILiteral("inherit");
+        return "inherit"_s;
     case ContentEditableType::True:
-        return ASCIILiteral("true");
+        return "true"_s;
     case ContentEditableType::False:
-        return ASCIILiteral("false");
+        return "false"_s;
     case ContentEditableType::PlaintextOnly:
-        return ASCIILiteral("plaintext-only");
+        return "plaintext-only"_s;
     }
-    return ASCIILiteral("inherit");
+    return "inherit"_s;
+}
+
+static const AtomString& trueName()
+{
+    static MainThreadNeverDestroyed<const AtomString> trueValue("true", AtomString::ConstructFromLiteral);
+    return trueValue.get();
+}
+
+static const AtomString& falseName()
+{
+    static MainThreadNeverDestroyed<const AtomString> falseValue("false", AtomString::ConstructFromLiteral);
+    return falseValue.get();
+}
+
+static const AtomString& plaintextOnlyName()
+{
+    static MainThreadNeverDestroyed<const AtomString> plaintextOnlyValue("plaintext-only", AtomString::ConstructFromLiteral);
+    return plaintextOnlyValue.get();
 }
 
 ExceptionOr<void> HTMLElement::setContentEditable(const String& enabled)
 {
     if (equalLettersIgnoringASCIICase(enabled, "true"))
-        setAttributeWithoutSynchronization(contenteditableAttr, AtomicString("true", AtomicString::ConstructFromLiteral));
+        setAttributeWithoutSynchronization(contenteditableAttr, trueName());
     else if (equalLettersIgnoringASCIICase(enabled, "false"))
-        setAttributeWithoutSynchronization(contenteditableAttr, AtomicString("false", AtomicString::ConstructFromLiteral));
+        setAttributeWithoutSynchronization(contenteditableAttr, falseName());
     else if (equalLettersIgnoringASCIICase(enabled, "plaintext-only"))
-        setAttributeWithoutSynchronization(contenteditableAttr, AtomicString("plaintext-only", AtomicString::ConstructFromLiteral));
+        setAttributeWithoutSynchronization(contenteditableAttr, plaintextOnlyName());
     else if (equalLettersIgnoringASCIICase(enabled, "inherit"))
         removeAttribute(contenteditableAttr);
     else
-        return Exception { SYNTAX_ERR };
+        return Exception { SyntaxError };
     return { };
 }
 
@@ -657,9 +705,7 @@ bool HTMLElement::draggable() const
 
 void HTMLElement::setDraggable(bool value)
 {
-    setAttributeWithoutSynchronization(draggableAttr, value
-        ? AtomicString("true", AtomicString::ConstructFromLiteral)
-        : AtomicString("false", AtomicString::ConstructFromLiteral));
+    setAttributeWithoutSynchronization(draggableAttr, value ? trueName() : falseName());
 }
 
 bool HTMLElement::spellcheck() const
@@ -669,9 +715,7 @@ bool HTMLElement::spellcheck() const
 
 void HTMLElement::setSpellcheck(bool enable)
 {
-    setAttributeWithoutSynchronization(spellcheckAttr, enable
-        ? AtomicString("true", AtomicString::ConstructFromLiteral)
-        : AtomicString("false", AtomicString::ConstructFromLiteral));
+    setAttributeWithoutSynchronization(spellcheckAttr, enable ? trueName() : falseName());
 }
 
 void HTMLElement::click()
@@ -679,9 +723,33 @@ void HTMLElement::click()
     simulateClick(*this, nullptr, SendNoEvents, DoNotShowPressedLook, SimulatedClickSource::Bindings);
 }
 
-void HTMLElement::accessKeyAction(bool sendMouseEvents)
+bool HTMLElement::accessKeyAction(bool sendMouseEvents)
 {
-    dispatchSimulatedClick(nullptr, sendMouseEvents ? SendMouseUpDownEvents : SendNoEvents);
+    return dispatchSimulatedClick(nullptr, sendMouseEvents ? SendMouseUpDownEvents : SendNoEvents);
+}
+
+String HTMLElement::accessKeyLabel() const
+{
+    const auto& accessKey = attributeWithoutSynchronization(accesskeyAttr);
+    if (accessKey.isEmpty())
+        return String();
+
+    StringBuilder result;
+
+#if PLATFORM(COCOA)
+    auto modifiers = EventHandler::accessKeyModifiers();
+    if (modifiers.contains(PlatformEvent::Modifier::ControlKey))
+        result.append(upArrowhead);
+    if (modifiers.contains(PlatformEvent::Modifier::AltKey))
+        result.append(WTF::Unicode::optionKey);
+#else
+    // Currently accessKeyModifier in non-cocoa platforms is hardcoded to Alt, so no reason to do extra work here.
+    // If this ever becomes configurable, make this code use EventHandler::accessKeyModifiers().
+    result.append("Alt+");
+#endif
+
+    result.append(accessKey);
+    return result.toString();
 }
 
 String HTMLElement::title() const
@@ -689,17 +757,10 @@ String HTMLElement::title() const
     return attributeWithoutSynchronization(titleAttr);
 }
 
-int HTMLElement::tabIndex() const
-{
-    if (supportsFocus())
-        return Element::tabIndex();
-    return -1;
-}
-
 bool HTMLElement::translate() const
 {
     for (auto& element : lineageOfType<HTMLElement>(*this)) {
-        const AtomicString& value = element.attributeWithoutSynchronization(translateAttr);
+        const AtomString& value = element.attributeWithoutSynchronization(translateAttr);
         if (equalLettersIgnoringASCIICase(value, "yes") || (value.isEmpty() && !value.isNull()))
             return true;
         if (equalLettersIgnoringASCIICase(value, "no"))
@@ -714,18 +775,18 @@ void HTMLElement::setTranslate(bool enable)
     setAttributeWithoutSynchronization(translateAttr, enable ? "yes" : "no");
 }
 
-bool HTMLElement::rendererIsNeeded(const RenderStyle& style)
+bool HTMLElement::rendererIsEverNeeded()
 {
     if (hasTagName(noscriptTag)) {
-        Frame* frame = document().frame();
+        RefPtr<Frame> frame = document().frame();
         if (frame && frame->script().canExecuteScripts(NotAboutToExecuteScript))
             return false;
     } else if (hasTagName(noembedTag)) {
-        Frame* frame = document().frame();
-        if (frame && frame->loader().subframeLoader().allowPlugins())
+        RefPtr<Frame> frame = document().frame();
+        if (frame && frame->arePluginsEnabled())
             return false;
     }
-    return StyledElement::rendererIsNeeded(style);
+    return StyledElement::rendererIsEverNeeded();
 }
 
 RenderPtr<RenderElement> HTMLElement::createElementRenderer(RenderStyle&& style, const RenderTreePosition&)
@@ -738,19 +799,31 @@ HTMLFormElement* HTMLElement::form() const
     return HTMLFormElement::findClosestFormAncestor(*this);
 }
 
-static inline bool elementAffectsDirectionality(const Node& node)
+FormNamedItem* HTMLElement::asFormNamedItem()
 {
-    if (!is<HTMLElement>(node))
-        return false;
-    const HTMLElement& element = downcast<HTMLElement>(node);
+    return nullptr;
+}
+
+FormAssociatedElement* HTMLElement::asFormAssociatedElement()
+{
+    return nullptr;
+}
+
+static bool elementAffectsDirectionality(const HTMLElement& element)
+{
     return is<HTMLBDIElement>(element) || element.hasAttributeWithoutSynchronization(dirAttr);
+}
+
+static bool elementAffectsDirectionality(const Node& node)
+{
+    return is<HTMLElement>(node) && elementAffectsDirectionality(downcast<HTMLElement>(node));
 }
 
 static void setHasDirAutoFlagRecursively(Node* firstNode, bool flag, Node* lastNode = nullptr)
 {
     firstNode->setSelfOrAncestorHasDirAutoAttribute(flag);
 
-    Node* node = firstNode->firstChild();
+    RefPtr<Node> node = firstNode->firstChild();
 
     while (node) {
         if (node->selfOrAncestorHasDirAutoAttribute() == flag)
@@ -777,7 +850,7 @@ void HTMLElement::childrenChanged(const ChildChange& change)
 
 bool HTMLElement::hasDirectionAuto() const
 {
-    const AtomicString& direction = attributeWithoutSynchronization(dirAttr);
+    const AtomString& direction = attributeWithoutSynchronization(dirAttr);
     return (hasTagName(bdiTag) && direction.isNull()) || equalLettersIgnoringASCIICase(direction, "auto");
 }
 
@@ -785,7 +858,7 @@ TextDirection HTMLElement::directionalityIfhasDirAutoAttribute(bool& isAuto) con
 {
     if (!(selfOrAncestorHasDirAutoAttribute() && hasDirectionAuto())) {
         isAuto = false;
-        return LTR;
+        return TextDirection::LTR;
     }
 
     isAuto = true;
@@ -794,20 +867,20 @@ TextDirection HTMLElement::directionalityIfhasDirAutoAttribute(bool& isAuto) con
 
 TextDirection HTMLElement::directionality(Node** strongDirectionalityTextNode) const
 {
-    if (is<HTMLTextFormControlElement>(*this)) {
+    if (isTextField()) {
         HTMLTextFormControlElement& textElement = downcast<HTMLTextFormControlElement>(const_cast<HTMLElement&>(*this));
         bool hasStrongDirectionality;
         UCharDirection textDirection = textElement.value().defaultWritingDirection(&hasStrongDirectionality);
         if (strongDirectionalityTextNode)
             *strongDirectionalityTextNode = hasStrongDirectionality ? &textElement : nullptr;
-        return (textDirection == U_LEFT_TO_RIGHT) ? LTR : RTL;
+        return (textDirection == U_LEFT_TO_RIGHT) ? TextDirection::LTR : TextDirection::RTL;
     }
 
-    Node* node = firstChild();
+    RefPtr<Node> node = firstChild();
     while (node) {
         // Skip bdi, script, style and text form controls.
         if (equalLettersIgnoringASCIICase(node->nodeName(), "bdi") || node->hasTagName(scriptTag) || node->hasTagName(styleTag)
-            || (is<Element>(*node) && downcast<Element>(*node).isTextFormControl())) {
+            || (is<Element>(*node) && downcast<Element>(*node).isTextField())) {
             node = NodeTraversal::nextSkippingChildren(*node, this);
             continue;
         }
@@ -826,20 +899,20 @@ TextDirection HTMLElement::directionality(Node** strongDirectionalityTextNode) c
             UCharDirection textDirection = node->textContent(true).defaultWritingDirection(&hasStrongDirectionality);
             if (hasStrongDirectionality) {
                 if (strongDirectionalityTextNode)
-                    *strongDirectionalityTextNode = node;
-                return (textDirection == U_LEFT_TO_RIGHT) ? LTR : RTL;
+                    *strongDirectionalityTextNode = node.get();
+                return (textDirection == U_LEFT_TO_RIGHT) ? TextDirection::LTR : TextDirection::RTL;
             }
         }
         node = NodeTraversal::next(*node, this);
     }
     if (strongDirectionalityTextNode)
         *strongDirectionalityTextNode = nullptr;
-    return LTR;
+    return TextDirection::LTR;
 }
 
-void HTMLElement::dirAttributeChanged(const AtomicString& value)
+void HTMLElement::dirAttributeChanged(const AtomString& value)
 {
-    Element* parent = parentElement();
+    RefPtr<Element> parent = parentElement();
 
     if (is<HTMLElement>(parent) && parent->selfOrAncestorHasDirAutoAttribute())
         downcast<HTMLElement>(*parent).adjustDirectionalityIfNeededAfterChildAttributeChanged(this);
@@ -856,10 +929,10 @@ void HTMLElement::adjustDirectionalityIfNeededAfterChildAttributeChanged(Element
     setHasDirAutoFlagRecursively(child, false);
     if (!renderer() || renderer()->style().direction() == textDirection)
         return;
-    for (auto& elementToAdjust : elementLineage(this)) {
-        if (elementAffectsDirectionality(elementToAdjust)) {
-            elementToAdjust.invalidateStyleForSubtree();
-            return;
+    for (auto& element : lineageOfType<HTMLElement>(*this)) {
+        if (elementAffectsDirectionality(element)) {
+            element.invalidateStyleForSubtree();
+            break;
         }
     }
 }
@@ -873,21 +946,21 @@ void HTMLElement::calculateAndAdjustDirectionality()
         invalidateStyleForSubtree();
 }
 
-void HTMLElement::adjustDirectionalityIfNeededAfterChildrenChanged(Element* beforeChange, ChildChangeType changeType)
+void HTMLElement::adjustDirectionalityIfNeededAfterChildrenChanged(Element* beforeChange, ChildChange::Type changeType)
 {
     // FIXME: This function looks suspicious.
 
     if (!selfOrAncestorHasDirAutoAttribute())
         return;
 
-    Node* oldMarkedNode = nullptr;
+    RefPtr<Node> oldMarkedNode;
     if (beforeChange)
-        oldMarkedNode = changeType == ElementInserted ? ElementTraversal::nextSibling(*beforeChange) : beforeChange->nextSibling();
+        oldMarkedNode = changeType == ChildChange::Type::ElementInserted ? ElementTraversal::nextSibling(*beforeChange) : beforeChange->nextSibling();
 
     while (oldMarkedNode && elementAffectsDirectionality(*oldMarkedNode))
         oldMarkedNode = oldMarkedNode->nextSibling();
     if (oldMarkedNode)
-        setHasDirAutoFlagRecursively(oldMarkedNode, false);
+        setHasDirAutoFlagRecursively(oldMarkedNode.get(), false);
 
     for (auto& elementToAdjust : lineageOfType<HTMLElement>(*this)) {
         if (elementAffectsDirectionality(elementToAdjust)) {
@@ -929,28 +1002,47 @@ void HTMLElement::addHTMLLengthToStyle(MutableStyleProperties& style, CSSPropert
     addPropertyToPresentationAttributeStyle(style, propertyID, value);
 }
 
-static RGBA32 parseColorStringWithCrazyLegacyRules(const String& colorString)
+// Color parsing that matches HTML's "rules for parsing a legacy color value"
+// https://html.spec.whatwg.org/#rules-for-parsing-a-legacy-colour-value
+static Optional<SRGBA<uint8_t>> parseLegacyColorValue(StringView string)
 {
-    // Per spec, only look at the first 128 digits of the string.
-    const size_t maxColorLength = 128;
-    // We'll pad the buffer with two extra 0s later, so reserve two more than the max.
-    Vector<char, maxColorLength+2> digitBuffer;
+    // An empty string doesn't apply a color.
+    if (string.isEmpty())
+        return WTF::nullopt;
 
-    size_t i = 0;
-    // Skip a leading #.
-    if (colorString[0] == '#')
-        i = 1;
+    string = string.stripLeadingAndTrailingMatchedCharacters(isHTMLSpace<UChar>);
+    if (string.isEmpty())
+        return Color::black;
+
+    // "transparent" doesn't apply a color either.
+    if (equalLettersIgnoringASCIICase(string, "transparent"))
+        return WTF::nullopt;
+
+    if (auto namedColor = CSSParser::parseNamedColor(string))
+        return namedColor;
+
+    if (string.length() == 4 && string[0] == '#' && isASCIIHexDigit(string[1]) && isASCIIHexDigit(string[2]) && isASCIIHexDigit(string[3]))
+        return { { static_cast<uint8_t>(toASCIIHexValue(string[1]) * 0x11), static_cast<uint8_t>(toASCIIHexValue(string[2]) * 0x11), static_cast<uint8_t>(toASCIIHexValue(string[3]) * 0x11) } };
+
+    // Per spec, only look at the first 128 digits of the string.
+    constexpr unsigned maxColorLength = 128;
+
+    // We'll pad the buffer with two extra 0s later, so reserve two more than the max.
+    Vector<char, maxColorLength + 2> digitBuffer;
 
     // Grab the first 128 characters, replacing non-hex characters with 0.
     // Non-BMP characters are replaced with "00" due to them appearing as two "characters" in the String.
-    for (; i < colorString.length() && digitBuffer.size() < maxColorLength; i++) {
-        if (!isASCIIHexDigit(colorString[i]))
+    unsigned i = 0;
+    if (string[0] == '#') // Skip a leading #.
+        i = 1;
+    for (; i < string.length() && digitBuffer.size() < maxColorLength; i++) {
+        if (!isASCIIHexDigit(string[i]))
             digitBuffer.append('0');
         else
-            digitBuffer.append(colorString[i]);
+            digitBuffer.append(string[i]);
     }
 
-    if (!digitBuffer.size())
+    if (digitBuffer.isEmpty())
         return Color::black;
 
     // Pad the buffer out to at least the next multiple of three in size.
@@ -958,15 +1050,15 @@ static RGBA32 parseColorStringWithCrazyLegacyRules(const String& colorString)
     digitBuffer.append('0');
 
     if (digitBuffer.size() < 6)
-        return makeRGB(toASCIIHexValue(digitBuffer[0]), toASCIIHexValue(digitBuffer[1]), toASCIIHexValue(digitBuffer[2]));
+        return { { toASCIIHexValue(digitBuffer[0]), toASCIIHexValue(digitBuffer[1]), toASCIIHexValue(digitBuffer[2]) } };
 
     // Split the digits into three components, then search the last 8 digits of each component.
     ASSERT(digitBuffer.size() >= 6);
-    size_t componentLength = digitBuffer.size() / 3;
-    size_t componentSearchWindowLength = std::min<size_t>(componentLength, 8);
-    size_t redIndex = componentLength - componentSearchWindowLength;
-    size_t greenIndex = componentLength * 2 - componentSearchWindowLength;
-    size_t blueIndex = componentLength * 3 - componentSearchWindowLength;
+    unsigned componentLength = digitBuffer.size() / 3;
+    unsigned componentSearchWindowLength = std::min(componentLength, 8U);
+    unsigned redIndex = componentLength - componentSearchWindowLength;
+    unsigned greenIndex = componentLength * 2 - componentSearchWindowLength;
+    unsigned blueIndex = componentLength * 3 - componentSearchWindowLength;
     // Skip digits until one of them is non-zero, or we've only got two digits left in the component.
     while (digitBuffer[redIndex] == '0' && digitBuffer[greenIndex] == '0' && digitBuffer[blueIndex] == '0' && (componentLength - redIndex) > 2) {
         redIndex++;
@@ -979,34 +1071,16 @@ static RGBA32 parseColorStringWithCrazyLegacyRules(const String& colorString)
     ASSERT(blueIndex >= componentLength * 2);
     ASSERT_WITH_SECURITY_IMPLICATION(blueIndex + 1 < digitBuffer.size());
 
-    int redValue = toASCIIHexValue(digitBuffer[redIndex], digitBuffer[redIndex + 1]);
-    int greenValue = toASCIIHexValue(digitBuffer[greenIndex], digitBuffer[greenIndex + 1]);
-    int blueValue = toASCIIHexValue(digitBuffer[blueIndex], digitBuffer[blueIndex + 1]);
-    return makeRGB(redValue, greenValue, blueValue);
+    uint8_t redValue = toASCIIHexValue(digitBuffer[redIndex], digitBuffer[redIndex + 1]);
+    uint8_t greenValue = toASCIIHexValue(digitBuffer[greenIndex], digitBuffer[greenIndex + 1]);
+    uint8_t blueValue = toASCIIHexValue(digitBuffer[blueIndex], digitBuffer[blueIndex + 1]);
+    return { { redValue, greenValue, blueValue } };
 }
 
-// Color parsing that matches HTML's "rules for parsing a legacy color value"
 void HTMLElement::addHTMLColorToStyle(MutableStyleProperties& style, CSSPropertyID propertyID, const String& attributeValue)
 {
-    // An empty string doesn't apply a color. (One containing only whitespace does, which is why this check occurs before stripping.)
-    if (attributeValue.isEmpty())
-        return;
-
-    String colorString = attributeValue.stripWhiteSpace();
-
-    // "transparent" doesn't apply a color either.
-    if (equalLettersIgnoringASCIICase(colorString, "transparent"))
-        return;
-
-    Color color;
-    // We can't always use the default Color constructor because it accepts
-    // 4/8-digit hex, which conflict with some legacy HTML content using attributes.
-    if ((colorString.length() != 5 && colorString.length() != 9) || colorString[0] != '#')
-        color = Color(colorString);
-    if (!color.isValid())
-        color = Color(parseColorStringWithCrazyLegacyRules(colorString));
-
-    style.setProperty(propertyID, CSSValuePool::singleton().createColorValue(color.rgb()));
+    if (auto color = parseLegacyColorValue(attributeValue))
+        style.setProperty(propertyID, CSSValuePool::singleton().createColorValue(*color));
 }
 
 bool HTMLElement::willRespondToMouseMoveEvents()
@@ -1040,9 +1114,9 @@ bool HTMLElement::isActuallyDisabled() const
     return canBeActuallyDisabled() && isDisabledFormControl();
 }
 
-#if ENABLE(IOS_AUTOCORRECT_AND_AUTOCAPITALIZE)
+#if ENABLE(AUTOCAPITALIZE)
 
-const AtomicString& HTMLElement::autocapitalize() const
+const AtomString& HTMLElement::autocapitalize() const
 {
     return stringForAutocapitalizeType(autocapitalizeType());
 }
@@ -1052,10 +1126,14 @@ AutocapitalizeType HTMLElement::autocapitalizeType() const
     return autocapitalizeTypeForAttributeValue(attributeWithoutSynchronization(HTMLNames::autocapitalizeAttr));
 }
 
-void HTMLElement::setAutocapitalize(const AtomicString& value)
+void HTMLElement::setAutocapitalize(const AtomString& value)
 {
     setAttributeWithoutSynchronization(autocapitalizeAttr, value);
 }
+
+#endif
+
+#if ENABLE(AUTOCORRECT)
 
 bool HTMLElement::shouldAutocorrect() const
 {
@@ -1066,10 +1144,47 @@ bool HTMLElement::shouldAutocorrect() const
 
 void HTMLElement::setAutocorrect(bool autocorrect)
 {
-    setAttributeWithoutSynchronization(autocorrectAttr, autocorrect ? AtomicString("on", AtomicString::ConstructFromLiteral) : AtomicString("off", AtomicString::ConstructFromLiteral));
+    static MainThreadNeverDestroyed<const AtomString> onName("on", AtomString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> offName("off", AtomString::ConstructFromLiteral);
+    setAttributeWithoutSynchronization(autocorrectAttr, autocorrect ? onName.get() : offName.get());
 }
 
 #endif
+
+InputMode HTMLElement::canonicalInputMode() const
+{
+    auto mode = inputModeForAttributeValue(attributeWithoutSynchronization(inputmodeAttr));
+    if (mode == InputMode::Unspecified) {
+        if (document().quirks().needsInputModeNoneImplicitly(*this))
+            return InputMode::None;
+    }
+    return mode;
+}
+
+const AtomString& HTMLElement::inputMode() const
+{
+    return stringForInputMode(canonicalInputMode());
+}
+
+void HTMLElement::setInputMode(const AtomString& value)
+{
+    setAttributeWithoutSynchronization(inputmodeAttr, value);
+}
+
+EnterKeyHint HTMLElement::canonicalEnterKeyHint() const
+{
+    return enterKeyHintForAttributeValue(attributeWithoutSynchronization(enterkeyhintAttr));
+}
+
+String HTMLElement::enterKeyHint() const
+{
+    return attributeValueForEnterKeyHint(canonicalEnterKeyHint());
+}
+
+void HTMLElement::setEnterKeyHint(const String& value)
+{
+    setAttributeWithoutSynchronization(enterkeyhintAttr, value);
+}
 
 } // namespace WebCore
 

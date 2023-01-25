@@ -28,7 +28,10 @@
 #if ENABLE(ENCRYPTED_MEDIA)
 
 #include "ContextDestructionObserver.h"
+#include "MediaKeySessionType.h"
 #include "MediaKeySystemConfiguration.h"
+#include "MediaKeySystemMediaCapability.h"
+#include "MediaKeysRestrictions.h"
 #include "SharedBuffer.h"
 #include <wtf/Function.h>
 #include <wtf/HashSet.h>
@@ -37,36 +40,30 @@
 #include <wtf/WeakPtr.h>
 #include <wtf/text/WTFString.h>
 
+#if !RELEASE_LOG_DISABLED
+namespace WTF {
+class Logger;
+}
+#endif
+
 namespace WebCore {
 
-class CDM;
+class CDMFactory;
 class CDMInstance;
 class CDMPrivate;
 class Document;
 class ScriptExecutionContext;
 class SharedBuffer;
 
-struct MediaKeysRestrictions;
-
-class CDMFactory {
+class CDM : public RefCounted<CDM>, public CanMakeWeakPtr<CDM>, private ContextDestructionObserver {
 public:
-    virtual ~CDMFactory() { };
-    virtual std::unique_ptr<CDMPrivate> createCDM(CDM&) = 0;
-    virtual bool supportsKeySystem(const String&) = 0;
-};
-
-class CDM : public RefCounted<CDM>, private ContextDestructionObserver {
-public:
-    WEBCORE_EXPORT static void registerCDMFactory(CDMFactory&);
-    WEBCORE_EXPORT static void unregisterCDMFactory(CDMFactory&);
-
     static bool supportsKeySystem(const String&);
     static bool isPersistentType(MediaKeySessionType);
 
     static Ref<CDM> create(Document&, const String& keySystem);
     ~CDM();
 
-    using SupportedConfigurationCallback = WTF::Function<void(std::optional<MediaKeySystemConfiguration>)>;
+    using SupportedConfigurationCallback = WTF::Function<void(Optional<MediaKeySystemConfiguration>)>;
     void getSupportedConfiguration(MediaKeySystemConfiguration&& candidateConfiguration, SupportedConfigurationCallback&&);
 
     const String& keySystem() const { return m_keySystem; }
@@ -75,46 +72,26 @@ public:
     RefPtr<CDMInstance> createInstance();
     bool supportsServerCertificates() const;
     bool supportsSessions() const;
-    bool supportsInitDataType(const AtomicString&) const;
+    bool supportsInitDataType(const AtomString&) const;
 
-    RefPtr<SharedBuffer> sanitizeInitData(const AtomicString& initDataType, const SharedBuffer&);
-    bool supportsInitData(const AtomicString& initDataType, const SharedBuffer&);
+    RefPtr<SharedBuffer> sanitizeInitData(const AtomString& initDataType, const SharedBuffer&);
+    bool supportsInitData(const AtomString& initDataType, const SharedBuffer&);
 
     RefPtr<SharedBuffer> sanitizeResponse(const SharedBuffer&);
 
-    std::optional<String> sanitizeSessionId(const String& sessionId);
+    Optional<String> sanitizeSessionId(const String& sessionId);
+
+    String storageDirectory() const;
 
 private:
     CDM(Document&, const String& keySystem);
 
-    enum class ConfigurationStatus {
-        Supported,
-        NotSupported,
-        ConsentDenied,
-    };
-
-    enum class ConsentStatus {
-        ConsentDenied,
-        InformUser,
-        Allowed,
-    };
-
-    enum class AudioVideoType {
-        Audio,
-        Video,
-    };
-
-    void doSupportedConfigurationStep(MediaKeySystemConfiguration&& candidateConfiguration, MediaKeysRestrictions&&, SupportedConfigurationCallback&&);
-    std::optional<MediaKeySystemConfiguration>  getSupportedConfiguration(const MediaKeySystemConfiguration& candidateConfiguration, MediaKeysRestrictions&);
-    std::optional<Vector<MediaKeySystemMediaCapability>> getSupportedCapabilitiesForAudioVideoType(AudioVideoType, const Vector<MediaKeySystemMediaCapability>& requestedCapabilities, const MediaKeySystemConfiguration& partialConfiguration, MediaKeysRestrictions&);
-
-    WeakPtr<CDM> createWeakPtr() { return m_weakPtrFactory.createWeakPtr(); }
-
-    using ConsentStatusCallback = WTF::Function<void(ConsentStatus, MediaKeySystemConfiguration&&, MediaKeysRestrictions&&)>;
-    void getConsentStatus(MediaKeySystemConfiguration&& accumulatedConfiguration, MediaKeysRestrictions&&, ConsentStatusCallback&&);
+#if !RELEASE_LOG_DISABLED
+    Ref<WTF::Logger> m_logger;
+    const void* m_logIdentifier;
+#endif
     String m_keySystem;
     std::unique_ptr<CDMPrivate> m_private;
-    WeakPtrFactory<CDM> m_weakPtrFactory;
 };
 
 }

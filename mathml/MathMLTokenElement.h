@@ -34,10 +34,11 @@
 namespace WebCore {
 
 class MathMLTokenElement : public MathMLPresentationElement {
+    WTF_MAKE_ISO_ALLOCATED(MathMLTokenElement);
 public:
     static Ref<MathMLTokenElement> create(const QualifiedName& tagName, Document&);
 
-    static std::optional<UChar32> convertToSingleCodePoint(StringView);
+    static Optional<UChar32> convertToSingleCodePoint(StringView);
 
 protected:
     MathMLTokenElement(const QualifiedName& tagName, Document&);
@@ -51,7 +52,6 @@ private:
 
     bool isMathMLToken() const final { return true; }
     bool acceptsMathVariantAttribute() final { return true; }
-    bool acceptsDisplayStyleAttribute() final { return false; }
 };
 
 }

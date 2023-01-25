@@ -33,13 +33,12 @@
 #import "AudioSourceProviderClient.h"
 #import "CARingBuffer.h"
 #import "Logging.h"
-#import "MediaTimeAVFoundation.h"
 #import <AVFoundation/AVAssetTrack.h>
 #import <AVFoundation/AVAudioMix.h>
 #import <AVFoundation/AVMediaFormat.h>
 #import <AVFoundation/AVPlayerItem.h>
-#import <mutex>
 #import <objc/runtime.h>
+#import <pal/avfoundation/MediaTimeAVFoundation.h>
 #import <wtf/Lock.h>
 #import <wtf/MainThread.h>
 
@@ -47,15 +46,11 @@
 #import <wtf/StringPrintStream.h>
 #endif
 
-#import "CoreMediaSoftLink.h"
+#import <pal/cf/CoreMediaSoftLink.h>
+#import <pal/cocoa/AVFoundationSoftLink.h>
 
-SOFT_LINK_FRAMEWORK(AVFoundation)
 SOFT_LINK_FRAMEWORK(MediaToolbox)
 SOFT_LINK_FRAMEWORK(AudioToolbox)
-
-SOFT_LINK_CLASS(AVFoundation, AVPlayerItem)
-SOFT_LINK_CLASS(AVFoundation, AVMutableAudioMix)
-SOFT_LINK_CLASS(AVFoundation, AVMutableAudioMixInputParameters)
 
 SOFT_LINK(AudioToolbox, AudioConverterConvertComplexBuffer, OSStatus, (AudioConverterRef inAudioConverter, UInt32 inNumberPCMFrames, const AudioBufferList* inInputData, AudioBufferList* outOutputData), (inAudioConverter, inNumberPCMFrames, inInputData, outOutputData))
 SOFT_LINK(AudioToolbox, AudioConverterNew, OSStatus, (const AudioStreamBasicDescription* inSourceFormat, const AudioStreamBasicDescription* inDestinationFormat, AudioConverterRef* outAudioConverter), (inSourceFormat, inDestinationFormat, outAudioConverter))
@@ -64,17 +59,16 @@ SOFT_LINK(MediaToolbox, MTAudioProcessingTapGetStorage, void*, (MTAudioProcessin
 SOFT_LINK(MediaToolbox, MTAudioProcessingTapGetSourceAudio, OSStatus, (MTAudioProcessingTapRef tap, CMItemCount numberFrames, AudioBufferList *bufferListInOut, MTAudioProcessingTapFlags *flagsOut, CMTimeRange *timeRangeOut, CMItemCount *numberFramesOut), (tap, numberFrames, bufferListInOut, flagsOut, timeRangeOut, numberFramesOut))
 SOFT_LINK_MAY_FAIL(MediaToolbox, MTAudioProcessingTapCreate, OSStatus, (CFAllocatorRef allocator, const MTAudioProcessingTapCallbacks *callbacks, MTAudioProcessingTapCreationFlags flags, MTAudioProcessingTapRef *tapOut), (allocator, callbacks, flags, tapOut))
 
-SOFT_LINK_POINTER(AVFoundation, AVMediaCharacteristicAudible, NSString *)
-#define AVMediaCharacteristicAudible getAVMediaCharacteristicAudible()
-
 namespace WebCore {
 
+using namespace PAL;
 static const double kRingBufferDuration = 1;
 
-struct AudioSourceProviderAVFObjC::TapStorage {
+class AudioSourceProviderAVFObjC::TapStorage : public ThreadSafeRefCounted<AudioSourceProviderAVFObjC::TapStorage> {
+public:
     TapStorage(AudioSourceProviderAVFObjC* _this) : _this(_this) { }
     AudioSourceProviderAVFObjC* _this;
-    Lock mutex;
+    Lock lock;
 };
 
 RefPtr<AudioSourceProviderAVFObjC> AudioSourceProviderAVFObjC::create(AVPlayerItem *item)
@@ -86,22 +80,21 @@ RefPtr<AudioSourceProviderAVFObjC> AudioSourceProviderAVFObjC::create(AVPlayerIt
 
 AudioSourceProviderAVFObjC::AudioSourceProviderAVFObjC(AVPlayerItem *item)
     : m_avPlayerItem(item)
+    , m_ringBufferCreationCallback([] { return makeUniqueRef<CARingBuffer>(); })
 {
 }
 
 AudioSourceProviderAVFObjC::~AudioSourceProviderAVFObjC()
 {
+    // FIXME: this is not correct, as this indicates that there might be simultaneous calls
+    // to the destructor and a member function. This undefined behavior will be addressed in the future
+    // commits. https://bugs.webkit.org/show_bug.cgi?id=224480
     setClient(nullptr);
-    if (m_tapStorage) {
-        std::lock_guard<Lock> lock(m_tapStorage->mutex);
-        m_tapStorage->_this = nullptr;
-        m_tapStorage = nullptr;
-    }
 }
 
 void AudioSourceProviderAVFObjC::provideInput(AudioBus* bus, size_t framesToProcess)
 {
-    // Protect access to m_ringBuffer by try_locking the mutex. If we failed
+    // Protect access to m_ringBuffer by using tryHoldLock(). If we failed
     // to aquire, a re-configure is underway, and m_ringBuffer is unsafe to access.
     // Emit silence.
     if (!m_tapStorage) {
@@ -109,8 +102,8 @@ void AudioSourceProviderAVFObjC::provideInput(AudioBus* bus, size_t framesToProc
         return;
     }
 
-    std::unique_lock<Lock> lock(m_tapStorage->mutex, std::try_to_lock);
-    if (!lock.owns_lock() || !m_ringBuffer) {
+    auto locker = tryHoldLock(m_tapStorage->lock);
+    if (!locker || !m_ringBuffer) {
         bus->zero();
         return;
     }
@@ -155,64 +148,64 @@ void AudioSourceProviderAVFObjC::setClient(AudioSourceProviderClient* client)
 {
     if (m_client == client)
         return;
-
-    if (m_avAudioMix)
-        destroyMix();
-
+    destroyMixIfNeeded();
     m_client = client;
-
-    if (m_client && m_avPlayerItem)
-        createMix();
+    createMixIfNeeded();
 }
 
 void AudioSourceProviderAVFObjC::setPlayerItem(AVPlayerItem *avPlayerItem)
 {
     if (m_avPlayerItem == avPlayerItem)
         return;
-
-    if (m_avAudioMix)
-        destroyMix();
-
+    destroyMixIfNeeded();
     m_avPlayerItem = avPlayerItem;
-
-    if (m_client && m_avPlayerItem && m_avAssetTrack)
-        createMix();
+    createMixIfNeeded();
 }
 
 void AudioSourceProviderAVFObjC::setAudioTrack(AVAssetTrack *avAssetTrack)
 {
     if (m_avAssetTrack == avAssetTrack)
         return;
-
-    if (m_avAudioMix)
-        destroyMix();
-
+    destroyMixIfNeeded();
     m_avAssetTrack = avAssetTrack;
-
-    if (m_client && m_avPlayerItem && m_avAssetTrack)
-        createMix();
+    createMixIfNeeded();
 }
 
-void AudioSourceProviderAVFObjC::destroyMix()
+void AudioSourceProviderAVFObjC::destroyMixIfNeeded()
 {
-    if (m_avPlayerItem)
-        [m_avPlayerItem setAudioMix:nil];
-    [m_avAudioMix setInputParameters:@[ ]];
-    m_avAudioMix.clear();
-    m_tap.clear();
+    if (!m_avAudioMix)
+        return;
+    ASSERT(m_tapStorage);
+    {
+        auto locker = holdLock(m_tapStorage->lock);
+        if (m_avPlayerItem)
+            [m_avPlayerItem setAudioMix:nil];
+        [m_avAudioMix setInputParameters:@[ ]];
+        m_avAudioMix.clear();
+        m_tap.clear();
+        m_tapStorage->_this = nullptr;
+        // Call unprepare, since Tap cannot call it after clear.
+        unprepare();
+        m_weakFactory.revokeAll();
+    }
+    m_tapStorage = nullptr;
 }
 
-void AudioSourceProviderAVFObjC::createMix()
+void AudioSourceProviderAVFObjC::createMixIfNeeded()
 {
+    if (!m_client || !m_avPlayerItem || !m_avAssetTrack)
+        return;
+
     ASSERT(!m_avAudioMix);
-    ASSERT(m_avPlayerItem);
-    ASSERT(m_client);
+    ASSERT(!m_tapStorage);
+    ASSERT(!m_tap);
 
-    m_avAudioMix = adoptNS([allocAVMutableAudioMixInstance() init]);
+    auto tapStorage = adoptRef(new TapStorage(this));
+    auto locker = holdLock(tapStorage->lock);
 
     MTAudioProcessingTapCallbacks callbacks = {
         0,
-        this,
+        tapStorage.get(),
         initCallback,
         finalizeCallback,
         prepareCallback,
@@ -221,11 +214,17 @@ void AudioSourceProviderAVFObjC::createMix()
     };
 
     MTAudioProcessingTapRef tap = nullptr;
-    MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, 1, &tap);
-    ASSERT(tap);
-    ASSERT(m_tap == tap);
+    OSStatus status = MTAudioProcessingTapCreate(kCFAllocatorDefault, &callbacks, 1, &tap);
+    if (status != noErr) {
+        if (tap)
+            CFRelease(tap);
+        return;
+    }
+    m_tap = adoptCF(tap);
+    m_tapStorage = WTFMove(tapStorage);
+    m_avAudioMix = adoptNS([PAL::allocAVMutableAudioMixInstance() init]);
 
-    RetainPtr<AVMutableAudioMixInputParameters> parameters = adoptNS([allocAVMutableAudioMixInputParametersInstance() init]);
+    RetainPtr<AVMutableAudioMixInputParameters> parameters = adoptNS([PAL::allocAVMutableAudioMixInputParametersInstance() init]);
     [parameters setAudioTapProcessor:m_tap.get()];
 
     CMPersistentTrackID trackID = m_avAssetTrack.get().trackID;
@@ -233,28 +232,23 @@ void AudioSourceProviderAVFObjC::createMix()
     
     [m_avAudioMix setInputParameters:@[parameters.get()]];
     [m_avPlayerItem setAudioMix:m_avAudioMix.get()];
+    m_weakFactory.initializeIfNeeded(*this);
 }
 
 void AudioSourceProviderAVFObjC::initCallback(MTAudioProcessingTapRef tap, void* clientInfo, void** tapStorageOut)
 {
-    ASSERT(tap);
-    AudioSourceProviderAVFObjC* _this = static_cast<AudioSourceProviderAVFObjC*>(clientInfo);
-    _this->m_tap = tap;
-    _this->m_tapStorage = new TapStorage(_this);
-    _this->init(clientInfo, tapStorageOut);
-    *tapStorageOut = _this->m_tapStorage;
+    ASSERT_UNUSED(tap, tap);
+    TapStorage* tapStorage = static_cast<TapStorage*>(clientInfo);
+    *tapStorageOut = tapStorage;
+    // ref balanced by deref in finalizeCallback:
+    tapStorage->ref();
 }
 
 void AudioSourceProviderAVFObjC::finalizeCallback(MTAudioProcessingTapRef tap)
 {
     ASSERT(tap);
     TapStorage* tapStorage = static_cast<TapStorage*>(MTAudioProcessingTapGetStorage(tap));
-
-    std::lock_guard<Lock> lock(tapStorage->mutex);
-
-    if (tapStorage->_this)
-        tapStorage->_this->finalize();
-    delete tapStorage;
+    tapStorage->deref();
 }
 
 void AudioSourceProviderAVFObjC::prepareCallback(MTAudioProcessingTapRef tap, CMItemCount maxFrames, const AudioStreamBasicDescription *processingFormat)
@@ -262,7 +256,7 @@ void AudioSourceProviderAVFObjC::prepareCallback(MTAudioProcessingTapRef tap, CM
     ASSERT(tap);
     TapStorage* tapStorage = static_cast<TapStorage*>(MTAudioProcessingTapGetStorage(tap));
 
-    std::lock_guard<Lock> lock(tapStorage->mutex);
+    auto locker = holdLock(tapStorage->lock);
 
     if (tapStorage->_this)
         tapStorage->_this->prepare(maxFrames, processingFormat);
@@ -273,7 +267,7 @@ void AudioSourceProviderAVFObjC::unprepareCallback(MTAudioProcessingTapRef tap)
     ASSERT(tap);
     TapStorage* tapStorage = static_cast<TapStorage*>(MTAudioProcessingTapGetStorage(tap));
 
-    std::lock_guard<Lock> lock(tapStorage->mutex);
+    auto locker = holdLock(tapStorage->lock);
 
     if (tapStorage->_this)
         tapStorage->_this->unprepare();
@@ -284,37 +278,22 @@ void AudioSourceProviderAVFObjC::processCallback(MTAudioProcessingTapRef tap, CM
     ASSERT(tap);
     TapStorage* tapStorage = static_cast<TapStorage*>(MTAudioProcessingTapGetStorage(tap));
 
-    std::lock_guard<Lock> lock(tapStorage->mutex);
+    auto locker = holdLock(tapStorage->lock);
 
     if (tapStorage->_this)
         tapStorage->_this->process(tap, numberFrames, flags, bufferListInOut, numberFramesOut, flagsOut);
-}
-
-void AudioSourceProviderAVFObjC::init(void* clientInfo, void** tapStorageOut)
-{
-    ASSERT(clientInfo == this);
-    UNUSED_PARAM(clientInfo);
-    *tapStorageOut = this;
-}
-
-void AudioSourceProviderAVFObjC::finalize()
-{
-    if (m_tapStorage) {
-        m_tapStorage->_this = nullptr;
-        m_tapStorage = nullptr;
-    }
 }
 
 void AudioSourceProviderAVFObjC::prepare(CMItemCount maxFrames, const AudioStreamBasicDescription *processingFormat)
 {
     ASSERT(maxFrames >= 0);
 
-    m_tapDescription = std::make_unique<AudioStreamBasicDescription>(*processingFormat);
+    m_tapDescription = makeUniqueWithoutFastMallocCheck<AudioStreamBasicDescription>(*processingFormat);
     int numberOfChannels = processingFormat->mChannelsPerFrame;
     double sampleRate = processingFormat->mSampleRate;
     ASSERT(sampleRate >= 0);
 
-    m_outputDescription = std::make_unique<AudioStreamBasicDescription>();
+    m_outputDescription = makeUniqueWithoutFastMallocCheck<AudioStreamBasicDescription>();
     m_outputDescription->mSampleRate = sampleRate;
     m_outputDescription->mFormatID = kAudioFormatLinearPCM;
     m_outputDescription->mFormatFlags = kAudioFormatFlagsNativeFloatPacked;
@@ -334,8 +313,10 @@ void AudioSourceProviderAVFObjC::prepare(CMItemCount maxFrames, const AudioStrea
     // Make the ringbuffer large enough to store at least two callbacks worth of audio, or 1s, whichever is larger.
     size_t capacity = std::max(static_cast<size_t>(2 * maxFrames), static_cast<size_t>(kRingBufferDuration * sampleRate));
 
-    m_ringBuffer = std::make_unique<CARingBuffer>();
-    m_ringBuffer->allocate(CAAudioStreamDescription(*processingFormat), capacity);
+    CAAudioStreamDescription description { *processingFormat };
+    if (!m_ringBuffer)
+        m_ringBuffer = m_ringBufferCreationCallback().moveToUniquePtr();
+    m_ringBuffer->allocate(description, capacity);
 
     // AudioBufferList is a variable-length struct, so create on the heap with a generic new() operator
     // with a custom size, and initialize the struct manually.
@@ -344,8 +325,10 @@ void AudioSourceProviderAVFObjC::prepare(CMItemCount maxFrames, const AudioStrea
     memset(m_list.get(), 0, bufferListSize);
     m_list->mNumberBuffers = numberOfChannels;
 
-    callOnMainThread([protectedThis = makeRef(*this), numberOfChannels, sampleRate] {
-        protectedThis->m_client->setFormat(numberOfChannels, sampleRate);
+    callOnMainThread([weakThis = m_weakFactory.createWeakPtr(*this), numberOfChannels, sampleRate] {
+        auto* self = weakThis.get();
+        if (self && self->m_client)
+            self->m_client->setFormat(numberOfChannels, sampleRate);
     });
 }
 
@@ -367,13 +350,13 @@ void AudioSourceProviderAVFObjC::process(MTAudioProcessingTapRef tap, CMItemCoun
     if (status != noErr || !itemCount)
         return;
 
-    MediaTime rangeStart = toMediaTime(rangeOut.start);
-    MediaTime rangeDuration = toMediaTime(rangeOut.duration);
+    MediaTime rangeStart = PAL::toMediaTime(rangeOut.start);
+    MediaTime rangeDuration = PAL::toMediaTime(rangeOut.duration);
 
     if (rangeStart.isInvalid())
         return;
 
-    MediaTime currentTime = toMediaTime(CMTimebaseGetTime([m_avPlayerItem timebase]));
+    MediaTime currentTime = PAL::toMediaTime(PAL::CMTimebaseGetTime([m_avPlayerItem timebase]));
     if (currentTime.isInvalid())
         return;
 
@@ -416,6 +399,21 @@ void AudioSourceProviderAVFObjC::process(MTAudioProcessingTapRef tap, CMItemCoun
         memset(buffer.mData, 0, buffer.mDataByteSize);
     }
     *numberFramesOut = 0;
+
+    if (m_audioCallback)
+        m_audioCallback(endFrame, itemCount);
+}
+
+void AudioSourceProviderAVFObjC::setAudioCallback(AudioCallback&& callback)
+{
+    ASSERT(!m_avAudioMix);
+    m_audioCallback = WTFMove(callback);
+}
+
+void AudioSourceProviderAVFObjC::setRingBufferCreationCallback(RingBufferCreationCallback&& callback)
+{
+    ASSERT(!m_avAudioMix);
+    m_ringBufferCreationCallback = WTFMove(callback);
 }
 
 }

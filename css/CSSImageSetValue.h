@@ -27,51 +27,54 @@
 
 #include "CSSValueList.h"
 #include "CachedResourceHandle.h"
+#include "ResourceLoaderOptions.h"
 #include <wtf/Function.h>
+#include <wtf/RefPtr.h>
 
 namespace WebCore {
 
 class CachedImage;
 class CachedResourceLoader;
+class CSSImageValue;
 class Document;
-struct ResourceLoaderOptions;
+
+namespace Style {
+class BuilderState;
+}
+
+struct ImageWithScale {
+    RefPtr<CSSValue> value;
+    float scaleFactor { 1 };
+};
 
 class CSSImageSetValue final : public CSSValueList {
 public:
-    static Ref<CSSImageSetValue> create()
-    {
-        return adoptRef(*new CSSImageSetValue());
-    }
+    static Ref<CSSImageSetValue> create();
     ~CSSImageSetValue();
 
-    std::pair<CachedImage*, float>  loadBestFitImage(CachedResourceLoader&, const ResourceLoaderOptions&);
-    CachedImage* cachedImage() const { return m_cachedImage.get(); }
+    ImageWithScale selectBestFitImage(const Document&);
+    CachedImage* cachedImage() const;
 
     String customCSSText() const;
-
-    struct ImageWithScale {
-        String imageURL;
-        float scaleFactor;
-    };
 
     bool traverseSubresources(const WTF::Function<bool (const CachedResource&)>& handler) const;
 
     void updateDeviceScaleFactor(const Document&);
 
-protected:
-    ImageWithScale bestImageForScaleFactor();
+    Ref<CSSImageSetValue> imageSetWithStylesResolved(Style::BuilderState&);
 
 private:
     CSSImageSetValue();
 
+    ImageWithScale bestImageForScaleFactor();
+
     void fillImageSet();
     static inline bool compareByScaleFactor(ImageWithScale first, ImageWithScale second) { return first.scaleFactor < second.scaleFactor; }
 
-    CachedResourceHandle<CachedImage> m_cachedImage;
+    RefPtr<CSSValue> m_selectedImageValue;
     bool m_accessedBestFitImage { false };
-    float m_bestFitImageScaleFactor { 1 };
+    ImageWithScale m_bestFitImage;
     float m_deviceScaleFactor { 1 };
-
     Vector<ImageWithScale> m_imagesInSet;
 };
 

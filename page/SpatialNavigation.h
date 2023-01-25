@@ -127,7 +127,7 @@ struct FocusCandidate {
     bool isOffscreenAfterScrolling;
 };
 
-bool hasOffscreenRect(Node*, FocusDirection direction = FocusDirectionNone);
+bool hasOffscreenRect(Node*, FocusDirection = FocusDirection::None);
 bool scrollInDirection(Frame*, FocusDirection);
 bool scrollInDirection(Node* container, FocusDirection);
 bool canScrollInDirection(const Node* container, FocusDirection);
@@ -139,8 +139,8 @@ void distanceDataForNode(FocusDirection, const FocusCandidate& current, FocusCan
 Node* scrollableEnclosingBoxOrParentFrameForNodeInDirection(FocusDirection, Node*);
 LayoutRect nodeRectInAbsoluteCoordinates(Node*, bool ignoreBorder = false);
 LayoutRect frameRectInAbsoluteCoordinates(Frame*);
-LayoutRect virtualRectForDirection(FocusDirection, const LayoutRect& startingRect, LayoutUnit width = 0);
+LayoutRect virtualRectForDirection(FocusDirection, const LayoutRect& startingRect, LayoutUnit width = 0_lu);
 LayoutRect virtualRectForAreaElementAndDirection(HTMLAreaElement*, FocusDirection);
 HTMLFrameOwnerElement* frameOwnerElement(FocusCandidate&);
 
-} // namspace WebCore
+} // namespace WebCore

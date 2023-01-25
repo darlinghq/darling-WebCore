@@ -23,62 +23,50 @@
 #include "JSDOMConvertStrings.h"
 
 #include "JSDOMExceptionHandling.h"
-#include <heap/HeapInlines.h>
-#include <runtime/JSCJSValueInlines.h>
+#include <JavaScriptCore/HeapInlines.h>
+#include <JavaScriptCore/JSCJSValueInlines.h>
 #include <wtf/text/StringBuilder.h>
 #include <wtf/unicode/CharacterNames.h>
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
-static inline String stringToByteString(ExecState& state, JSC::ThrowScope& scope, String&& string)
+static inline String stringToByteString(JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, String&& string)
 {
-    if (!string.containsOnlyLatin1()) {
-        throwTypeError(&state, scope);
+    if (!string.isAllLatin1()) {
+        throwTypeError(&lexicalGlobalObject, scope);
         return { };
     }
 
-    return string;
+    return WTFMove(string);
 }
 
-String identifierToByteString(ExecState& state, const Identifier& identifier)
+String identifierToByteString(JSGlobalObject& lexicalGlobalObject, const Identifier& identifier)
 {
-    VM& vm = state.vm();
+    VM& vm = lexicalGlobalObject.vm();
     auto scope = DECLARE_THROW_SCOPE(vm);
 
     auto string = identifier.string();
-    return stringToByteString(state, scope, WTFMove(string));
+    return stringToByteString(lexicalGlobalObject, scope, WTFMove(string));
 }
 
-String valueToByteString(ExecState& state, JSValue value)
+String valueToByteString(JSGlobalObject& lexicalGlobalObject, JSValue value)
 {
-    VM& vm = state.vm();
+    VM& vm = lexicalGlobalObject.vm();
     auto scope = DECLARE_THROW_SCOPE(vm);
 
-    auto string = value.toWTFString(&state);
+    auto string = value.toWTFString(&lexicalGlobalObject);
     RETURN_IF_EXCEPTION(scope, { });
 
-    return stringToByteString(state, scope, WTFMove(string));
-}
-
-static inline bool hasUnpairedSurrogate(StringView string)
-{
-    // Fast path for 8-bit strings; they can't have any surrogates.
-    if (string.is8Bit())
-        return false;
-    for (auto codePoint : string.codePoints()) {
-        if (U_IS_SURROGATE(codePoint))
-            return true;
-    }
-    return false;
+    return stringToByteString(lexicalGlobalObject, scope, WTFMove(string));
 }
 
 static inline String stringToUSVString(String&& string)
 {
     // Fast path for the case where there are no unpaired surrogates.
     if (!hasUnpairedSurrogate(string))
-        return string;
+        return WTFMove(string);
 
     // Slow path: http://heycam.github.io/webidl/#dfn-obtain-unicode
     // Replaces unpaired surrogates with the replacement character.
@@ -89,23 +77,23 @@ static inline String stringToUSVString(String&& string)
         if (U_IS_SURROGATE(codePoint))
             result.append(replacementCharacter);
         else
-            result.append(codePoint);
+            result.appendCharacter(codePoint);
     }
     return result.toString();
 }
 
-String identifierToUSVString(ExecState&, const Identifier& identifier)
+String identifierToUSVString(JSGlobalObject&, const Identifier& identifier)
 {
     auto string = identifier.string();
     return stringToUSVString(WTFMove(string));
 }
 
-String valueToUSVString(ExecState& state, JSValue value)
+String valueToUSVString(JSGlobalObject& lexicalGlobalObject, JSValue value)
 {
-    VM& vm = state.vm();
+    VM& vm = lexicalGlobalObject.vm();
     auto scope = DECLARE_THROW_SCOPE(vm);
 
-    auto string = value.toWTFString(&state);
+    auto string = value.toWTFString(&lexicalGlobalObject);
     RETURN_IF_EXCEPTION(scope, { });
 
     return stringToUSVString(WTFMove(string));

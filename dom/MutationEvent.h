@@ -29,6 +29,7 @@
 namespace WebCore {
 
 class MutationEvent final : public Event {
+    WTF_MAKE_ISO_ALLOCATED(MutationEvent);
 public:
     enum {
         MODIFICATION = 1,
@@ -36,9 +37,9 @@ public:
         REMOVAL = 3
     };
 
-    static Ref<MutationEvent> create(const AtomicString& type, bool canBubble, Node* relatedNode = nullptr, const String& prevValue = String(), const String& newValue = String())
+    static Ref<MutationEvent> create(const AtomString& type, CanBubble canBubble, Node* relatedNode = nullptr, const String& prevValue = String(), const String& newValue = String())
     {
-        return adoptRef(*new MutationEvent(type, canBubble, false, relatedNode, prevValue, newValue));
+        return adoptRef(*new MutationEvent(type, canBubble, IsCancelable::No, relatedNode, prevValue, newValue));
     }
 
     static Ref<MutationEvent> createForBindings()
@@ -46,7 +47,7 @@ public:
         return adoptRef(*new MutationEvent);
     }
 
-    WEBCORE_EXPORT void initMutationEvent(const AtomicString& type, bool canBubble, bool cancelable, Node* relatedNode, const String& prevValue, const String& newValue, const String& attrName, unsigned short attrChange);
+    WEBCORE_EXPORT void initMutationEvent(const AtomString& type, bool canBubble, bool cancelable, Node* relatedNode, const String& prevValue, const String& newValue, const String& attrName, unsigned short attrChange);
 
     Node* relatedNode() const { return m_relatedNode.get(); }
     String prevValue() const { return m_prevValue; }
@@ -56,7 +57,7 @@ public:
 
 private:
     MutationEvent() = default;
-    MutationEvent(const AtomicString& type, bool canBubble, bool cancelable, Node* relatedNode, const String& prevValue, const String& newValue);
+    MutationEvent(const AtomString& type, CanBubble, IsCancelable, Node* relatedNode, const String& prevValue, const String& newValue);
 
     EventInterface eventInterface() const final;
 

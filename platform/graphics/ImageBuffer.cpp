@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2009 Dirk Schulze <krit@webkit.org>
  * Copyright (C) Research In Motion Limited 2011. All rights reserved.
- * Copyright (C) 2016-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,34 +29,98 @@
 #include "ImageBuffer.h"
 
 #include "GraphicsContext.h"
-#include "IntRect.h"
-#include <wtf/MathExtras.h>
-#include <wtf/NeverDestroyed.h>
+#include "HostWindow.h"
+#include "ImageData.h"
+#include "PlatformImageBuffer.h"
 
 namespace WebCore {
 
 static const float MaxClampedLength = 4096;
 static const float MaxClampedArea = MaxClampedLength * MaxClampedLength;
 
-std::unique_ptr<ImageBuffer> ImageBuffer::create(const FloatSize& size, RenderingMode renderingMode, float resolutionScale, ColorSpace colorSpace)
+RefPtr<ImageBuffer> ImageBuffer::create(const FloatSize& size, RenderingMode renderingMode, ShouldUseDisplayList shouldUseDisplayList, RenderingPurpose purpose, float resolutionScale, ColorSpace colorSpace, PixelFormat pixelFormat, const HostWindow* hostWindow)
 {
-    bool success = false;
-    std::unique_ptr<ImageBuffer> buffer(new ImageBuffer(size, resolutionScale, colorSpace, renderingMode, success));
-    if (!success)
-        return nullptr;
-    return buffer;
+    RefPtr<ImageBuffer> imageBuffer;
+    if (hostWindow)
+        imageBuffer = hostWindow->createImageBuffer(size, renderingMode, purpose, resolutionScale, colorSpace, pixelFormat);
+
+    if (!imageBuffer && shouldUseDisplayList == ShouldUseDisplayList::Yes) {
+        if (renderingMode == RenderingMode::Accelerated)
+            imageBuffer = DisplayListAcceleratedImageBuffer::create(size, resolutionScale, colorSpace, pixelFormat, hostWindow);
+        
+        if (!imageBuffer)
+            imageBuffer = DisplayListUnacceleratedImageBuffer::create(size, resolutionScale, colorSpace, pixelFormat, hostWindow);
+    }
+
+    if (!imageBuffer)
+        imageBuffer = ImageBuffer::create(size, renderingMode, resolutionScale, colorSpace, pixelFormat, hostWindow);
+
+    return imageBuffer;
 }
 
-#if USE(DIRECT2D)
-std::unique_ptr<ImageBuffer> ImageBuffer::create(const FloatSize& size, RenderingMode renderingMode, const GraphicsContext* targetContext, float resolutionScale, ColorSpace colorSpace)
+RefPtr<ImageBuffer> ImageBuffer::create(const FloatSize& size, RenderingMode renderingMode, float resolutionScale, ColorSpace colorSpace, PixelFormat pixelFormat, const HostWindow* hostWindow)
 {
-    bool success = false;
-    std::unique_ptr<ImageBuffer> buffer(new ImageBuffer(size, resolutionScale, colorSpace, renderingMode, targetContext, success));
-    if (!success)
-        return nullptr;
-    return buffer;
+    RefPtr<ImageBuffer> imageBuffer;
+    
+    if (renderingMode == RenderingMode::Accelerated)
+        imageBuffer = AcceleratedImageBuffer::create(size, resolutionScale, colorSpace, pixelFormat, hostWindow);
+    
+    if (!imageBuffer)
+        imageBuffer = UnacceleratedImageBuffer::create(size, resolutionScale, colorSpace, pixelFormat, hostWindow);
+
+    return imageBuffer;
 }
-#endif
+
+RefPtr<ImageBuffer> ImageBuffer::create(const FloatSize& size, const GraphicsContext& context)
+{
+    RefPtr<ImageBuffer> imageBuffer;
+    
+    if (context.renderingMode() == RenderingMode::Accelerated)
+        imageBuffer = AcceleratedImageBuffer::create(size, context);
+    
+    if (!imageBuffer)
+        imageBuffer = UnacceleratedImageBuffer::create(size, context);
+
+    return imageBuffer;
+}
+
+RefPtr<ImageBuffer> ImageBuffer::createCompatibleBuffer(const FloatSize& size, const GraphicsContext& context)
+{
+    if (size.isEmpty())
+        return nullptr;
+
+    IntSize scaledSize = ImageBuffer::compatibleBufferSize(size, context);
+
+    auto imageBuffer = ImageBuffer::create(scaledSize, context);
+    if (!imageBuffer)
+        return nullptr;
+
+    // Set up a corresponding scale factor on the graphics context.
+    imageBuffer->context().scale(scaledSize / size);
+    return imageBuffer;
+
+}
+
+RefPtr<ImageBuffer> ImageBuffer::createCompatibleBuffer(const FloatSize& size, ColorSpace colorSpace, const GraphicsContext& context)
+{
+    if (size.isEmpty())
+        return nullptr;
+
+    IntSize scaledSize = ImageBuffer::compatibleBufferSize(size, context);
+
+    auto imageBuffer = ImageBuffer::createCompatibleBuffer(scaledSize, 1, colorSpace, context);
+    if (!imageBuffer)
+        return nullptr;
+
+    // Set up a corresponding scale factor on the graphics context.
+    imageBuffer->context().scale(scaledSize / size);
+    return imageBuffer;
+}
+
+RefPtr<ImageBuffer> ImageBuffer::createCompatibleBuffer(const FloatSize& size, float resolutionScale, ColorSpace colorSpace, const GraphicsContext& context)
+{
+    return ImageBuffer::create(size, context.renderingMode(), resolutionScale, colorSpace);
+}
 
 bool ImageBuffer::sizeNeedsClamping(const FloatSize& size)
 {
@@ -91,7 +155,7 @@ FloatSize ImageBuffer::clampedSize(const FloatSize& size, FloatSize& scale)
         return size;
 
     FloatSize clampedSize = ImageBuffer::clampedSize(size);
-    scale = FloatSize(clampedSize.width() / size.width(), clampedSize.height() / size.height());
+    scale = clampedSize / size;
     ASSERT(!sizeNeedsClamping(clampedSize));
     ASSERT(!sizeNeedsClamping(size, scale));
     return clampedSize;
@@ -102,122 +166,6 @@ FloatRect ImageBuffer::clampedRect(const FloatRect& rect)
     return FloatRect(rect.location(), clampedSize(rect.size()));
 }
 
-Vector<uint8_t> ImageBuffer::toBGRAData() const
-{
-#if USE(CG)
-    if (context().isAcceleratedContext())
-        flushContext();
-    return m_data.toBGRAData(context().isAcceleratedContext(), m_size.width(), m_size.height());
-#else
-    // FIXME: Implement this for other backends.
-    return { };
-#endif
-}
-
-#if !(USE(CG) || USE(DIRECT2D))
-FloatSize ImageBuffer::sizeForDestinationSize(FloatSize size) const
-{
-    return size;
-}
-
-void ImageBuffer::transformColorSpace(ColorSpace srcColorSpace, ColorSpace dstColorSpace)
-{
-    static NeverDestroyed<Vector<int>> deviceRgbLUT;
-    static NeverDestroyed<Vector<int>> linearRgbLUT;
-
-    if (srcColorSpace == dstColorSpace)
-        return;
-
-    // only sRGB <-> linearRGB are supported at the moment
-    if ((srcColorSpace != ColorSpaceLinearRGB && srcColorSpace != ColorSpaceDeviceRGB)
-        || (dstColorSpace != ColorSpaceLinearRGB && dstColorSpace != ColorSpaceDeviceRGB))
-        return;
-
-    if (dstColorSpace == ColorSpaceLinearRGB) {
-        if (linearRgbLUT.get().isEmpty()) {
-            for (unsigned i = 0; i < 256; i++) {
-                float color = i  / 255.0f;
-                color = (color <= 0.04045f ? color / 12.92f : pow((color + 0.055f) / 1.055f, 2.4f));
-                color = std::max(0.0f, color);
-                color = std::min(1.0f, color);
-                linearRgbLUT.get().append(static_cast<int>(round(color * 255)));
-            }
-        }
-        platformTransformColorSpace(linearRgbLUT.get());
-    } else if (dstColorSpace == ColorSpaceDeviceRGB) {
-        if (deviceRgbLUT.get().isEmpty()) {
-            for (unsigned i = 0; i < 256; i++) {
-                float color = i / 255.0f;
-                color = (powf(color, 1.0f / 2.4f) * 1.055f) - 0.055f;
-                color = std::max(0.0f, color);
-                color = std::min(1.0f, color);
-                deviceRgbLUT.get().append(static_cast<int>(round(color * 255)));
-            }
-        }
-        platformTransformColorSpace(deviceRgbLUT.get());
-    }
-}
-#endif // USE(CG)
-
-inline void ImageBuffer::genericConvertToLuminanceMask()
-{
-    IntRect luminanceRect(IntPoint(), internalSize());
-    RefPtr<Uint8ClampedArray> srcPixelArray = getUnmultipliedImageData(luminanceRect);
-    
-    unsigned pixelArrayLength = srcPixelArray->length();
-    for (unsigned pixelOffset = 0; pixelOffset < pixelArrayLength; pixelOffset += 4) {
-        unsigned char a = srcPixelArray->item(pixelOffset + 3);
-        if (!a)
-            continue;
-        unsigned char r = srcPixelArray->item(pixelOffset);
-        unsigned char g = srcPixelArray->item(pixelOffset + 1);
-        unsigned char b = srcPixelArray->item(pixelOffset + 2);
-        
-        double luma = (r * 0.2125 + g * 0.7154 + b * 0.0721) * ((double)a / 255.0);
-        srcPixelArray->set(pixelOffset + 3, luma);
-    }
-    putByteArray(Unmultiplied, srcPixelArray.get(), luminanceRect.size(), luminanceRect, IntPoint());
-}
-
-void ImageBuffer::convertToLuminanceMask()
-{
-    // Add platform specific functions with platformConvertToLuminanceMask here later.
-    genericConvertToLuminanceMask();
-}
-
-#if !USE(CAIRO)
-PlatformLayer* ImageBuffer::platformLayer() const
-{
-    return 0;
-}
-
-bool ImageBuffer::copyToPlatformTexture(GraphicsContext3D&, GC3Denum, Platform3DObject, GC3Denum, bool, bool)
-{
-    return false;
-}
-#endif
-
-std::unique_ptr<ImageBuffer> ImageBuffer::createCompatibleBuffer(const FloatSize& size, ColorSpace colorSpace, const GraphicsContext& context)
-{
-    if (size.isEmpty())
-        return nullptr;
-
-    IntSize scaledSize = ImageBuffer::compatibleBufferSize(size, context);
-
-    auto buffer = ImageBuffer::createCompatibleBuffer(scaledSize, 1, colorSpace, context);
-    if (!buffer)
-        return nullptr;
-
-    // Set up a corresponding scale factor on the graphics context.
-    buffer->context().scale(FloatSize(scaledSize.width() / size.width(), scaledSize.height() / size.height()));
-    return buffer;
-}
-
-std::unique_ptr<ImageBuffer> ImageBuffer::createCompatibleBuffer(const FloatSize& size, float resolutionScale, ColorSpace colorSpace, const GraphicsContext& context)
-{
-    return create(size, context.renderingMode(), resolutionScale, colorSpace);
-}
-
 IntSize ImageBuffer::compatibleBufferSize(const FloatSize& size, const GraphicsContext& context)
 {
     // Enlarge the buffer size if the context's transform is scaling it so we need a higher
@@ -225,23 +173,34 @@ IntSize ImageBuffer::compatibleBufferSize(const FloatSize& size, const GraphicsC
     return expandedIntSize(size * context.scaleFactor());
 }
 
-bool ImageBuffer::isCompatibleWithContext(const GraphicsContext& context) const
+RefPtr<ImageBuffer> ImageBuffer::copyRectToBuffer(const FloatRect& rect, ColorSpace colorSpace, const GraphicsContext& context)
 {
-    return areEssentiallyEqual(context.scaleFactor(), this->context().scaleFactor());
+    if (rect.isEmpty())
+        return nullptr;
+
+    IntSize scaledSize = ImageBuffer::compatibleBufferSize(rect.size(), context);
+
+    auto buffer = ImageBuffer::createCompatibleBuffer(scaledSize, 1, colorSpace, context);
+    if (!buffer)
+        return nullptr;
+
+    buffer->context().drawImageBuffer(*this, -rect.location());
+    return buffer;
 }
 
-#if !USE(IOSURFACE_CANVAS_BACKING_STORE)
-size_t ImageBuffer::memoryCost() const
+RefPtr<NativeImage> ImageBuffer::sinkIntoNativeImage(RefPtr<ImageBuffer> imageBuffer)
 {
-    // memoryCost() may be invoked concurrently from a GC thread, and we need to be careful about what data we access here and how.
-    // It's safe to access internalSize() because it doesn't do any pointer chasing.
-    return 4 * internalSize().width() * internalSize().height();
+    return imageBuffer->sinkIntoNativeImage();
 }
 
-size_t ImageBuffer::externalMemoryCost() const
+RefPtr<Image> ImageBuffer::sinkIntoImage(RefPtr<ImageBuffer> imageBuffer, PreserveResolution preserveResolution)
 {
-    return 0;
+    return imageBuffer->sinkIntoImage(preserveResolution);
 }
-#endif
 
+void ImageBuffer::drawConsuming(RefPtr<ImageBuffer> imageBuffer, GraphicsContext& context, const FloatRect& destRect, const FloatRect& srcRect, const ImagePaintingOptions& options)
+{
+    imageBuffer->drawConsuming(context, destRect, srcRect, options);
 }
+
+} // namespace WebCore

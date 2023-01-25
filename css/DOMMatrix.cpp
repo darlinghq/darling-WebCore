@@ -26,11 +26,47 @@
 #include "config.h"
 #include "DOMMatrix.h"
 
-#include "ExceptionCode.h"
+#include "ScriptExecutionContext.h"
 #include <cmath>
 #include <limits>
 
 namespace WebCore {
+
+// https://drafts.fxtf.org/geometry/#dom-dommatrixreadonly-dommatrixreadonly
+ExceptionOr<Ref<DOMMatrix>> DOMMatrix::create(ScriptExecutionContext& scriptExecutionContext, Optional<Variant<String, Vector<double>>>&& init)
+{
+    if (!init)
+        return adoptRef(*new DOMMatrix);
+
+    return WTF::switchOn(init.value(),
+        [&scriptExecutionContext](const String& init) -> ExceptionOr<Ref<DOMMatrix>> {
+            if (!scriptExecutionContext.isDocument())
+                return Exception { TypeError };
+
+            auto parseResult = parseStringIntoAbstractMatrix(init);
+            if (parseResult.hasException())
+                return parseResult.releaseException();
+            
+            return adoptRef(*new DOMMatrix(parseResult.returnValue().matrix, parseResult.returnValue().is2D ? Is2D::Yes : Is2D::No));
+        },
+        [](const Vector<double>& init) -> ExceptionOr<Ref<DOMMatrix>> {
+            if (init.size() == 6) {
+                return adoptRef(*new DOMMatrix(TransformationMatrix {
+                    init[0], init[1], init[2], init[3], init[4], init[5]
+                }, Is2D::Yes));
+            }
+            if (init.size() == 16) {
+                return adoptRef(*new DOMMatrix(TransformationMatrix {
+                    init[0], init[1], init[2], init[3],
+                    init[4], init[5], init[6], init[7],
+                    init[8], init[9], init[10], init[11],
+                    init[12], init[13], init[14], init[15]
+                }, Is2D::No));
+            }
+            return Exception { TypeError };
+        }
+    );
+}
 
 DOMMatrix::DOMMatrix(const TransformationMatrix& matrix, Is2D is2D)
     : DOMMatrixReadOnly(matrix, is2D)
@@ -118,7 +154,7 @@ Ref<DOMMatrix> DOMMatrix::translateSelf(double tx, double ty, double tz)
 }
 
 // https://drafts.fxtf.org/geometry/#dom-dommatrix-scaleself
-Ref<DOMMatrix> DOMMatrix::scaleSelf(double scaleX, std::optional<double> scaleY, double scaleZ, double originX, double originY, double originZ)
+Ref<DOMMatrix> DOMMatrix::scaleSelf(double scaleX, Optional<double> scaleY, double scaleZ, double originX, double originY, double originZ)
 {
     if (!scaleY)
         scaleY = scaleX;
@@ -146,15 +182,15 @@ Ref<DOMMatrix> DOMMatrix::scale3dSelf(double scale, double originX, double origi
 }
 
 // https://drafts.fxtf.org/geometry/#dom-dommatrix-rotateself
-Ref<DOMMatrix> DOMMatrix::rotateSelf(double rotX, std::optional<double> rotY, std::optional<double> rotZ)
+Ref<DOMMatrix> DOMMatrix::rotateSelf(double rotX, Optional<double> rotY, Optional<double> rotZ)
 {
     if (!rotY && !rotZ) {
         rotZ = rotX;
         rotX = 0;
         rotY = 0;
     }
-    m_matrix.rotate3d(rotX, rotY.value_or(0), rotZ.value_or(0));
-    if (rotX || rotY.value_or(0))
+    m_matrix.rotate3d(rotX, rotY.valueOr(0), rotZ.valueOr(0));
+    if (rotX || rotY.valueOr(0))
         m_is2D = false;
     return *this;
 }
@@ -193,7 +229,9 @@ Ref<DOMMatrix> DOMMatrix::skewYSelf(double sy)
 Ref<DOMMatrix> DOMMatrix::invertSelf()
 {
     auto inverse = m_matrix.inverse();
-    if (!inverse) {
+    if (inverse)
+        m_matrix = *inverse;
+    else {
         m_matrix.setMatrix(
             std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
             std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
@@ -202,7 +240,6 @@ Ref<DOMMatrix> DOMMatrix::invertSelf()
         );
         m_is2D = false;
     }
-    m_matrix = inverse.value();
     return Ref<DOMMatrix> { *this };
 }
 

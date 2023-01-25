@@ -24,45 +24,72 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// @conditional=ENABLE(STREAMS_API)
-
 function initializeWritableStream(underlyingSink, strategy)
 {
     "use strict";
 
     if (underlyingSink === @undefined)
         underlyingSink = { };
+
     if (strategy === @undefined)
-        strategy = { highWaterMark: 0, size: function() { return 1; } };
+        strategy = { };
 
     if (!@isObject(underlyingSink))
         @throwTypeError("WritableStream constructor takes an object as first argument");
 
-    if (!@isObject(strategy))
-        @throwTypeError("WritableStream constructor takes an object as second argument, if any");
+    // CreateWriteStream code path.
+    if (@getByIdDirectPrivate(underlyingSink, "WritableStream")) {
+        @privateInitializeWritableStream(this, underlyingSink);
 
-    this.@underlyingSink = underlyingSink;
-    this.@closedPromiseCapability = @newPromiseCapability(@Promise);
-    this.@readyPromiseCapability = { @promise: @Promise.@resolve() };
-    this.@queue = @newQueue();
-    this.@state = @streamWritable;
-    this.@started = false;
-    this.@writing = false;
+        const controller = new @WritableStreamDefaultController();
 
-    this.@strategy = @validateAndNormalizeQueuingStrategy(strategy.size, strategy.highWaterMark);
+        @setUpWritableStreamDefaultController(this, controller, underlyingSink.startAlgorithm, underlyingSink.writeAlgorithm, underlyingSink.closeAlgorithm, underlyingSink.abortAlgorithm, strategy.highWaterMark, strategy.sizeAlgorithm);
+        return this;
+    }
 
-    @syncWritableStreamStateWithQueue(this);
+    if ("type" in underlyingSink)
+        @throwRangeError("Invalid type is specified");
 
-    const errorFunction = (e) => {
-        @errorWritableStream(this, e);
-    };
-    this.@startedPromise = @promiseInvokeOrNoopNoCatch(underlyingSink, "start", [errorFunction]);
-    this.@startedPromise.@then(() => {
-        this.@started = true;
-        this.@startedPromise = @undefined;
-    }, errorFunction);
+    const sizeAlgorithm = @extractSizeAlgorithm(strategy);
+    const highWaterMark = @extractHighWaterMark(strategy, 1);
+
+    const underlyingSinkDict = { };
+    if ("start" in underlyingSink) {
+        underlyingSinkDict["start"] = underlyingSink["start"];
+        if (typeof underlyingSinkDict["start"] !== "function")
+            @throwTypeError("underlyingSink.start should be a function");
+    }
+    if ("write" in underlyingSink) {
+        underlyingSinkDict["write"] = underlyingSink["write"];
+        if (typeof underlyingSinkDict["write"] !== "function")
+            @throwTypeError("underlyingSink.write should be a function");
+    }
+    if ("close" in underlyingSink) {
+        underlyingSinkDict["close"] = underlyingSink["close"];
+        if (typeof underlyingSinkDict["close"] !== "function")
+            @throwTypeError("underlyingSink.close should be a function");
+    }
+    if ("abort" in underlyingSink) {
+        underlyingSinkDict["abort"] = underlyingSink["abort"];
+        if (typeof underlyingSinkDict["abort"] !== "function")
+            @throwTypeError("underlyingSink.abort should be a function");
+    }
+
+    @privateInitializeWritableStream(this, underlyingSink);
+    @setUpWritableStreamDefaultControllerFromUnderlyingSink(this, underlyingSink, underlyingSinkDict, highWaterMark, sizeAlgorithm);
 
     return this;
+}
+
+@getter
+function locked()
+{
+    "use strict";
+
+    if (!@isWritableStream(this))
+        throw @makeThisTypeError("WritableStream", "locked");
+
+    return @isWritableStreamLocked(this);
 }
 
 function abort(reason)
@@ -70,17 +97,12 @@ function abort(reason)
     "use strict";
 
     if (!@isWritableStream(this))
-        return @Promise.@reject(new @TypeError("The WritableStream.abort method can only be used on instances of WritableStream"));
+        return @Promise.@reject(@makeThisTypeError("WritableStream", "abort"));
 
-    if (this.@state === @streamClosed)
-        return @Promise.@resolve();
+    if (@isWritableStreamLocked(this))
+        return @Promise.@reject(@makeTypeError("WritableStream.abort method can only be used on non locked WritableStream"));
 
-    if (this.@state === @streamErrored)
-        return @Promise.@reject(this.@storedError);
-
-    @errorWritableStream(this, reason);
-
-    return @promiseInvokeOrFallbackOrNoop(this.@underlyingSink, "abort", [reason], "close", []).@then(function() { });
+    return @writableStreamAbort(this, reason);
 }
 
 function close()
@@ -88,102 +110,23 @@ function close()
     "use strict";
 
     if (!@isWritableStream(this))
-        return @Promise.@reject(new @TypeError("The WritableStream.close method can only be used on instances of WritableStream"));
+        return @Promise.@reject(@makeThisTypeError("WritableStream", "close"));
 
-    if (this.@state === @streamClosed || this.@state === @streamClosing)
-        return @Promise.@reject(new @TypeError("Cannot close a WritableString that is closed or closing"));
+    if (@isWritableStreamLocked(this))
+        return @Promise.@reject(@makeTypeError("WritableStream.close method can only be used on non locked WritableStream"));
 
-    if (this.@state === @streamErrored)
-        return @Promise.@reject(this.@storedError);
+    if (@writableStreamCloseQueuedOrInFlight(this))
+        return @Promise.@reject(@makeTypeError("WritableStream.close method can only be used on a being close WritableStream"));
 
-    if (this.@state === @streamWaiting)
-        this.@readyPromiseCapability.@resolve.@call();
-
-    this.@state = @streamClosing;
-    @enqueueValueWithSize(this.@queue, "close", 0);
-    @callOrScheduleWritableStreamAdvanceQueue(this);
-
-    return this.@closedPromiseCapability.@promise;
+    return @writableStreamClose(this);
 }
 
-function write(chunk)
+function getWriter()
 {
     "use strict";
 
     if (!@isWritableStream(this))
-        return @Promise.@reject(new @TypeError("The WritableStream.write method can only be used on instances of WritableStream"));
+        throw @makeThisTypeError("WritableStream", "getWriter");
 
-    if (this.@state === @streamClosed || this.@state === @streamClosing)
-        return @Promise.@reject(new @TypeError("Cannot write on a WritableString that is closed or closing"));
-
-    if (this.@state === @streamErrored)
-        return @Promise.@reject(this.@storedError);
-
-    @assert(this.@state === @streamWritable || this.@state === @streamWaiting);
-
-    let chunkSize = 1;
-    if (this.@strategy.size !== @undefined) {
-        try {
-            chunkSize = this.@strategy.size.@call(@undefined, chunk);
-        } catch(e) {
-            @errorWritableStream(this, e);
-            return @Promise.@reject(e);
-        }
-    }
-
-    const promiseCapability = @newPromiseCapability(@Promise);
-    try {
-        @enqueueValueWithSize(this.@queue, { promiseCapability: promiseCapability, chunk: chunk }, chunkSize);
-    } catch (e) {
-        @errorWritableStream(this, e);
-        return @Promise.@reject(e);
-    }
-
-    @syncWritableStreamStateWithQueue(this);
-    @callOrScheduleWritableStreamAdvanceQueue(this);
-
-    return promiseCapability.@promise;
-}
-
-function closed()
-{
-    "use strict";
-
-    if (!@isWritableStream(this))
-        return @Promise.@reject(new @TypeError("The WritableStream.closed getter can only be used on instances of WritableStream"));
-
-    return this.@closedPromiseCapability.@promise;
-}
-
-function ready()
-{
-    "use strict";
-
-    if (!@isWritableStream(this))
-        return @Promise.@reject(new @TypeError("The WritableStream.ready getter can only be used on instances of WritableStream"));
-
-    return this.@readyPromiseCapability.@promise;
-}
-
-function state()
-{
-    "use strict";
-
-    if (!@isWritableStream(this))
-        @throwTypeError("The WritableStream.state getter can only be used on instances of WritableStream");
-
-    switch(this.@state) {
-    case @streamClosed:
-        return "closed";
-    case @streamClosing:
-        return "closing";
-    case @streamErrored:
-        return "errored";
-    case @streamWaiting:
-        return "waiting";
-    case @streamWritable:
-        return "writable";
-    }
-
-    @assert(false);
+    return @acquireWritableStreamDefaultWriter(this);
 }

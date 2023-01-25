@@ -30,17 +30,22 @@
 
 #include "IDBConnectionProxy.h"
 #include "IDBDatabase.h"
+#include "IDBDatabaseNameAndVersion.h"
 #include "IDBGetRecordData.h"
 #include "IDBKeyRangeData.h"
 #include "IDBOpenDBRequest.h"
 #include "IDBRequestData.h"
 #include "IDBResultData.h"
 #include "Logging.h"
+#include "SecurityOrigin.h"
 #include "TransactionOperation.h"
+#include <wtf/IsoMallocInlines.h>
 #include <wtf/MainThread.h>
 
 namespace WebCore {
 namespace IDBClient {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(IDBConnectionToServer);
 
 Ref<IDBConnectionToServer> IDBConnectionToServer::create(IDBConnectionToServerDelegate& delegate)
 {
@@ -48,12 +53,12 @@ Ref<IDBConnectionToServer> IDBConnectionToServer::create(IDBConnectionToServerDe
 }
 
 IDBConnectionToServer::IDBConnectionToServer(IDBConnectionToServerDelegate& delegate)
-    : m_delegate(delegate)
-    , m_proxy(std::make_unique<IDBConnectionProxy>(*this))
+    : m_delegate(makeWeakPtr(delegate))
+    , m_proxy(makeUnique<IDBConnectionProxy>(*this))
 {
 }
 
-uint64_t IDBConnectionToServer::identifier() const
+IDBConnectionIdentifier IDBConnectionToServer::identifier() const
 {
     return m_delegate->identifier();
 }
@@ -64,10 +69,21 @@ IDBConnectionProxy& IDBConnectionToServer::proxy()
     return *m_proxy;
 }
 
+void IDBConnectionToServer::callResultFunctionWithErrorLater(ResultFunction function, const IDBResourceIdentifier& requestIdentifier)
+{
+    callOnMainThread([this, protectedThis = makeRef(*this), function, requestIdentifier]() {
+        (this->*function)(IDBResultData::error(requestIdentifier, IDBError::serverConnectionLostError()));
+    });
+}
+
 void IDBConnectionToServer::deleteDatabase(const IDBRequestData& request)
 {
-    LOG(IndexedDB, "IDBConnectionToServer::deleteDatabase - %s", request.databaseIdentifier().debugString().utf8().data());
-    m_delegate->deleteDatabase(request);
+    LOG(IndexedDB, "IDBConnectionToServer::deleteDatabase - %s", request.databaseIdentifier().loggingString().utf8().data());
+    
+    if (m_serverConnectionIsValid)
+        m_delegate->deleteDatabase(request);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didDeleteDatabase, request.requestIdentifier());
 }
 
 void IDBConnectionToServer::didDeleteDatabase(const IDBResultData& resultData)
@@ -78,8 +94,12 @@ void IDBConnectionToServer::didDeleteDatabase(const IDBResultData& resultData)
 
 void IDBConnectionToServer::openDatabase(const IDBRequestData& request)
 {
-    LOG(IndexedDB, "IDBConnectionToServer::openDatabase - %s (%s) (%" PRIu64 ")", request.databaseIdentifier().debugString().utf8().data(), request.requestIdentifier().loggingString().utf8().data(), request.requestedVersion());
-    m_delegate->openDatabase(request);
+    LOG(IndexedDB, "IDBConnectionToServer::openDatabase - %s (%s) (%" PRIu64 ")", request.databaseIdentifier().loggingString().utf8().data(), request.requestIdentifier().loggingString().utf8().data(), request.requestedVersion());
+
+    if (m_serverConnectionIsValid)
+        m_delegate->openDatabase(request);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didOpenDatabase, request.requestIdentifier());
 }
 
 void IDBConnectionToServer::didOpenDatabase(const IDBResultData& resultData)
@@ -93,7 +113,10 @@ void IDBConnectionToServer::createObjectStore(const IDBRequestData& requestData,
     LOG(IndexedDB, "IDBConnectionToServer::createObjectStore");
     ASSERT(isMainThread());
 
-    m_delegate->createObjectStore(requestData, info);
+    if (m_serverConnectionIsValid)
+        m_delegate->createObjectStore(requestData, info);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didCreateObjectStore, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didCreateObjectStore(const IDBResultData& resultData)
@@ -107,7 +130,10 @@ void IDBConnectionToServer::deleteObjectStore(const IDBRequestData& requestData,
     LOG(IndexedDB, "IDBConnectionToServer::deleteObjectStore");
     ASSERT(isMainThread());
 
-    m_delegate->deleteObjectStore(requestData, objectStoreName);
+    if (m_serverConnectionIsValid)
+        m_delegate->deleteObjectStore(requestData, objectStoreName);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didDeleteObjectStore, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didDeleteObjectStore(const IDBResultData& resultData)
@@ -121,7 +147,10 @@ void IDBConnectionToServer::renameObjectStore(const IDBRequestData& requestData,
     LOG(IndexedDB, "IDBConnectionToServer::renameObjectStore");
     ASSERT(isMainThread());
 
-    m_delegate->renameObjectStore(requestData, objectStoreIdentifier, newName);
+    if (m_serverConnectionIsValid)
+        m_delegate->renameObjectStore(requestData, objectStoreIdentifier, newName);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didRenameObjectStore, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didRenameObjectStore(const IDBResultData& resultData)
@@ -135,7 +164,10 @@ void IDBConnectionToServer::clearObjectStore(const IDBRequestData& requestData, 
     LOG(IndexedDB, "IDBConnectionToServer::clearObjectStore");
     ASSERT(isMainThread());
 
-    m_delegate->clearObjectStore(requestData, objectStoreIdentifier);
+    if (m_serverConnectionIsValid)
+        m_delegate->clearObjectStore(requestData, objectStoreIdentifier);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didClearObjectStore, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didClearObjectStore(const IDBResultData& resultData)
@@ -149,7 +181,10 @@ void IDBConnectionToServer::createIndex(const IDBRequestData& requestData, const
     LOG(IndexedDB, "IDBConnectionToServer::createIndex");
     ASSERT(isMainThread());
 
-    m_delegate->createIndex(requestData, info);
+    if (m_serverConnectionIsValid)
+        m_delegate->createIndex(requestData, info);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didCreateIndex, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didCreateIndex(const IDBResultData& resultData)
@@ -163,7 +198,10 @@ void IDBConnectionToServer::deleteIndex(const IDBRequestData& requestData, uint6
     LOG(IndexedDB, "IDBConnectionToServer::deleteIndex");
     ASSERT(isMainThread());
 
-    m_delegate->deleteIndex(requestData, objectStoreIdentifier, indexName);
+    if (m_serverConnectionIsValid)
+        m_delegate->deleteIndex(requestData, objectStoreIdentifier, indexName);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didDeleteIndex, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didDeleteIndex(const IDBResultData& resultData)
@@ -177,7 +215,10 @@ void IDBConnectionToServer::renameIndex(const IDBRequestData& requestData, uint6
     LOG(IndexedDB, "IDBConnectionToServer::renameIndex");
     ASSERT(isMainThread());
 
-    m_delegate->renameIndex(requestData, objectStoreIdentifier, indexIdentifier, newName);
+    if (m_serverConnectionIsValid)
+        m_delegate->renameIndex(requestData, objectStoreIdentifier, indexIdentifier, newName);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didRenameIndex, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didRenameIndex(const IDBResultData& resultData)
@@ -191,7 +232,10 @@ void IDBConnectionToServer::putOrAdd(const IDBRequestData& requestData, const ID
     LOG(IndexedDB, "IDBConnectionToServer::putOrAdd");
     ASSERT(isMainThread());
 
-    m_delegate->putOrAdd(requestData, key, value, overwriteMode);
+    if (m_serverConnectionIsValid)
+        m_delegate->putOrAdd(requestData, key, value, overwriteMode);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didPutOrAdd, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didPutOrAdd(const IDBResultData& resultData)
@@ -206,7 +250,10 @@ void IDBConnectionToServer::getRecord(const IDBRequestData& requestData, const I
     ASSERT(isMainThread());
     ASSERT(!getRecordData.keyRangeData.isNull);
 
-    m_delegate->getRecord(requestData, getRecordData);
+    if (m_serverConnectionIsValid)
+        m_delegate->getRecord(requestData, getRecordData);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didGetRecord, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didGetRecord(const IDBResultData& resultData)
@@ -220,7 +267,10 @@ void IDBConnectionToServer::getAllRecords(const IDBRequestData& requestData, con
     LOG(IndexedDB, "IDBConnectionToServer::getAllRecords");
     ASSERT(isMainThread());
 
-    m_delegate->getAllRecords(requestData, getAllRecordsData);
+    if (m_serverConnectionIsValid)
+        m_delegate->getAllRecords(requestData, getAllRecordsData);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didGetAllRecords, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didGetAllRecords(const IDBResultData& resultData)
@@ -235,7 +285,10 @@ void IDBConnectionToServer::getCount(const IDBRequestData& requestData, const ID
     ASSERT(isMainThread());
     ASSERT(!keyRangeData.isNull);
 
-    m_delegate->getCount(requestData, keyRangeData);
+    if (m_serverConnectionIsValid)
+        m_delegate->getCount(requestData, keyRangeData);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didGetCount, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didGetCount(const IDBResultData& resultData)
@@ -250,7 +303,10 @@ void IDBConnectionToServer::deleteRecord(const IDBRequestData& requestData, cons
     ASSERT(isMainThread());
     ASSERT(!keyRangeData.isNull);
 
-    m_delegate->deleteRecord(requestData, keyRangeData);
+    if (m_serverConnectionIsValid)
+        m_delegate->deleteRecord(requestData, keyRangeData);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didDeleteRecord, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didDeleteRecord(const IDBResultData& resultData)
@@ -264,7 +320,10 @@ void IDBConnectionToServer::openCursor(const IDBRequestData& requestData, const 
     LOG(IndexedDB, "IDBConnectionToServer::openCursor");
     ASSERT(isMainThread());
 
-    m_delegate->openCursor(requestData, info);
+    if (m_serverConnectionIsValid)
+        m_delegate->openCursor(requestData, info);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didOpenCursor, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didOpenCursor(const IDBResultData& resultData)
@@ -278,7 +337,10 @@ void IDBConnectionToServer::iterateCursor(const IDBRequestData& requestData, con
     LOG(IndexedDB, "IDBConnectionToServer::iterateCursor");
     ASSERT(isMainThread());
 
-    m_delegate->iterateCursor(requestData, data);
+    if (m_serverConnectionIsValid)
+        m_delegate->iterateCursor(requestData, data);
+    else
+        callResultFunctionWithErrorLater(&IDBConnectionToServer::didIterateCursor, requestData.requestIdentifier());
 }
 
 void IDBConnectionToServer::didIterateCursor(const IDBResultData& resultData)
@@ -292,7 +354,8 @@ void IDBConnectionToServer::establishTransaction(uint64_t databaseConnectionIden
     LOG(IndexedDB, "IDBConnectionToServer::establishTransaction");
     ASSERT(isMainThread());
 
-    m_delegate->establishTransaction(databaseConnectionIdentifier, info);
+    if (m_serverConnectionIsValid)
+        m_delegate->establishTransaction(databaseConnectionIdentifier, info);
 }
 
 void IDBConnectionToServer::commitTransaction(const IDBResourceIdentifier& transactionIdentifier)
@@ -300,7 +363,13 @@ void IDBConnectionToServer::commitTransaction(const IDBResourceIdentifier& trans
     LOG(IndexedDB, "IDBConnectionToServer::commitTransaction");
     ASSERT(isMainThread());
 
-    m_delegate->commitTransaction(transactionIdentifier);
+    if (m_serverConnectionIsValid)
+        m_delegate->commitTransaction(transactionIdentifier);
+    else {
+        callOnMainThread([this, protectedThis = makeRef(*this), transactionIdentifier] {
+            didCommitTransaction(transactionIdentifier, IDBError::serverConnectionLostError());
+        });
+    }
 }
 
 void IDBConnectionToServer::didCommitTransaction(const IDBResourceIdentifier& transactionIdentifier, const IDBError& error)
@@ -316,7 +385,8 @@ void IDBConnectionToServer::didFinishHandlingVersionChangeTransaction(uint64_t d
     LOG(IndexedDB, "IDBConnectionToServer::didFinishHandlingVersionChangeTransaction");
     ASSERT(isMainThread());
 
-    m_delegate->didFinishHandlingVersionChangeTransaction(databaseConnectionIdentifier, transactionIdentifier);
+    if (m_serverConnectionIsValid)
+        m_delegate->didFinishHandlingVersionChangeTransaction(databaseConnectionIdentifier, transactionIdentifier);
 }
 
 void IDBConnectionToServer::abortTransaction(const IDBResourceIdentifier& transactionIdentifier)
@@ -324,7 +394,13 @@ void IDBConnectionToServer::abortTransaction(const IDBResourceIdentifier& transa
     LOG(IndexedDB, "IDBConnectionToServer::abortTransaction");
     ASSERT(isMainThread());
 
-    m_delegate->abortTransaction(transactionIdentifier);
+    if (m_serverConnectionIsValid)
+        m_delegate->abortTransaction(transactionIdentifier);
+    else {
+        callOnMainThread([this, protectedThis = makeRef(*this), transactionIdentifier] {
+            didAbortTransaction(transactionIdentifier, IDBError::serverConnectionLostError());
+        });
+    }
 }
 
 void IDBConnectionToServer::didAbortTransaction(const IDBResourceIdentifier& transactionIdentifier, const IDBError& error)
@@ -343,12 +419,13 @@ void IDBConnectionToServer::fireVersionChangeEvent(uint64_t databaseConnectionId
     m_proxy->fireVersionChangeEvent(databaseConnectionIdentifier, requestIdentifier, requestedVersion);
 }
 
-void IDBConnectionToServer::didFireVersionChangeEvent(uint64_t databaseConnectionIdentifier, const IDBResourceIdentifier& requestIdentifier)
+void IDBConnectionToServer::didFireVersionChangeEvent(uint64_t databaseConnectionIdentifier, const IDBResourceIdentifier& requestIdentifier, const IndexedDB::ConnectionClosedOnBehalfOfServer connectionClosed)
 {
     LOG(IndexedDB, "IDBConnectionToServer::didFireVersionChangeEvent");
     ASSERT(isMainThread());
 
-    m_delegate->didFireVersionChangeEvent(databaseConnectionIdentifier, requestIdentifier);
+    if (m_serverConnectionIsValid)
+        m_delegate->didFireVersionChangeEvent(databaseConnectionIdentifier, requestIdentifier, connectionClosed);
 }
 
 void IDBConnectionToServer::didStartTransaction(const IDBResourceIdentifier& transactionIdentifier, const IDBError& error)
@@ -367,19 +444,13 @@ void IDBConnectionToServer::didCloseFromServer(uint64_t databaseConnectionIdenti
     m_proxy->didCloseFromServer(databaseConnectionIdentifier, error);
 }
 
-void IDBConnectionToServer::confirmDidCloseFromServer(uint64_t databaseConnectionIdentifier)
-{
-    LOG(IndexedDB, "IDBConnectionToServer::confirmDidCloseFromServer");
-    ASSERT(isMainThread());
-
-    m_delegate->confirmDidCloseFromServer(databaseConnectionIdentifier);
-}
-
 void IDBConnectionToServer::connectionToServerLost(const IDBError& error)
 {
     LOG(IndexedDB, "IDBConnectionToServer::connectionToServerLost");
     ASSERT(isMainThread());
-
+    ASSERT(m_serverConnectionIsValid);
+    
+    m_serverConnectionIsValid = false;
     m_proxy->connectionToServerLost(error);
 }
 
@@ -396,7 +467,8 @@ void IDBConnectionToServer::openDBRequestCancelled(const IDBRequestData& request
     LOG(IndexedDB, "IDBConnectionToServer::openDBRequestCancelled");
     ASSERT(isMainThread());
 
-    m_delegate->openDBRequestCancelled(requestData);
+    if (m_serverConnectionIsValid)
+        m_delegate->openDBRequestCancelled(requestData);
 }
 
 void IDBConnectionToServer::databaseConnectionPendingClose(uint64_t databaseConnectionIdentifier)
@@ -404,7 +476,8 @@ void IDBConnectionToServer::databaseConnectionPendingClose(uint64_t databaseConn
     LOG(IndexedDB, "IDBConnectionToServer::databaseConnectionPendingClose");
     ASSERT(isMainThread());
 
-    m_delegate->databaseConnectionPendingClose(databaseConnectionIdentifier);
+    if (m_serverConnectionIsValid)
+        m_delegate->databaseConnectionPendingClose(databaseConnectionIdentifier);
 }
 
 void IDBConnectionToServer::databaseConnectionClosed(uint64_t databaseConnectionIdentifier)
@@ -412,7 +485,8 @@ void IDBConnectionToServer::databaseConnectionClosed(uint64_t databaseConnection
     LOG(IndexedDB, "IDBConnectionToServer::databaseConnectionClosed");
     ASSERT(isMainThread());
 
-    m_delegate->databaseConnectionClosed(databaseConnectionIdentifier);
+    if (m_serverConnectionIsValid)
+        m_delegate->databaseConnectionClosed(databaseConnectionIdentifier);
 }
 
 void IDBConnectionToServer::abortOpenAndUpgradeNeeded(uint64_t databaseConnectionIdentifier, const IDBResourceIdentifier& transactionIdentifier)
@@ -420,24 +494,31 @@ void IDBConnectionToServer::abortOpenAndUpgradeNeeded(uint64_t databaseConnectio
     LOG(IndexedDB, "IDBConnectionToServer::abortOpenAndUpgradeNeeded");
     ASSERT(isMainThread());
 
-    m_delegate->abortOpenAndUpgradeNeeded(databaseConnectionIdentifier, transactionIdentifier);
+    if (m_serverConnectionIsValid)
+        m_delegate->abortOpenAndUpgradeNeeded(databaseConnectionIdentifier, transactionIdentifier);
 }
 
-void IDBConnectionToServer::getAllDatabaseNames(const SecurityOrigin& mainFrameOrigin, const SecurityOrigin& openingOrigin, Function<void (const Vector<String>&)>&& callback)
+void IDBConnectionToServer::getAllDatabaseNamesAndVersions(const IDBResourceIdentifier& requestIdentifier, const ClientOrigin& origin)
 {
-    static uint64_t callbackID = 0;
+    LOG(IndexedDB, "IDBConnectionToServer::getAllDatabaseNamesAndVersions");
+    ASSERT(isMainThread());
 
-    m_getAllDatabaseNamesCallbacks.add(++callbackID, WTFMove(callback));
+    if (m_serverConnectionIsValid) {
+        m_delegate->getAllDatabaseNamesAndVersions(requestIdentifier, origin);
+        return;
+    }
 
-    m_delegate->getAllDatabaseNames(SecurityOriginData::fromSecurityOrigin(mainFrameOrigin), SecurityOriginData::fromSecurityOrigin(openingOrigin), callbackID);
+    callOnMainThread([this, protectedThis = makeRef(*this), requestIdentifier] {
+        didGetAllDatabaseNamesAndVersions(requestIdentifier, { });
+    });
 }
 
-void IDBConnectionToServer::didGetAllDatabaseNames(uint64_t callbackID, const Vector<String>& databaseNames)
+void IDBConnectionToServer::didGetAllDatabaseNamesAndVersions(const IDBResourceIdentifier& requestIdentifier, Vector<IDBDatabaseNameAndVersion>&& databases)
 {
-    auto callback = m_getAllDatabaseNamesCallbacks.take(callbackID);
-    ASSERT(callback);
+    LOG(IndexedDB, "IDBConnectionToServer::didGetAllDatabaseNamesAndVersions");
+    ASSERT(isMainThread());
 
-    callback(databaseNames);
+    m_proxy->didGetAllDatabaseNamesAndVersions(requestIdentifier, WTFMove(databases));
 }
 
 } // namespace IDBClient

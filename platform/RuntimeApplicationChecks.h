@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2009-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,10 +32,21 @@ namespace WebCore {
 WEBCORE_EXPORT void setPresentingApplicationPID(int);
 WEBCORE_EXPORT int presentingApplicationPID();
 
-#if PLATFORM(COCOA)
+#if PLATFORM(COCOA) || USE(GLIB)
+bool isInWebProcess();
+bool isInGPUProcess();
+bool isInNetworkProcess();
+#else
+inline bool isInWebProcess() { return false; }
+inline bool isInGPUProcess() { return false; }
+inline bool isInNetworkProcess() { return false; }
+#endif
 
+#if PLATFORM(COCOA)
 WEBCORE_EXPORT void setApplicationBundleIdentifier(const String&);
-String applicationBundleIdentifier();
+WEBCORE_EXPORT void setApplicationBundleIdentifierOverride(const String&);
+WEBCORE_EXPORT String applicationBundleIdentifier();
+WEBCORE_EXPORT void clearApplicationBundleIdentifierTestingOverride();
 
 #if PLATFORM(MAC)
 
@@ -50,35 +61,65 @@ WEBCORE_EXPORT bool isITunes();
 WEBCORE_EXPORT bool isMicrosoftMessenger();
 WEBCORE_EXPORT bool isMicrosoftMyDay();
 WEBCORE_EXPORT bool isMicrosoftOutlook();
+WEBCORE_EXPORT bool isMiniBrowser();
 bool isQuickenEssentials();
 WEBCORE_EXPORT bool isSafari();
 bool isSolidStateNetworksDownloader();
 WEBCORE_EXPORT bool isVersions();
 WEBCORE_EXPORT bool isHRBlock();
 WEBCORE_EXPORT bool isIAdProducer();
+WEBCORE_EXPORT bool isEpsonSoftwareUpdater();
 
 } // MacApplication
 
 #endif // PLATFORM(MAC)
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
 namespace IOSApplication {
 
 WEBCORE_EXPORT bool isMobileMail();
+WEBCORE_EXPORT bool isMailCompositionService();
 WEBCORE_EXPORT bool isMobileSafari();
+WEBCORE_EXPORT bool isSafariViewService();
+WEBCORE_EXPORT bool isIMDb();
 WEBCORE_EXPORT bool isWebBookmarksD();
-bool isDumpRenderTree();
+WEBCORE_EXPORT bool isDumpRenderTree();
+WEBCORE_EXPORT bool isMiniBrowser();
 bool isMobileStore();
-WEBCORE_EXPORT bool isWebApp();
+bool isSpringBoard();
 WEBCORE_EXPORT bool isWebProcess();
-bool isIBooks();
+WEBCORE_EXPORT bool isIBooks();
 bool isIBooksStorytime();
 WEBCORE_EXPORT bool isTheSecretSocietyHiddenMystery();
+WEBCORE_EXPORT bool isCardiogram();
+WEBCORE_EXPORT bool isNike();
+bool isMoviStarPlus();
+WEBCORE_EXPORT bool isFirefox();
+WEBCORE_EXPORT bool isAppleApplication();
+WEBCORE_EXPORT bool isEvernote();
+WEBCORE_EXPORT bool isEventbrite();
+WEBCORE_EXPORT bool isDataActivation();
+WEBCORE_EXPORT bool isNews();
+WEBCORE_EXPORT bool isStocks();
+WEBCORE_EXPORT bool isFeedly();
+WEBCORE_EXPORT bool isPocketCity();
+WEBCORE_EXPORT bool isEssentialSkeleton();
+WEBCORE_EXPORT bool isLaBanquePostale();
+WEBCORE_EXPORT bool isESPNFantasySports();
+WEBCORE_EXPORT bool isDoubleDown();
+WEBCORE_EXPORT bool isFIFACompanion();
+WEBCORE_EXPORT bool isNoggin();
+WEBCORE_EXPORT bool isOKCupid();
+WEBCORE_EXPORT bool isJWLibrary();
+WEBCORE_EXPORT bool isPaperIO();
+WEBCORE_EXPORT bool isCrunchyroll();
+bool isWechat();
+WEBCORE_EXPORT bool isLutron();
 
 } // IOSApplication
 
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY)
 
 #endif // PLATFORM(COCOA)
 

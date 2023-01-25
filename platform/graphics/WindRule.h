@@ -25,17 +25,27 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef WindRule_h
-#define WindRule_h
+#pragma once
+
+#include <wtf/EnumTraits.h>
 
 namespace WebCore {
 
-enum WindRule {
-    RULE_NONZERO = 0,
-    RULE_EVENODD = 1
+enum class WindRule : uint8_t {
+    NonZero = 0,
+    EvenOdd = 1
 };
 
-}
+} // namespace WebCore
 
-#endif // WindRule_h
+namespace WTF {
 
+template<> struct EnumTraits<WebCore::WindRule> {
+    using values = EnumValues<
+    WebCore::WindRule,
+    WebCore::WindRule::NonZero,
+    WebCore::WindRule::EvenOdd
+    >;
+};
+
+} // namespace WTF

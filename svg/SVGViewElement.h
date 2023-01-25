@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2004, 2005, 2008 Nikolas Zimmermann <zimmermann@kde.org>
  * Copyright (C) 2004, 2005, 2007 Rob Buis <buis@kde.org>
+ * Copyright (C) 2018-2019 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -20,46 +21,39 @@
 
 #pragma once
 
-#include "SVGAnimatedBoolean.h"
-#include "SVGAnimatedPreserveAspectRatio.h"
-#include "SVGAnimatedRect.h"
 #include "SVGElement.h"
-#include "SVGExternalResourcesRequired.h"
 #include "SVGFitToViewBox.h"
-#include "SVGStringListValues.h"
+#include "SVGSVGElement.h"
+#include "SVGStringList.h"
 #include "SVGZoomAndPan.h"
 
 namespace WebCore {
 
-class SVGStringList;
-
-class SVGViewElement final : public SVGElement, public SVGExternalResourcesRequired, public SVGFitToViewBox, public SVGZoomAndPan {
+class SVGViewElement final : public SVGElement, public SVGFitToViewBox, public SVGZoomAndPan {
+    WTF_MAKE_ISO_ALLOCATED(SVGViewElement);
 public:
     static Ref<SVGViewElement> create(const QualifiedName&, Document&);
 
     using SVGElement::ref;
     using SVGElement::deref;
 
-    Ref<SVGStringList> viewTarget();
-    SVGZoomAndPanType zoomAndPan() const { return m_zoomAndPan; }
-    void setZoomAndPan(unsigned short zoomAndPan) { m_zoomAndPan = SVGZoomAndPan::parseFromNumber(zoomAndPan); }
+    const SVGSVGElement* targetElement() const { return m_targetElement.get(); }
+    void setTargetElement(const SVGSVGElement& targetElement) { m_targetElement = makeWeakPtr(targetElement); }
+    void resetTargetElement() { m_targetElement = nullptr; }
 
 private:
     SVGViewElement(const QualifiedName&, Document&);
 
-    // FIXME: svgAttributeChanged missing.
-    void parseAttribute(const QualifiedName&, const AtomicString&) final;
+    using PropertyRegistry = SVGPropertyOwnerRegistry<SVGViewElement, SVGElement, SVGFitToViewBox>;
+    const SVGPropertyRegistry& propertyRegistry() const final { return m_propertyRegistry; }
+
+    void parseAttribute(const QualifiedName&, const AtomString&) final;
+    void svgAttributeChanged(const QualifiedName&) override;
 
     bool rendererIsNeeded(const RenderStyle&) final { return false; }
 
-    BEGIN_DECLARE_ANIMATED_PROPERTIES(SVGViewElement)
-        DECLARE_ANIMATED_BOOLEAN_OVERRIDE(ExternalResourcesRequired, externalResourcesRequired)
-        DECLARE_ANIMATED_RECT(ViewBox, viewBox)
-        DECLARE_ANIMATED_PRESERVEASPECTRATIO(PreserveAspectRatio, preserveAspectRatio)
-    END_DECLARE_ANIMATED_PROPERTIES
-
-    SVGZoomAndPanType m_zoomAndPan;
-    SVGStringListValues m_viewTarget;
+    PropertyRegistry m_propertyRegistry { *this };
+    WeakPtr<SVGSVGElement> m_targetElement { nullptr };
 };
 
 } // namespace WebCore

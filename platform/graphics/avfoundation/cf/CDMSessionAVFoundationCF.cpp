@@ -28,7 +28,6 @@
 
 #if HAVE(AVFOUNDATION_LOADER_DELEGATE) && ENABLE(LEGACY_ENCRYPTED_MEDIA)
 
-#include "ExceptionCode.h"
 #include "LegacyCDM.h"
 #include "LegacyCDMSession.h"
 #include "MediaPlayer.h"
@@ -44,7 +43,7 @@
 
 namespace WebCore {
 
-CDMSessionAVFoundationCF::CDMSessionAVFoundationCF(MediaPlayerPrivateAVFoundationCF& parent, CDMSessionClient*)
+CDMSessionAVFoundationCF::CDMSessionAVFoundationCF(MediaPlayerPrivateAVFoundationCF& parent, LegacyCDMSessionClient*)
     : m_parent(parent)
     , m_sessionId(createCanonicalUUIDString())
 {
@@ -100,7 +99,7 @@ RefPtr<Uint8Array> CDMSessionAVFoundationCF::generateKeyRequest(const String&, U
     destinationURL = String();
 
     auto keyRequestBuffer = ArrayBuffer::create(CFDataGetBytePtr(keyRequest.get()), CFDataGetLength(keyRequest.get()));
-    return Uint8Array::create(WTFMove(keyRequestBuffer), 0, keyRequestBuffer->byteLength());
+    return Uint8Array::tryCreate(WTFMove(keyRequestBuffer), 0, keyRequestBuffer->byteLength());
 #endif
 }
 

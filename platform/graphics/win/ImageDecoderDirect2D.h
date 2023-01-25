@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,60 +25,62 @@
 
 #pragma once
 
+#if USE(DIRECT2D)
+
 #include "COMPtr.h"
-#include "ImageSource.h"
-#include "IntSize.h"
-#include <wtf/Optional.h>
+#include "ImageDecoder.h"
 
 interface ID2D1RenderTarget;
 interface IWICBitmapDecoder;
-interface IWICImagingFactory;
+interface IWICImagingFactory2;
 
 namespace WebCore {
 
-class ImageDecoder : public ThreadSafeRefCounted<ImageDecoder> {
+class ImageDecoderDirect2D final : public ImageDecoder {
     WTF_MAKE_FAST_ALLOCATED;
 public:
-    ImageDecoder();
-    
-    static Ref<ImageDecoder> create(SharedBuffer&, AlphaOption, GammaAndColorProfileOption)
-    {
-        return adoptRef(*new ImageDecoder());
-    }
-    
-    static size_t bytesDecodedToDetermineProperties();
-    
-    String filenameExtension() const;
-    EncodedDataStatus encodedDataStatus() const;
-    bool isSizeAvailable() const;
-    
-    // Always original size, without subsampling.
-    IntSize size() const;
-    size_t frameCount() const;
+    ImageDecoderDirect2D();
 
-    RepetitionCount repetitionCount() const;
-    std::optional<IntPoint> hotSpot() const;
-    
-    IntSize frameSizeAtIndex(size_t, SubsamplingLevel = SubsamplingLevel::Default) const;
-    bool frameIsCompleteAtIndex(size_t) const;
-    ImageOrientation frameOrientationAtIndex(size_t) const;
-    
-    float frameDurationAtIndex(size_t) const;
-    bool frameHasAlphaAtIndex(size_t) const;
-    bool frameAllowSubsamplingAtIndex(size_t) const;
-    unsigned frameBytesAtIndex(size_t, SubsamplingLevel = SubsamplingLevel::Default) const;
-    
-    NativeImagePtr createFrameImageAtIndex(size_t, SubsamplingLevel = SubsamplingLevel::Default, const DecodingOptions& = DecodingMode::Synchronous) const;
-    
-    void setData(SharedBuffer&, bool allDataReceived);
-    bool isAllDataReceived() const { return m_isAllDataReceived; }
-    void clearFrameBufferCache(size_t) { }
+    static Ref<ImageDecoderDirect2D> create(SharedBuffer&, AlphaOption, GammaAndColorProfileOption)
+    {
+        return adoptRef(*new ImageDecoderDirect2D());
+    }
+
+    static bool supportsMediaType(MediaType type) { return type == MediaType::Image; }
+
+    size_t bytesDecodedToDetermineProperties() const final;
+
+    String filenameExtension() const final;
+    EncodedDataStatus encodedDataStatus() const final;
+    bool isSizeAvailable() const final;
+
+    // Always original size, without subsampling.
+    IntSize size() const final;
+    size_t frameCount() const final;
+
+    RepetitionCount repetitionCount() const final;
+    Optional<IntPoint> hotSpot() const final;
+
+    IntSize frameSizeAtIndex(size_t, SubsamplingLevel = SubsamplingLevel::Default) const final;
+    bool frameIsCompleteAtIndex(size_t) const final;
+    ImageDecoder::FrameMetadata frameMetadataAtIndex(size_t) const final;
+
+    Seconds frameDurationAtIndex(size_t) const final;
+    bool frameHasAlphaAtIndex(size_t) const final;
+    bool frameAllowSubsamplingAtIndex(size_t) const final;
+    unsigned frameBytesAtIndex(size_t, SubsamplingLevel = SubsamplingLevel::Default) const final;
+
+    PlatformImagePtr createFrameImageAtIndex(size_t, SubsamplingLevel = SubsamplingLevel::Default, const DecodingOptions& = DecodingOptions(DecodingMode::Synchronous)) final;
+
+    void setData(SharedBuffer&, bool allDataReceived) final;
+    bool isAllDataReceived() const final { return m_isAllDataReceived; }
+    void clearFrameBufferCache(size_t) final { }
 
     void setTargetContext(ID2D1RenderTarget*);
 
-    static IWICImagingFactory* systemImagingFactory();
+    static IWICImagingFactory2* systemImagingFactory();
 
-protected:
+private:
     bool m_isAllDataReceived { false };
     mutable IntSize m_size;
     COMPtr<IWICBitmapDecoder> m_nativeDecoder;
@@ -86,3 +88,5 @@ protected:
 };
 
 }
+
+#endif

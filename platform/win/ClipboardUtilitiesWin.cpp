@@ -27,16 +27,17 @@
 #include "ClipboardUtilitiesWin.h"
 
 #include "DocumentFragment.h"
-#include "URL.h"
 #include "TextEncoding.h"
 #include "markup.h"
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <wininet.h> // for INTERNET_MAX_URL_LENGTH
 #include <wtf/StringExtras.h>
+#include <wtf/URL.h>
+#include <wtf/Vector.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/StringBuilder.h>
-
+#include <wtf/text/win/WCharStringExtras.h>
 
 #if USE(CF)
 #include <CoreFoundation/CoreFoundation.h>
@@ -130,7 +131,7 @@ static bool getWebLocData(const DragDataMap* dataObject, String& url, String* ti
     if (!dataObject->contains(cfHDropFormat()->cfFormat))
         return false;
 
-    wcscpy(filename, dataObject->get(cfHDropFormat()->cfFormat)[0].charactersWithNullTermination().data());
+    wcscpy(filename, dataObject->get(cfHDropFormat()->cfFormat)[0].wideCharacters().data());
     if (_wcsicmp(PathFindExtensionW(filename), L".url"))
         return false;    
 
@@ -139,10 +140,10 @@ static bool getWebLocData(const DragDataMap* dataObject, String& url, String* ti
 
     if (title) {
         PathRemoveExtension(filename);
-        *title = filename;
+        *title = String(filename);
     }
     
-    url = urlBuffer;
+    url = String(urlBuffer);
     return true;
 #else
     return false;
@@ -162,10 +163,15 @@ static String extractURL(const String &inURL, String* title)
     return url;
 }
 
+static CLIPFORMAT registerClipboardFormat(LPCWSTR format)
+{
+    return static_cast<CLIPFORMAT>(RegisterClipboardFormat(format));
+}
+
 // Firefox text/html
 static FORMATETC* texthtmlFormat() 
 {
-    static UINT cf = RegisterClipboardFormat(L"text/html");
+    static CLIPFORMAT cf = registerClipboardFormat(L"text/html");
     static FORMATETC texthtmlFormat = {cf, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     return &texthtmlFormat;
 }
@@ -179,7 +185,7 @@ HGLOBAL createGlobalData(const URL& url, const String& title)
 
     if (cbData) {
         PWSTR buffer = static_cast<PWSTR>(GlobalLock(cbData));
-        _snwprintf(buffer, size, L"%s\n%s", mutableURL.charactersWithNullTermination().data(), mutableTitle.charactersWithNullTermination().data());
+        _snwprintf(buffer, size, L"%s\n%s", mutableURL.wideCharacters().data(), mutableTitle.wideCharacters().data());
         GlobalUnlock(cbData);
     }
     return cbData;
@@ -205,6 +211,18 @@ HGLOBAL createGlobalData(const Vector<char>& vector)
     char* buffer = static_cast<char*>(GlobalLock(vm));
     memcpy(buffer, vector.data(), vector.size());
     buffer[vector.size()] = 0;
+    GlobalUnlock(vm);
+    return vm;
+}
+
+HGLOBAL createGlobalData(const uint8_t* data, size_t length)
+{
+    HGLOBAL vm = ::GlobalAlloc(GPTR, length + 1);
+    if (!vm)
+        return 0;
+    uint8_t* buffer = static_cast<uint8_t*>(GlobalLock(vm));
+    memcpy(buffer, data, length);
+    buffer[length] = 0;
     GlobalUnlock(vm);
     return vm;
 }
@@ -237,10 +255,10 @@ static void append(Vector<char>& vector, const CString& string)
 // Find the markup between "<!--StartFragment -->" and "<!--EndFragment -->", accounting for browser quirks.
 static String extractMarkupFromCFHTML(const String& cfhtml)
 {
-    unsigned markupStart = cfhtml.find("<html", 0, false);
-    unsigned tagStart = cfhtml.find("startfragment", markupStart, false);
+    unsigned markupStart = cfhtml.findIgnoringASCIICase("<html");
+    unsigned tagStart = cfhtml.findIgnoringASCIICase("startfragment", markupStart);
     unsigned fragmentStart = cfhtml.find('>', tagStart) + 1;
-    unsigned tagEnd = cfhtml.find("endfragment", fragmentStart, false);
+    unsigned tagEnd = cfhtml.findIgnoringASCIICase("endfragment", fragmentStart);
     unsigned fragmentEnd = cfhtml.reverseFind('<', tagEnd);
     return cfhtml.substring(fragmentStart, fragmentEnd - fragmentStart).stripWhiteSpace();
 }
@@ -266,7 +284,7 @@ void markupToCFHTML(const String& markup, const String& srcURL, Vector<char>& re
     const char* startMarkup = "<HTML>\n<BODY>\n<!--StartFragment-->\n";
     const char* endMarkup = "\n<!--EndFragment-->\n</BODY>\n</HTML>";
 
-    CString sourceURLUTF8 = srcURL == blankURL() ? "" : srcURL.utf8();
+    CString sourceURLUTF8 = srcURL == aboutBlankURL() ? "" : srcURL.utf8();
     CString markupUTF8 = markup.utf8();
 
     // calculate offsets
@@ -277,11 +295,13 @@ void markupToCFHTML(const String& markup, const String& srcURL, Vector<char>& re
     unsigned endFragmentOffset = startFragmentOffset + markupUTF8.length();
     unsigned endHTMLOffset = endFragmentOffset + strlen(endMarkup);
 
-    unsigned headerBufferLength = startHTMLOffset + 1; // + 1 for '\0' terminator.
-    char* headerBuffer = (char*)malloc(headerBufferLength);
-    snprintf(headerBuffer, headerBufferLength, header, startHTMLOffset, endHTMLOffset, startFragmentOffset, endFragmentOffset);
-    append(result, CString(headerBuffer));
-    free(headerBuffer);
+    {
+        unsigned headerBufferLength = startHTMLOffset + 1; // + 1 for '\0' terminator.
+        static const constexpr unsigned InitialBufferSize { 2048 };
+        Vector<char, InitialBufferSize> headerBuffer(headerBufferLength);
+        snprintf(headerBuffer.data(), headerBufferLength, header, startHTMLOffset, endHTMLOffset, startFragmentOffset, endFragmentOffset);
+        append(result, CString(headerBuffer.data()));
+    }
     if (sourceURLUTF8.length()) {
         append(result, sourceURLPrefix);
         append(result, sourceURLUTF8);
@@ -299,13 +319,12 @@ void markupToCFHTML(const String& markup, const String& srcURL, Vector<char>& re
 
 void replaceNewlinesWithWindowsStyleNewlines(String& str)
 {
-    DEPRECATED_DEFINE_STATIC_LOCAL(String, windowsNewline, (ASCIILiteral("\r\n")));
     StringBuilder result;
     for (unsigned index = 0; index < str.length(); ++index) {
         if (str[index] != '\n' || (index > 0 && str[index - 1] == '\r'))
             result.append(str[index]);
         else
-            result.append(windowsNewline);
+            result.appendLiteral("\r\n");
     }
     str = result.toString();
 }
@@ -319,14 +338,14 @@ void replaceNBSPWithSpace(String& str)
 
 FORMATETC* urlWFormat()
 {
-    static UINT cf = RegisterClipboardFormat(L"UniformResourceLocatorW");
+    static CLIPFORMAT cf = registerClipboardFormat(L"UniformResourceLocatorW");
     static FORMATETC urlFormat = {cf, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     return &urlFormat;
 }
 
 FORMATETC* urlFormat()
 {
-    static UINT cf = RegisterClipboardFormat(L"UniformResourceLocator");
+    static CLIPFORMAT cf = registerClipboardFormat(L"UniformResourceLocator");
     static FORMATETC urlFormat = {cf, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     return &urlFormat;
 }
@@ -345,14 +364,14 @@ FORMATETC* plainTextWFormat()
 
 FORMATETC* filenameWFormat()
 {
-    static UINT cf = RegisterClipboardFormat(L"FileNameW");
+    static CLIPFORMAT cf = registerClipboardFormat(L"FileNameW");
     static FORMATETC urlFormat = {cf, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     return &urlFormat;
 }
 
 FORMATETC* filenameFormat()
 {
-    static UINT cf = RegisterClipboardFormat(L"FileName");
+    static CLIPFORMAT cf = registerClipboardFormat(L"FileName");
     static FORMATETC urlFormat = {cf, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     return &urlFormat;
 }
@@ -360,28 +379,28 @@ FORMATETC* filenameFormat()
 // MSIE HTML Format
 FORMATETC* htmlFormat() 
 {
-    static UINT cf = RegisterClipboardFormat(L"HTML Format");
+    static CLIPFORMAT cf = registerClipboardFormat(L"HTML Format");
     static FORMATETC htmlFormat = {cf, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     return &htmlFormat;
 }
 
 FORMATETC* smartPasteFormat()
 {
-    static UINT cf = RegisterClipboardFormat(L"WebKit Smart Paste Format");
+    static CLIPFORMAT cf = registerClipboardFormat(L"WebKit Smart Paste Format");
     static FORMATETC htmlFormat = {cf, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     return &htmlFormat;
 }
 
 FORMATETC* fileDescriptorFormat()
 {
-    static UINT cf = RegisterClipboardFormat(CFSTR_FILEDESCRIPTOR);
+    static CLIPFORMAT cf = registerClipboardFormat(CFSTR_FILEDESCRIPTOR);
     static FORMATETC fileDescriptorFormat = { cf, 0, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
     return &fileDescriptorFormat;
 }
 
 FORMATETC* fileContentFormatZero()
 {
-    static UINT cf = RegisterClipboardFormat(CFSTR_FILECONTENTS);
+    static CLIPFORMAT cf = registerClipboardFormat(CFSTR_FILECONTENTS);
     static FORMATETC fileContentFormat = { cf, 0, DVASPECT_CONTENT, 0, TYMED_HGLOBAL };
     return &fileContentFormat;
 }
@@ -395,7 +414,7 @@ void getFileDescriptorData(IDataObject* dataObject, int& size, String& pathname)
 
     FILEGROUPDESCRIPTOR* fgd = static_cast<FILEGROUPDESCRIPTOR*>(GlobalLock(store.hGlobal));
     size = fgd->fgd[0].nFileSizeLow;
-    pathname = fgd->fgd[0].cFileName;
+    pathname = String(fgd->fgd[0].cFileName);
 
     GlobalUnlock(store.hGlobal);
     ::ReleaseStgMedium(&store);
@@ -417,7 +436,7 @@ void setFileDescriptorData(IDataObject* dataObject, int size, const String& pass
 {
     String pathname = passedPathname;
 
-    STGMEDIUM medium = { 0 };
+    STGMEDIUM medium { };
     medium.tymed = TYMED_HGLOBAL;
 
     medium.hGlobal = ::GlobalAlloc(GPTR, sizeof(FILEGROUPDESCRIPTOR));
@@ -439,7 +458,7 @@ void setFileDescriptorData(IDataObject* dataObject, int size, const String& pass
 
 void setFileContentData(IDataObject* dataObject, int size, void* dataBlob)
 {
-    STGMEDIUM medium = { 0 };
+    STGMEDIUM medium { };
     medium.tymed = TYMED_HGLOBAL;
 
     medium.hGlobal = ::GlobalAlloc(GPTR, size);
@@ -518,9 +537,10 @@ String getURL(const DragDataMap* data, DragData::FilenameConversionPolicy filena
     if (!getDataMapItem(data, filenameWFormat(), stringData))
         getDataMapItem(data, filenameFormat(), stringData);
 
-    if (stringData.isEmpty() || (!PathFileExists(stringData.charactersWithNullTermination().data()) && !PathIsUNC(stringData.charactersWithNullTermination().data())))
+    auto wcharData = stringData.wideCharacters().data();
+    if (stringData.isEmpty() || (!PathFileExists(wcharData) && !PathIsUNC(wcharData)))
         return url;
-    RetainPtr<CFStringRef> pathAsCFString = adoptCF(CFStringCreateWithCharacters(kCFAllocatorDefault, (const UniChar *)stringData.charactersWithNullTermination().data(), wcslen(stringData.charactersWithNullTermination().data())));
+    RetainPtr<CFStringRef> pathAsCFString = adoptCF(CFStringCreateWithCharacters(kCFAllocatorDefault, (const UniChar *)wcharData, wcslen(wcharData)));
     if (urlFromPath(pathAsCFString.get(), url) && title)
         *title = url;
 #endif
@@ -628,9 +648,9 @@ Ref<DocumentFragment> fragmentFromCFHTML(Document* doc, const String& cfhtml)
     // obtain baseURL if present
     String srcURLStr("sourceURL:");
     String srcURL;
-    unsigned lineStart = cfhtml.find(srcURLStr, 0, false);
+    unsigned lineStart = cfhtml.findIgnoringASCIICase(srcURLStr);
     if (lineStart != -1) {
-        unsigned srcEnd = cfhtml.find("\n", lineStart, false);
+        unsigned srcEnd = cfhtml.find('\n', lineStart);
         unsigned srcStart = lineStart+srcURLStr.length();
         String rawSrcURL = cfhtml.substring(srcStart, srcEnd-srcStart);
         replaceNBSPWithSpace(rawSrcURL);
@@ -688,9 +708,9 @@ typedef void (*GetStringFunction)(IDataObject*, FORMATETC*, Vector<String>&);
 typedef void (*SetStringFunction)(IDataObject*, FORMATETC*, const Vector<String>&);
 
 struct ClipboardDataItem {
+    FORMATETC* format;
     GetStringFunction getString;
     SetStringFunction setString;
-    FORMATETC* format;
 
     ClipboardDataItem(FORMATETC* format, GetStringFunction getString, SetStringFunction setString): format(format), getString(getString), setString(setString) { }
 };
@@ -735,7 +755,7 @@ void getCFData(IDataObject* data, FORMATETC* format, Vector<String>& dataStrings
     for (UINT i = 0; i < fileCount; i++) {
         if (!DragQueryFileW(hdrop, i, filename, WTF_ARRAY_LENGTH(filename)))
             continue;
-        dataStrings.append(static_cast<UChar*>(filename));
+        dataStrings.append(filename);
     }
 
     GlobalUnlock(store.hGlobal);
@@ -747,7 +767,7 @@ void getCFData(IDataObject* data, FORMATETC* format, Vector<String>& dataStrings
 
 void setUCharData(IDataObject* data, FORMATETC* format, const Vector<String>& dataStrings)
 {
-    STGMEDIUM medium = {0};
+    STGMEDIUM medium { };
     medium.tymed = TYMED_HGLOBAL;
 
     medium.hGlobal = createGlobalData(dataStrings.first());
@@ -759,7 +779,7 @@ void setUCharData(IDataObject* data, FORMATETC* format, const Vector<String>& da
 
 void setUtf8Data(IDataObject* data, FORMATETC* format, const Vector<String>& dataStrings)
 {
-    STGMEDIUM medium = {0};
+    STGMEDIUM medium { };
     medium.tymed = TYMED_HGLOBAL;
 
     CString charString = dataStrings.first().utf8();
@@ -778,7 +798,7 @@ void setUtf8Data(IDataObject* data, FORMATETC* format, const Vector<String>& dat
 #if USE(CF)
 void setCFData(IDataObject* data, FORMATETC* format, const Vector<String>& dataStrings)
 {
-    STGMEDIUM medium = {0};
+    STGMEDIUM medium { };
     medium.tymed = TYMED_HGLOBAL;
 
     SIZE_T dropFilesSize = sizeof(DROPFILES) + (sizeof(WCHAR) * (dataStrings.first().length() + 2));
@@ -790,7 +810,7 @@ void setCFData(IDataObject* data, FORMATETC* format, const Vector<String>& dataS
     dropFiles->pFiles = sizeof(DROPFILES);
     dropFiles->fWide = TRUE;
     String filename = dataStrings.first();
-    wcscpy(reinterpret_cast<LPWSTR>(dropFiles + 1), filename.charactersWithNullTermination().data());    
+    wcscpy(reinterpret_cast<LPWSTR>(dropFiles + 1), filename.wideCharacters().data());
     GlobalUnlock(medium.hGlobal);
     data->SetData(format, &medium, FALSE);
     ::GlobalFree(medium.hGlobal);

@@ -24,9 +24,11 @@
  */
 
 #include "config.h"
-#if ENABLE(VIDEO) && USE(GSTREAMER) && ENABLE(VIDEO_TRACK)
-
 #include "TextCombinerGStreamer.h"
+
+#if ENABLE(VIDEO) && USE(GSTREAMER)
+
+#include "GStreamerCommon.h"
 
 static GstStaticPadTemplate sinkTemplate =
     GST_STATIC_PAD_TEMPLATE("sink_%u", GST_PAD_SINK, GST_PAD_REQUEST,
@@ -64,6 +66,7 @@ struct _WebKitTextCombinerPad {
     GstGhostPad parent;
 
     GstTagList* tags;
+    GstPad* funnelPad;
 };
 
 struct _WebKitTextCombinerPadClass {
@@ -71,6 +74,8 @@ struct _WebKitTextCombinerPadClass {
 };
 
 G_DEFINE_TYPE(WebKitTextCombinerPad, webkit_text_combiner_pad, GST_TYPE_GHOST_PAD);
+
+static GType webVTTEncType;
 
 static gboolean webkitTextCombinerPadEvent(GstPad*, GstObject* parent, GstEvent*);
 
@@ -83,26 +88,24 @@ static void webkit_text_combiner_init(WebKitTextCombiner* combiner)
     UNUSED_PARAM(ret);
     ASSERT(ret);
 
-    GstPad* pad = gst_element_get_static_pad(combiner->funnel, "src");
+    GRefPtr<GstPad> pad = adoptGRef(gst_element_get_static_pad(combiner->funnel, "src"));
     ASSERT(pad);
 
-    ret = gst_element_add_pad(GST_ELEMENT(combiner), gst_ghost_pad_new("src", pad));
+    ret = gst_element_add_pad(GST_ELEMENT(combiner), gst_ghost_pad_new("src", pad.get()));
     ASSERT(ret);
 }
 
 static void webkit_text_combiner_pad_init(WebKitTextCombinerPad* pad)
 {
-    pad->tags = 0;
-
     gst_pad_set_event_function(GST_PAD(pad), webkitTextCombinerPadEvent);
 }
 
-static void webkitTextCombinerPadFinalize(GObject* object)
+static void webkitTextCombinerPadDispose(GObject* object)
 {
-    WebKitTextCombinerPad* pad = WEBKIT_TEXT_COMBINER_PAD(object);
-    if (pad->tags)
-        gst_tag_list_unref(pad->tags);
-    G_OBJECT_CLASS(webkit_text_combiner_pad_parent_class)->finalize(object);
+    WebKitTextCombinerPad* combinerPad = WEBKIT_TEXT_COMBINER_PAD(object);
+    g_clear_pointer(&combinerPad->tags, gst_tag_list_unref);
+    g_clear_pointer(&combinerPad->funnelPad, gst_object_unref);
+    G_OBJECT_CLASS(webkit_text_combiner_pad_parent_class)->dispose(object);
 }
 
 static void webkitTextCombinerPadGetProperty(GObject* object, guint propertyId, GValue* value, GParamSpec* pspec)
@@ -135,18 +138,14 @@ static gboolean webkitTextCombinerPadEvent(GstPad* pad, GstObject* parent, GstEv
         gst_event_parse_caps(event, &caps);
         ASSERT(caps);
 
-        GstPad* target = gst_ghost_pad_get_target(GST_GHOST_PAD(pad));
-        ASSERT(target);
+        GRefPtr<GstPad> target = adoptGRef(gst_ghost_pad_get_target(GST_GHOST_PAD(pad)));
+        GRefPtr<GstElement> targetParent = target ? adoptGRef(gst_pad_get_parent_element(target.get())) : nullptr;
 
-        GstElement* targetParent = gst_pad_get_parent_element(target);
-        ASSERT(targetParent);
-
-        GstCaps* textCaps = gst_caps_new_empty_simple("text/x-raw");
-        if (gst_caps_can_intersect(textCaps, caps)) {
-            /* Caps are plain text, put a WebVTT encoder between the ghostpad and
-             * the funnel */
-            if (targetParent == combiner->funnel) {
-                /* Setup a WebVTT encoder */
+        GRefPtr<GstCaps> textCaps = adoptGRef(gst_caps_new_empty_simple("text/x-raw"));
+        if (gst_caps_can_intersect(textCaps.get(), caps)) {
+            // Caps are plain text, we want a WebVTT encoder between the ghostpad and the funnel.
+            if (!target || G_TYPE_FROM_INSTANCE(targetParent.get()) != webVTTEncType) {
+                // Setup a WebVTT encoder.
                 GstElement* encoder = gst_element_factory_make("webvttenc", nullptr);
                 ASSERT(encoder);
 
@@ -156,46 +155,38 @@ static gboolean webkitTextCombinerPadEvent(GstPad* pad, GstObject* parent, GstEv
                 ret = gst_element_sync_state_with_parent(encoder);
                 ASSERT(ret);
 
-                /* Switch the ghostpad to target the WebVTT encoder */
-                GstPad* sinkPad = gst_element_get_static_pad(encoder, "sink");
+                // Switch the ghostpad to target the WebVTT encoder.
+                GRefPtr<GstPad> sinkPad = adoptGRef(gst_element_get_static_pad(encoder, "sink"));
                 ASSERT(sinkPad);
 
-                ret = gst_ghost_pad_set_target(GST_GHOST_PAD(pad), sinkPad);
+                ret = gst_ghost_pad_set_target(GST_GHOST_PAD(pad), sinkPad.get());
                 ASSERT(ret);
-                gst_object_unref(sinkPad);
 
-                /* Connect the WebVTT encoder to the funnel */
-                GstPad* srcPad = gst_element_get_static_pad(encoder, "src");
+                // Connect the WebVTT encoder to the funnel.
+                GRefPtr<GstPad> srcPad = adoptGRef(gst_element_get_static_pad(encoder, "src"));
                 ASSERT(srcPad);
 
-                ret = GST_PAD_LINK_SUCCESSFUL(gst_pad_link(srcPad, target));
+                ret = GST_PAD_LINK_SUCCESSFUL(gst_pad_link(srcPad.get(), combinerPad->funnelPad));
                 ASSERT(ret);
-                gst_object_unref(srcPad);
-            } /* else: pipeline is already correct */
+            } // Else: pipeline is already correct.
         } else {
-            /* Caps are not plain text, remove the WebVTT encoder */
-            if (targetParent != combiner->funnel) {
-                /* Get the funnel sink pad */
-                GstPad* srcPad = gst_element_get_static_pad(targetParent, "src");
-                ASSERT(srcPad);
+            // Caps are not plain text, we assume it's WebVTT.
 
-                GstPad* sinkPad = gst_pad_get_peer(srcPad);
-                ASSERT(sinkPad);
-                gst_object_unref(srcPad);
-
-                /* Switch the ghostpad to target the funnel */
-                ret = gst_ghost_pad_set_target(GST_GHOST_PAD(pad), sinkPad);
+            // Remove the WebVTT encoder if present.
+            if (target && G_TYPE_FROM_INSTANCE(targetParent.get()) == webVTTEncType) {
+                ret = gst_bin_remove(GST_BIN(combiner), targetParent.get());
                 ASSERT(ret);
-                gst_object_unref(sinkPad);
 
-                /* Remove the WebVTT encoder */
-                ret = gst_bin_remove(GST_BIN(combiner), targetParent);
+                target = nullptr;
+                targetParent = nullptr;
+            }
+
+            // Link the pad to the funnel.
+            if (!target) {
+                ret = gst_ghost_pad_set_target(GST_GHOST_PAD(pad), combinerPad->funnelPad);
                 ASSERT(ret);
-            } /* else: pipeline is already correct */
+            } // Else: pipeline is already correct.
         }
-        gst_caps_unref(textCaps);
-        gst_object_unref(targetParent);
-        gst_object_unref(target);
         break;
     }
     case GST_EVENT_TAG: {
@@ -229,17 +220,15 @@ static GstPad* webkitTextCombinerRequestNewPad(GstElement * element,
     WebKitTextCombiner* combiner = WEBKIT_TEXT_COMBINER(element);
     ASSERT(combiner);
 
-    GstPad* pad = gst_element_request_pad(combiner->funnel, templ, name, caps);
-    ASSERT(pad);
-
-    GstPad* ghostPad = GST_PAD(g_object_new(WEBKIT_TYPE_TEXT_COMBINER_PAD, "direction", gst_pad_get_direction(pad), nullptr));
+    GstPad* ghostPad = GST_PAD(g_object_new(WEBKIT_TYPE_TEXT_COMBINER_PAD, "direction", GST_PAD_SINK, nullptr));
     ASSERT(ghostPad);
 
     ret = gst_ghost_pad_construct(GST_GHOST_PAD(ghostPad));
     ASSERT(ret);
 
-    ret = gst_ghost_pad_set_target(GST_GHOST_PAD(ghostPad), pad);
-    ASSERT(ret);
+    WebKitTextCombinerPad* combinerPad = WEBKIT_TEXT_COMBINER_PAD(ghostPad);
+    combinerPad->funnelPad = gst_element_request_pad(combiner->funnel, templ, name, caps);
+    ASSERT(combinerPad->funnelPad);
 
     ret = gst_pad_set_active(ghostPad, true);
     ASSERT(ret);
@@ -252,15 +241,18 @@ static GstPad* webkitTextCombinerRequestNewPad(GstElement * element,
 static void webkitTextCombinerReleasePad(GstElement *element, GstPad *pad)
 {
     WebKitTextCombiner* combiner = WEBKIT_TEXT_COMBINER(element);
-    GstPad* peer = gst_pad_get_peer(pad);
-    if (peer) {
-        GstElement* parent = gst_pad_get_parent_element(peer);
+    WebKitTextCombinerPad* combinerPad = WEBKIT_TEXT_COMBINER_PAD(pad);
+
+    if (GRefPtr<GstPad> target = adoptGRef(gst_ghost_pad_get_target(GST_GHOST_PAD(pad)))) {
+        GRefPtr<GstElement> parent = adoptGRef(gst_pad_get_parent_element(target.get()));
         ASSERT(parent);
-        gst_element_release_request_pad(parent, peer);
-        if (parent != combiner->funnel)
-            gst_bin_remove(GST_BIN(combiner), parent);
+        if (G_TYPE_FROM_INSTANCE(parent.get()) == webVTTEncType) {
+            gst_element_set_state(parent.get(), GST_STATE_NULL);
+            gst_bin_remove(GST_BIN(combiner), parent.get());
+        }
     }
 
+    gst_element_release_request_pad(combiner->funnel, combinerPad->funnelPad);
     gst_element_remove_pad(element, pad);
 }
 
@@ -279,13 +271,19 @@ static void webkit_text_combiner_class_init(WebKitTextCombinerClass* klass)
         GST_DEBUG_FUNCPTR(webkitTextCombinerRequestNewPad);
     elementClass->release_pad =
         GST_DEBUG_FUNCPTR(webkitTextCombinerReleasePad);
+
+    GRefPtr<GstElementFactory> webVTTEncFactory = adoptGRef(gst_element_factory_find("webvttenc"));
+    ASSERT(webVTTEncFactory);
+    gst_object_unref(gst_plugin_feature_load(GST_PLUGIN_FEATURE(webVTTEncFactory.get())));
+    webVTTEncType = gst_element_factory_get_element_type(webVTTEncFactory.get());
+    ASSERT(webVTTEncType);
 }
 
 static void webkit_text_combiner_pad_class_init(WebKitTextCombinerPadClass* klass)
 {
     GObjectClass* gobjectClass = G_OBJECT_CLASS(klass);
 
-    gobjectClass->finalize = GST_DEBUG_FUNCPTR(webkitTextCombinerPadFinalize);
+    gobjectClass->dispose = GST_DEBUG_FUNCPTR(webkitTextCombinerPadDispose);
     gobjectClass->get_property = GST_DEBUG_FUNCPTR(webkitTextCombinerPadGetProperty);
 
     g_object_class_install_property(gobjectClass, PROP_PAD_TAGS,
@@ -295,7 +293,13 @@ static void webkit_text_combiner_pad_class_init(WebKitTextCombinerPadClass* klas
 
 GstElement* webkitTextCombinerNew()
 {
+    // The combiner relies on webvttenc, fail early if it's not there.
+    if (!WebCore::isGStreamerPluginAvailable("subenc")) {
+        WTFLogAlways("WebKit wasn't able to find a WebVTT encoder. Not continuing without platform support for subtitles.");
+        return nullptr;
+    }
+
     return GST_ELEMENT(g_object_new(WEBKIT_TYPE_TEXT_COMBINER, nullptr));
 }
 
-#endif // ENABLE(VIDEO) && USE(GSTREAMER) && ENABLE(VIDEO_TRACK)
+#endif // ENABLE(VIDEO) && USE(GSTREAMER)

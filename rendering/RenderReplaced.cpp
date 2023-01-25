@@ -25,24 +25,35 @@
 #include "RenderReplaced.h"
 
 #include "DocumentMarkerController.h"
+#include "ElementRuleCollector.h"
 #include "FloatRoundedRect.h"
 #include "Frame.h"
 #include "GraphicsContext.h"
 #include "HTMLElement.h"
+#include "HTMLImageElement.h"
+#include "HTMLParserIdioms.h"
+#include "HighlightData.h"
+#include "HighlightRegister.h"
 #include "InlineElementBox.h"
+#include "LayoutIntegrationLineIterator.h"
+#include "LayoutIntegrationRunIterator.h"
 #include "LayoutRepainter.h"
 #include "RenderBlock.h"
-#include "RenderFlowThread.h"
+#include "RenderFragmentedFlow.h"
 #include "RenderImage.h"
 #include "RenderLayer.h"
-#include "RenderNamedFlowFragment.h"
 #include "RenderTheme.h"
 #include "RenderView.h"
 #include "RenderedDocumentMarker.h"
+#include "RuntimeEnabledFeatures.h"
+#include "Settings.h"
 #include "VisiblePosition.h"
+#include <wtf/IsoMallocInlines.h>
 #include <wtf/StackStats.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(RenderReplaced);
 
 const int cDefaultWidth = 300;
 const int cDefaultHeight = 150;
@@ -68,9 +79,7 @@ RenderReplaced::RenderReplaced(Document& document, RenderStyle&& style, const La
     setReplaced(true);
 }
 
-RenderReplaced::~RenderReplaced()
-{
-}
+RenderReplaced::~RenderReplaced() = default;
 
 void RenderReplaced::willBeDestroyed()
 {
@@ -83,10 +92,8 @@ void RenderReplaced::willBeDestroyed()
 void RenderReplaced::styleDidChange(StyleDifference diff, const RenderStyle* oldStyle)
 {
     RenderBox::styleDidChange(diff, oldStyle);
-
-    bool hadStyle = (oldStyle != 0);
-    float oldZoom = hadStyle ? oldStyle->effectiveZoom() : RenderStyle::initialZoom();
-    if (style().effectiveZoom() != oldZoom)
+    auto previousEffectiveZoom = oldStyle ? oldStyle->effectiveZoom() : RenderStyle::initialZoom();
+    if (previousEffectiveZoom != style().effectiveZoom())
         intrinsicSizeChanged();
 }
 
@@ -101,18 +108,6 @@ void RenderReplaced::layout()
 
     updateLogicalWidth();
     updateLogicalHeight();
-
-    // Now that we've calculated our preferred layout, we check to see
-    // if we should further constrain sizing to the intrinsic aspect ratio.
-    if (style().aspectRatioType() == AspectRatioFromIntrinsic && !m_intrinsicSize.isEmpty()) {
-        float aspectRatio = m_intrinsicSize.aspectRatio();
-        LayoutSize frameSize = size();
-        float frameAspectRatio = frameSize.aspectRatio();
-        if (frameAspectRatio < aspectRatio)
-            setHeight(computeReplacedLogicalHeightRespectingMinMaxHeight(frameSize.height() * frameAspectRatio / aspectRatio));
-        else if (frameAspectRatio > aspectRatio)
-            setWidth(computeReplacedLogicalWidthRespectingMinMaxWidth(frameSize.width() * aspectRatio / frameAspectRatio, ComputePreferred));
-    }
 
     clearOverflow();
     addVisualEffectOverflow();
@@ -133,21 +128,56 @@ void RenderReplaced::intrinsicSizeChanged()
 
 bool RenderReplaced::shouldDrawSelectionTint() const
 {
-    return selectionState() != SelectionNone && !document().printing();
+    return selectionState() != HighlightState::None && !document().printing();
 }
 
 inline static bool draggedContentContainsReplacedElement(const Vector<RenderedDocumentMarker*>& markers, const Element& element)
 {
-    if (markers.isEmpty())
-        return false;
-
     for (auto* marker : markers) {
-        auto& draggedContentData = WTF::get<DocumentMarker::DraggedContentData>(marker->data());
-        if (draggedContentData.targetNode == &element)
+        if (WTF::get<RefPtr<Node>>(marker->data()) == &element)
             return true;
     }
-
     return false;
+}
+
+Color RenderReplaced::calculateHighlightColor() const
+{
+    HighlightData highlightData;
+#if ENABLE(APP_HIGHLIGHTS)
+    if (auto appHighlightRegister = document().appHighlightRegisterIfExists()) {
+        for (auto& highlight : appHighlightRegister->map()) {
+            for (auto& rangeData : highlight.value->rangesData()) {
+                if (!highlightData.setRenderRange(rangeData))
+                    continue;
+
+                auto state = highlightData.highlightStateForRenderer(*this);
+                if (!isHighlighted(state, highlightData))
+                    continue;
+
+                OptionSet<StyleColor::Options> styleColorOptions = { StyleColor::Options::UseSystemAppearance };
+                return theme().appHighlightColor(styleColorOptions);
+            }
+        }
+    }
+#endif
+    if (RuntimeEnabledFeatures::sharedFeatures().highlightAPIEnabled()) {
+        if (auto highlightRegister = document().highlightRegisterIfExists()) {
+            for (auto& highlight : highlightRegister->map()) {
+                for (auto& rangeData : highlight.value->rangesData()) {
+                    if (!highlightData.setRenderRange(rangeData))
+                        continue;
+
+                    auto state = highlightData.highlightStateForRenderer(*this);
+                    if (!isHighlighted(state, highlightData))
+                        continue;
+
+                    if (auto highlightStyle = getUncachedPseudoStyle({ PseudoId::Highlight, highlight.key }, &style()))
+                        return highlightStyle->backgroundColor();
+                }
+            }
+        }
+    }
+    return Color();
 }
 
 void RenderReplaced::paint(PaintInfo& paintInfo, const LayoutPoint& paintOffset)
@@ -155,61 +185,70 @@ void RenderReplaced::paint(PaintInfo& paintInfo, const LayoutPoint& paintOffset)
     if (!shouldPaint(paintInfo, paintOffset))
         return;
 
-#ifndef NDEBUG
-    SetLayoutNeededForbiddenScope scope(this);
-#endif
+    LayoutPoint adjustedPaintOffset = paintOffset + location();
+
+    if (paintInfo.phase == PaintPhase::EventRegion) {
+        if (visibleToHitTesting()) {
+            auto borderRect = LayoutRect(adjustedPaintOffset, size());
+            auto borderRegion = approximateAsRegion(style().getRoundedBorderFor(borderRect));
+            paintInfo.eventRegionContext->unite(borderRegion, style());
+        }
+        return;
+    }
+
+    SetLayoutNeededForbiddenScope scope(*this);
 
     GraphicsContextStateSaver savedGraphicsContext(paintInfo.context(), false);
     if (element() && element()->parentOrShadowHostElement()) {
         auto* parentContainer = element()->parentOrShadowHostElement();
-        if (draggedContentContainsReplacedElement(document().markers().markersFor(parentContainer, DocumentMarker::DraggedContent), *element())) {
+        ASSERT(parentContainer);
+        if (draggedContentContainsReplacedElement(document().markers().markersFor(*parentContainer, DocumentMarker::DraggedContent), *element())) {
             savedGraphicsContext.save();
             paintInfo.context().setAlpha(0.25);
         }
     }
 
-    LayoutPoint adjustedPaintOffset = paintOffset + location();
-    
-    if (hasVisibleBoxDecorations() && paintInfo.phase == PaintPhaseForeground)
+    if (hasVisibleBoxDecorations() && paintInfo.phase == PaintPhase::Foreground)
         paintBoxDecorations(paintInfo, adjustedPaintOffset);
     
-    if (paintInfo.phase == PaintPhaseMask) {
+    if (paintInfo.phase == PaintPhase::Mask) {
         paintMask(paintInfo, adjustedPaintOffset);
         return;
     }
 
     LayoutRect paintRect = LayoutRect(adjustedPaintOffset, size());
-    if (paintInfo.phase == PaintPhaseOutline || paintInfo.phase == PaintPhaseSelfOutline) {
+    if (paintInfo.phase == PaintPhase::Outline || paintInfo.phase == PaintPhase::SelfOutline) {
         if (style().outlineWidth())
             paintOutline(paintInfo, paintRect);
         return;
     }
 
-    if (paintInfo.phase != PaintPhaseForeground && paintInfo.phase != PaintPhaseSelection)
+    if (paintInfo.phase != PaintPhase::Foreground && paintInfo.phase != PaintPhase::Selection)
         return;
     
     if (!paintInfo.shouldPaintWithinRoot(*this))
         return;
     
+    Color highlightColor;
+    if (!document().printing() && !paintInfo.paintBehavior.contains(PaintBehavior::ExcludeSelection))
+        highlightColor = calculateHighlightColor();
+    
     bool drawSelectionTint = shouldDrawSelectionTint();
-    if (paintInfo.phase == PaintPhaseSelection) {
-        if (selectionState() == SelectionNone)
+    if (paintInfo.phase == PaintPhase::Selection) {
+        if (selectionState() == HighlightState::None)
             return;
         drawSelectionTint = false;
     }
 
     bool completelyClippedOut = false;
     if (style().hasBorderRadius()) {
-        LayoutRect borderRect = LayoutRect(adjustedPaintOffset, size());
-
-        if (borderRect.isEmpty())
-            completelyClippedOut = true;
-        else {
+        completelyClippedOut = size().isEmpty();
+        if (!completelyClippedOut) {
             // Push a clip if we have a border radius, since we want to round the foreground content that gets painted.
             paintInfo.context().save();
-            FloatRoundedRect roundedInnerRect = FloatRoundedRect(style().getRoundedInnerBorderFor(paintRect,
-                paddingTop() + borderTop(), paddingBottom() + borderBottom(), paddingLeft() + borderLeft(), paddingRight() + borderRight(), true, true));
-            clipRoundedInnerRect(paintInfo.context(), paintRect, roundedInnerRect);
+            auto pixelSnappedRoundedRect = style().getRoundedInnerBorderFor(paintRect,
+                paddingTop() + borderTop(), paddingBottom() + borderBottom(), paddingLeft() + borderLeft(), paddingRight() + borderRight(), true, true).pixelSnappedRoundedRectForPainting(document().deviceScaleFactor());
+            clipRoundedInnerRect(paintInfo.context(), paintRect, pixelSnappedRoundedRect);
         }
     }
 
@@ -227,29 +266,34 @@ void RenderReplaced::paint(PaintInfo& paintInfo, const LayoutPoint& paintOffset)
         selectionPaintingRect.moveBy(adjustedPaintOffset);
         paintInfo.context().fillRect(snappedIntRect(selectionPaintingRect), selectionBackgroundColor());
     }
+    
+    if (highlightColor.isVisible()) {
+        auto selectionPaintingRect = localSelectionRect(false);
+        selectionPaintingRect.moveBy(adjustedPaintOffset);
+        paintInfo.context().fillRect(snappedIntRect(selectionPaintingRect), highlightColor);
+    }
 }
 
 bool RenderReplaced::shouldPaint(PaintInfo& paintInfo, const LayoutPoint& paintOffset)
 {
-    if ((paintInfo.paintBehavior & PaintBehaviorExcludeSelection) && isSelected())
+    if ((paintInfo.paintBehavior.contains(PaintBehavior::ExcludeSelection)) && isSelected())
         return false;
 
-    if (paintInfo.phase != PaintPhaseForeground && paintInfo.phase != PaintPhaseOutline && paintInfo.phase != PaintPhaseSelfOutline 
-            && paintInfo.phase != PaintPhaseSelection && paintInfo.phase != PaintPhaseMask)
+    if (paintInfo.phase != PaintPhase::Foreground
+        && paintInfo.phase != PaintPhase::Outline
+        && paintInfo.phase != PaintPhase::SelfOutline
+        && paintInfo.phase != PaintPhase::Selection
+        && paintInfo.phase != PaintPhase::Mask
+        && paintInfo.phase != PaintPhase::EventRegion)
         return false;
 
     if (!paintInfo.shouldPaintWithinRoot(*this))
         return false;
         
     // if we're invisible or haven't received a layout yet, then just bail.
-    if (style().visibility() != VISIBLE)
+    if (style().visibility() != Visibility::Visible)
         return false;
     
-    RenderNamedFlowFragment* namedFlowFragment = currentRenderNamedFlowFragment();
-    // Check our region range to make sure we need to be painting in this region.
-    if (namedFlowFragment && !namedFlowFragment->flowThread()->objectShouldFragmentInFlowRegion(this, namedFlowFragment))
-        return false;
-
     LayoutPoint adjustedPaintOffset = paintOffset + location();
 
     // Early exit if the element touches the edges.
@@ -333,9 +377,8 @@ bool RenderReplaced::setNeedsLayoutIfNeededAfterIntrinsicSizeChange()
         || style().logicalMaxWidth().isPercentOrCalculated()
         || style().logicalMinWidth().isPercentOrCalculated();
     
-    bool layoutSizeDependsOnIntrinsicSize = style().aspectRatioType() == AspectRatioFromIntrinsic;
-    
-    if (!imageSizeIsConstrained || containingBlockNeedsToRecomputePreferredSize || layoutSizeDependsOnIntrinsicSize) {
+    // Flex layout algorithm uses the intrinsic image width/height even if width/height are specified.
+    if (!imageSizeIsConstrained || containingBlockNeedsToRecomputePreferredSize || isFlexItem()) {
         setNeedsLayout();
         return true;
     }
@@ -349,6 +392,9 @@ void RenderReplaced::computeAspectRatioInformationForRenderBox(RenderBox* conten
     if (contentRenderer) {
         contentRenderer->computeIntrinsicRatioInformation(intrinsicSize, intrinsicRatio);
 
+        if (style().aspectRatioType() == AspectRatioType::Ratio || (style().aspectRatioType() == AspectRatioType::AutoAndRatio && !intrinsicRatio))
+            intrinsicRatio = style().aspectRatioWidth() / style().aspectRatioHeight();
+
         // Handle zoom & vertical writing modes here, as the embedded document doesn't know about them.
         intrinsicSize.scale(style().effectiveZoom());
 
@@ -358,7 +404,7 @@ void RenderReplaced::computeAspectRatioInformationForRenderBox(RenderBox* conten
         // Update our intrinsic size to match what the content renderer has computed, so that when we
         // constrain the size below, the correct intrinsic size will be obtained for comparison against
         // min and max widths.
-        if (intrinsicRatio && !intrinsicSize.isEmpty())
+        if (intrinsicRatio && !intrinsicSize.isZero())
             m_intrinsicSize = LayoutSize(intrinsicSize);
 
         if (!isHorizontalWritingMode()) {
@@ -368,7 +414,7 @@ void RenderReplaced::computeAspectRatioInformationForRenderBox(RenderBox* conten
         }
     } else {
         computeIntrinsicRatioInformation(intrinsicSize, intrinsicRatio);
-        if (intrinsicRatio && !intrinsicSize.isEmpty())
+        if (intrinsicRatio && !intrinsicSize.isZero())
             m_intrinsicSize = LayoutSize(isHorizontalWritingMode() ? intrinsicSize : intrinsicSize.transposedSize());
     }
 
@@ -397,17 +443,17 @@ LayoutRect RenderReplaced::replacedContentRect(const LayoutSize& intrinsicSize) 
 
     LayoutRect finalRect = contentRect;
     switch (objectFit) {
-    case ObjectFitContain:
-    case ObjectFitScaleDown:
-    case ObjectFitCover:
-        finalRect.setSize(finalRect.size().fitToAspectRatio(intrinsicSize, objectFit == ObjectFitCover ? AspectRatioFitGrow : AspectRatioFitShrink));
-        if (objectFit != ObjectFitScaleDown || finalRect.width() <= intrinsicSize.width())
+    case ObjectFit::Contain:
+    case ObjectFit::ScaleDown:
+    case ObjectFit::Cover:
+        finalRect.setSize(finalRect.size().fitToAspectRatio(intrinsicSize, objectFit == ObjectFit::Cover ? AspectRatioFitGrow : AspectRatioFitShrink));
+        if (objectFit != ObjectFit::ScaleDown || finalRect.width() <= intrinsicSize.width())
             break;
         FALLTHROUGH;
-    case ObjectFitNone:
+    case ObjectFit::None:
         finalRect.setSize(intrinsicSize);
         break;
-    case ObjectFitFill:
+    case ObjectFit::Fill:
         break;
     }
 
@@ -421,15 +467,46 @@ LayoutRect RenderReplaced::replacedContentRect(const LayoutSize& intrinsicSize) 
     return finalRect;
 }
 
+RoundedRect RenderReplaced::roundedContentBoxRect() const
+{
+    return style().getRoundedInnerBorderFor(borderBoxRect(),
+        borderTop() + paddingTop(), borderBottom() + paddingBottom(),
+        borderLeft() + paddingLeft(), borderRight() + paddingRight());
+}
+
 void RenderReplaced::computeIntrinsicRatioInformation(FloatSize& intrinsicSize, double& intrinsicRatio) const
 {
     // If there's an embeddedContentBox() of a remote, referenced document available, this code-path should never be used.
     ASSERT(!embeddedContentBox());
     intrinsicSize = FloatSize(intrinsicLogicalWidth(), intrinsicLogicalHeight());
 
+    if (style().hasAspectRatio()) {
+        intrinsicRatio = style().logicalAspectRatio();
+        if (style().aspectRatioType() == AspectRatioType::Ratio)
+            return;
+    }
     // Figure out if we need to compute an intrinsic ratio.
-    if (intrinsicSize.isEmpty() || !hasAspectRatio())
+    if (!hasAspectRatio())
         return;
+
+    if (intrinsicSize.isEmpty()) {
+        if (!settings().aspectRatioOfImgFromWidthAndHeightEnabled())
+            return;
+
+        auto* node = element();
+        // The aspectRatioOfImgFromWidthAndHeight only applies to <img>.
+        if (!node || !is<HTMLImageElement>(*node) || !node->hasAttribute(HTMLNames::widthAttr) || !node->hasAttribute(HTMLNames::heightAttr))
+            return;
+
+        // We shouldn't override the aspect-ratio when the <img> element has an empty src attribute.
+        if (!is<RenderImage>(*this) || !downcast<RenderImage>(*this).cachedImage())
+            return;
+
+        intrinsicSize.setWidth(parseValidHTMLFloatingPointNumber(node->getAttribute(HTMLNames::widthAttr)).valueOr(0));
+        intrinsicSize.setHeight(parseValidHTMLFloatingPointNumber(node->getAttribute(HTMLNames::heightAttr)).valueOr(0));
+        if (intrinsicSize.isEmpty())
+            return;
+    }
 
     intrinsicRatio = intrinsicSize.width() / intrinsicSize.height();
 }
@@ -437,7 +514,7 @@ void RenderReplaced::computeIntrinsicRatioInformation(FloatSize& intrinsicSize, 
 LayoutUnit RenderReplaced::computeConstrainedLogicalWidth(ShouldComputePreferred shouldComputePreferred) const
 {
     if (shouldComputePreferred == ComputePreferred)
-        return computeReplacedLogicalWidthRespectingMinMaxWidth(LayoutUnit(), ComputePreferred);
+        return computeReplacedLogicalWidthRespectingMinMaxWidth(0_lu, ComputePreferred);
 
     // The aforementioned 'constraint equation' used for block-level, non-replaced
     // elements in normal flow:
@@ -448,8 +525,10 @@ LayoutUnit RenderReplaced::computeConstrainedLogicalWidth(ShouldComputePreferred
     
     // This solves above equation for 'width' (== logicalWidth).
     LayoutUnit marginStart = minimumValueForLength(style().marginStart(), logicalWidth);
-    LayoutUnit marginEnd = minimumValueForLength(style().marginEnd(), logicalWidth);
-    logicalWidth = std::max(LayoutUnit(), (logicalWidth - (marginStart + marginEnd + (size().width() - clientWidth()))));
+    LayoutUnit marginEnd = minimumValueForLength(style().marginEnd(), logicalWidth); 
+
+    // FIXME: This expression does not align with the comment above, which is quoting https://www.w3.org/TR/CSS22/visudet.html#blockwidth.
+    logicalWidth = std::max(0_lu, (logicalWidth - (marginStart + marginEnd + borderLeft() + borderRight())));
     return computeReplacedLogicalWidthRespectingMinMaxWidth(logicalWidth, shouldComputePreferred);
 }
 
@@ -468,19 +547,26 @@ LayoutUnit RenderReplaced::computeReplacedLogicalWidth(ShouldComputePreferred sh
     if (style().logicalWidth().isAuto()) {
         bool computedHeightIsAuto = style().logicalHeight().isAuto();
         bool hasIntrinsicWidth = constrainedSize.width() > 0;
+        bool hasIntrinsicHeight = constrainedSize.height() > 0;
+
+        // For flex items where the logical height has been overriden then we should use that size to compute the replaced width as long as the flex item has
+        // an intrinsic size. It is possible (indeed, common) for an SVG graphic to have an intrinsic aspect ratio but not to have an intrinsic width or height.
+        // There are also elements with intrinsic sizes but without intrinsic ratio (like an iframe). We cannot apply this rule to grid items because the grid
+        // container can distort aspect ratios in case of "align-self: stretch" for example (see https://drafts.csswg.org/css-grid/#grid-item-sizing).
+        if (intrinsicRatio && isFlexItem() && hasOverridingLogicalHeight() && hasIntrinsicWidth && hasIntrinsicHeight)
+            return computeReplacedLogicalWidthRespectingMinMaxWidth(roundToInt(round(overridingContentLogicalHeight() * intrinsicRatio)), shouldComputePreferred);
 
         // If 'height' and 'width' both have computed values of 'auto' and the element also has an intrinsic width, then that intrinsic width is the used value of 'width'.
         if (computedHeightIsAuto && hasIntrinsicWidth)
             return computeReplacedLogicalWidthRespectingMinMaxWidth(constrainedSize.width(), shouldComputePreferred);
 
-        bool hasIntrinsicHeight = constrainedSize.height() > 0;
         if (intrinsicRatio) {
             // If 'height' and 'width' both have computed values of 'auto' and the element has no intrinsic width, but does have an intrinsic height and intrinsic ratio;
             // or if 'width' has a computed value of 'auto', 'height' has some other computed value, and the element does have an intrinsic ratio; then the used value
             // of 'width' is: (used height) * (intrinsic ratio)
             if (intrinsicRatio && ((computedHeightIsAuto && !hasIntrinsicWidth && hasIntrinsicHeight) || !computedHeightIsAuto)) {
                 LayoutUnit estimatedUsedWidth = hasIntrinsicWidth ? LayoutUnit(constrainedSize.width()) : computeConstrainedLogicalWidth(shouldComputePreferred);
-                LayoutUnit logicalHeight = computeReplacedLogicalHeight(std::optional<LayoutUnit>(estimatedUsedWidth));
+                LayoutUnit logicalHeight = computeReplacedLogicalHeight(Optional<LayoutUnit>(estimatedUsedWidth));
                 return computeReplacedLogicalWidthRespectingMinMaxWidth(roundToInt(round(logicalHeight * intrinsicRatio)), shouldComputePreferred);
             }
 
@@ -510,7 +596,7 @@ LayoutUnit RenderReplaced::computeReplacedLogicalWidth(ShouldComputePreferred sh
     return computeReplacedLogicalWidthRespectingMinMaxWidth(intrinsicLogicalWidth(), shouldComputePreferred);
 }
 
-LayoutUnit RenderReplaced::computeReplacedLogicalHeight(std::optional<LayoutUnit> estimatedUsedWidth) const
+LayoutUnit RenderReplaced::computeReplacedLogicalHeight(Optional<LayoutUnit> estimatedUsedWidth) const
 {
     // 10.5 Content height: the 'height' property: http://www.w3.org/TR/CSS21/visudet.html#propdef-height
     if (hasReplacedLogicalHeight())
@@ -525,6 +611,11 @@ LayoutUnit RenderReplaced::computeReplacedLogicalHeight(std::optional<LayoutUnit
 
     bool widthIsAuto = style().logicalWidth().isAuto();
     bool hasIntrinsicHeight = constrainedSize.height() > 0;
+    bool hasIntrinsicWidth = constrainedSize.width() > 0;
+
+    // See computeReplacedLogicalHeight() for a similar check for heights.
+    if (intrinsicRatio && isFlexItem() && hasOverridingLogicalWidth() && hasIntrinsicHeight && hasIntrinsicWidth)
+        return computeReplacedLogicalHeightRespectingMinMaxHeight(roundToInt(round(overridingContentLogicalWidth() / intrinsicRatio)));
 
     // If 'height' and 'width' both have computed values of 'auto' and the element also has an intrinsic height, then that intrinsic height is the used value of 'height'.
     if (widthIsAuto && hasIntrinsicHeight)
@@ -557,9 +648,14 @@ void RenderReplaced::computePreferredLogicalWidths()
 
     // We cannot resolve any percent logical width here as the available logical
     // width may not be set on our containing block.
-    if (style().logicalWidth().isPercentOrCalculated())
+    if (style().logicalWidth().isPercentOrCalculated()) {
+        double intrinsicRatio = 0;
+        FloatSize constrainedSize;
+        // For images with explicit width/height this updates the instrinsic size as a side effect.
+        computeAspectRatioInformationForRenderBox(embeddedContentBox(), constrainedSize, intrinsicRatio);
+
         computeIntrinsicLogicalWidths(m_minPreferredLogicalWidth, m_maxPreferredLogicalWidth);
-    else
+    } else
         m_minPreferredLogicalWidth = m_maxPreferredLogicalWidth = computeReplacedLogicalWidth(ComputePreferred);
 
     const RenderStyle& styleToUse = style();
@@ -567,13 +663,13 @@ void RenderReplaced::computePreferredLogicalWidths()
         m_minPreferredLogicalWidth = 0;
 
     if (styleToUse.logicalMinWidth().isFixed() && styleToUse.logicalMinWidth().value() > 0) {
-        m_maxPreferredLogicalWidth = std::max(m_maxPreferredLogicalWidth, adjustContentBoxLogicalWidthForBoxSizing(styleToUse.logicalMinWidth().value()));
-        m_minPreferredLogicalWidth = std::max(m_minPreferredLogicalWidth, adjustContentBoxLogicalWidthForBoxSizing(styleToUse.logicalMinWidth().value()));
+        m_maxPreferredLogicalWidth = std::max(m_maxPreferredLogicalWidth, adjustContentBoxLogicalWidthForBoxSizing(styleToUse.logicalMinWidth()));
+        m_minPreferredLogicalWidth = std::max(m_minPreferredLogicalWidth, adjustContentBoxLogicalWidthForBoxSizing(styleToUse.logicalMinWidth()));
     }
     
     if (styleToUse.logicalMaxWidth().isFixed()) {
-        m_maxPreferredLogicalWidth = std::min(m_maxPreferredLogicalWidth, adjustContentBoxLogicalWidthForBoxSizing(styleToUse.logicalMaxWidth().value()));
-        m_minPreferredLogicalWidth = std::min(m_minPreferredLogicalWidth, adjustContentBoxLogicalWidthForBoxSizing(styleToUse.logicalMaxWidth().value()));
+        m_maxPreferredLogicalWidth = std::min(m_maxPreferredLogicalWidth, adjustContentBoxLogicalWidthForBoxSizing(styleToUse.logicalMaxWidth()));
+        m_minPreferredLogicalWidth = std::min(m_minPreferredLogicalWidth, adjustContentBoxLogicalWidthForBoxSizing(styleToUse.logicalMaxWidth()));
     }
 
     LayoutUnit borderAndPadding = borderAndPaddingLogicalWidth();
@@ -583,31 +679,32 @@ void RenderReplaced::computePreferredLogicalWidths()
     setPreferredLogicalWidthsDirty(false);
 }
 
-VisiblePosition RenderReplaced::positionForPoint(const LayoutPoint& point, const RenderRegion* region)
+VisiblePosition RenderReplaced::positionForPoint(const LayoutPoint& point, const RenderFragmentContainer* fragment)
 {
-    // FIXME: This code is buggy if the replaced element is relative positioned.
-    InlineBox* box = inlineBoxWrapper();
-    const RootInlineBox* rootBox = box ? &box->root() : 0;
-    
-    LayoutUnit top = rootBox ? rootBox->selectionTop() : logicalTop();
-    LayoutUnit bottom = rootBox ? rootBox->selectionBottom() : logicalBottom();
-    
+    auto [top, bottom] = [&] {
+        if (auto run = LayoutIntegration::runFor(*this)) {
+            auto line = run.line();
+            return std::make_pair(line->selectionTopForHitTesting(), line->selectionBottom());
+        }
+        return std::make_pair(logicalTop(), logicalBottom());
+    }();
+
     LayoutUnit blockDirectionPosition = isHorizontalWritingMode() ? point.y() + y() : point.x() + x();
     LayoutUnit lineDirectionPosition = isHorizontalWritingMode() ? point.x() + x() : point.y() + y();
     
     if (blockDirectionPosition < top)
-        return createVisiblePosition(caretMinOffset(), DOWNSTREAM); // coordinates are above
+        return createVisiblePosition(caretMinOffset(), Affinity::Downstream); // coordinates are above
     
     if (blockDirectionPosition >= bottom)
-        return createVisiblePosition(caretMaxOffset(), DOWNSTREAM); // coordinates are below
+        return createVisiblePosition(caretMaxOffset(), Affinity::Downstream); // coordinates are below
     
     if (element()) {
         if (lineDirectionPosition <= logicalLeft() + (logicalWidth() / 2))
-            return createVisiblePosition(0, DOWNSTREAM);
-        return createVisiblePosition(1, DOWNSTREAM);
+            return createVisiblePosition(0, Affinity::Downstream);
+        return createVisiblePosition(1, Affinity::Downstream);
     }
 
-    return RenderBox::positionForPoint(point, region);
+    return RenderBox::positionForPoint(point, fragment);
 }
 
 LayoutRect RenderReplaced::selectionRectForRepaint(const RenderLayerModelObject* repaintContainer, bool clipToVisibleContent)
@@ -633,47 +730,41 @@ LayoutRect RenderReplaced::localSelectionRect(bool checkWhetherSelected) const
         return LayoutRect(LayoutPoint(), size());
     
     const RootInlineBox& rootBox = m_inlineBoxWrapper->root();
-    LayoutUnit newLogicalTop = rootBox.blockFlow().style().isFlippedBlocksWritingMode() ? m_inlineBoxWrapper->logicalBottom() - rootBox.selectionBottom() : rootBox.selectionTop() - m_inlineBoxWrapper->logicalTop();
+    LayoutUnit newLogicalTop { rootBox.blockFlow().style().isFlippedBlocksWritingMode() ? m_inlineBoxWrapper->logicalBottom() - rootBox.selectionBottom() : rootBox.selectionTop() - m_inlineBoxWrapper->logicalTop() };
     if (rootBox.blockFlow().style().isHorizontalWritingMode())
-        return LayoutRect(0, newLogicalTop, width(), rootBox.selectionHeight());
-    return LayoutRect(newLogicalTop, 0, rootBox.selectionHeight(), height());
-}
-
-void RenderReplaced::setSelectionState(SelectionState state)
-{
-    // The selection state for our containing block hierarchy is updated by the base class call.
-    RenderBox::setSelectionState(state);
-
-    if (m_inlineBoxWrapper && canUpdateSelectionOnRootLineBoxes())
-        m_inlineBoxWrapper->root().setHasSelectedChildren(isSelected());
+        return LayoutRect(0_lu, newLogicalTop, width(), rootBox.selectionHeight());
+    return LayoutRect(newLogicalTop, 0_lu, rootBox.selectionHeight(), height());
 }
 
 bool RenderReplaced::isSelected() const
 {
-    SelectionState s = selectionState();
-    if (s == SelectionNone)
+    return isHighlighted(selectionState(), view().selection());
+}
+
+bool RenderReplaced::isHighlighted(HighlightState state, const HighlightData& rangeData) const
+{
+    if (state == HighlightState::None)
         return false;
-    if (s == SelectionInside)
+    if (state == HighlightState::Inside)
         return true;
 
-    unsigned selectionStart, selectionEnd;
-    selectionStartEnd(selectionStart, selectionEnd);
-    if (s == SelectionStart)
-        return selectionStart == 0;
-        
+    auto selectionStart = rangeData.startOffset();
+    auto selectionEnd = rangeData.endOffset();
+    if (state == HighlightState::Start)
+        return !selectionStart;
+
     unsigned end = element()->hasChildNodes() ? element()->countChildNodes() : 1;
-    if (s == SelectionEnd)
+    if (state == HighlightState::End)
         return selectionEnd == end;
-    if (s == SelectionBoth)
-        return selectionStart == 0 && selectionEnd == end;
-        
+    if (state == HighlightState::Both)
+        return !selectionStart && selectionEnd == end;
     ASSERT_NOT_REACHED();
     return false;
 }
 
 LayoutRect RenderReplaced::clippedOverflowRectForRepaint(const RenderLayerModelObject* repaintContainer) const
 {
-    if (style().visibility() != VISIBLE && !enclosingLayer()->hasVisibleContent())
+    if (style().visibility() != Visibility::Visible && !enclosingLayer()->hasVisibleContent())
         return LayoutRect();
 
     // The selectionRect can project outside of the overflowRect, so take their union
@@ -681,7 +772,7 @@ LayoutRect RenderReplaced::clippedOverflowRectForRepaint(const RenderLayerModelO
     LayoutRect r = unionRect(localSelectionRect(false), visualOverflowRect());
     // FIXME: layoutDelta needs to be applied in parts before/after transforms and
     // repaint containers. https://bugs.webkit.org/show_bug.cgi?id=23308
-    r.move(view().layoutDelta());
+    r.move(view().frameView().layoutContext().layoutDelta());
     return computeRectForRepaint(r, repaintContainer);
 }
 

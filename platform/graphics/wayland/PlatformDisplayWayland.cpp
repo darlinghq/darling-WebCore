@@ -56,24 +56,35 @@ std::unique_ptr<PlatformDisplay> PlatformDisplayWayland::create()
     if (!display)
         return nullptr;
 
-    return std::make_unique<PlatformDisplayWayland>(display, NativeDisplayOwned::Yes);
+    auto platformDisplay = std::unique_ptr<PlatformDisplayWayland>(new PlatformDisplayWayland(display, NativeDisplayOwned::Yes));
+    platformDisplay->initialize();
+    return platformDisplay;
+}
+
+std::unique_ptr<PlatformDisplay> PlatformDisplayWayland::create(struct wl_display* display)
+{
+    auto platformDisplay = std::unique_ptr<PlatformDisplayWayland>(new PlatformDisplayWayland(display, NativeDisplayOwned::No));
+    platformDisplay->initialize();
+    return platformDisplay;
 }
 
 PlatformDisplayWayland::PlatformDisplayWayland(struct wl_display* display, NativeDisplayOwned displayOwned)
     : PlatformDisplay(displayOwned)
+    , m_display(display)
 {
-    initialize(display);
 }
 
 PlatformDisplayWayland::~PlatformDisplayWayland()
 {
-    if (m_nativeDisplayOwned == NativeDisplayOwned::Yes)
-        wl_display_destroy(m_display);
+    if (m_nativeDisplayOwned == NativeDisplayOwned::Yes) {
+        m_compositor = nullptr;
+        m_registry = nullptr;
+        wl_display_disconnect(m_display);
+    }
 }
 
-void PlatformDisplayWayland::initialize(wl_display* display)
+void PlatformDisplayWayland::initialize()
 {
-    m_display = display;
     if (!m_display)
         return;
 
@@ -82,16 +93,22 @@ void PlatformDisplayWayland::initialize(wl_display* display)
     wl_display_roundtrip(m_display);
 
 #if USE(EGL)
-#if defined(EGL_KHR_platform_wayland)
+#if defined(EGL_KHR_platform_wayland) || defined(EGL_EXT_platform_wayland)
     const char* extensions = eglQueryString(nullptr, EGL_EXTENSIONS);
+#if defined(EGL_KHR_platform_wayland)
     if (GLContext::isExtensionSupported(extensions, "EGL_KHR_platform_base")) {
         if (auto* getPlatformDisplay = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(eglGetProcAddress("eglGetPlatformDisplay")))
             m_eglDisplay = getPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, m_display, nullptr);
-    } else if (GLContext::isExtensionSupported(extensions, "EGL_EXT_platform_base")) {
-        if (auto* getPlatformDisplay = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(eglGetProcAddress("eglGetPlatformDisplayEXT")))
-            m_eglDisplay = getPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, m_display, nullptr);
-    } else
+    }
 #endif
+#if defined(EGL_EXT_platform_wayland)
+    if (m_eglDisplay == EGL_NO_DISPLAY && GLContext::isExtensionSupported(extensions, "EGL_EXT_platform_base")) {
+        if (auto* getPlatformDisplay = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(eglGetProcAddress("eglGetPlatformDisplayEXT")))
+            m_eglDisplay = getPlatformDisplay(EGL_PLATFORM_WAYLAND_EXT, m_display, nullptr);
+    }
+#endif
+#endif
+    if (m_eglDisplay == EGL_NO_DISPLAY)
         m_eglDisplay = eglGetDisplay(m_display);
 
     PlatformDisplay::initializeEGLDisplay();

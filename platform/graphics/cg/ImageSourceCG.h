@@ -26,14 +26,13 @@
 #ifndef ImageSourceCG_h
 #define ImageSourceCG_h
 
-#include "ImageSource.h"
 #include <wtf/Forward.h>
 
 namespace WebCore {
 
-String preferredExtensionForImageSourceType(const String& type);
+String preferredExtensionForImageType(const String& type);
 
-String MIMETypeForImageSourceType(const String& type);
+String MIMETypeForImageType(const String& type);
 
 #if !PLATFORM(COCOA)
 size_t sharedBufferGetBytesAtPosition(void* info, void* buffer, off_t position, size_t count);

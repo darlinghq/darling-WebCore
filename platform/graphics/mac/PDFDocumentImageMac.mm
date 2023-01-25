@@ -32,12 +32,9 @@
 #import "SharedBuffer.h"
 #import <Quartz/Quartz.h>
 #import <objc/objc-class.h>
+#import <pal/spi/cg/CoreGraphicsSPI.h>
 #import <wtf/RetainPtr.h>
 #import <wtf/SoftLinking.h>
-
-#if USE(APPLE_INTERNAL_SDK)
-#import <ApplicationServices/ApplicationServicesPriv.h>
-#endif
 
 SOFT_LINK_FRAMEWORK_IN_UMBRELLA(Quartz, PDFKit)
 SOFT_LINK_CLASS(PDFKit, PDFDocument)
@@ -72,17 +69,18 @@ void PDFDocumentImage::drawPDFPage(GraphicsContext& context)
     LocalCurrentGraphicsContext localCurrentContext(context);
 
     // These states can be mutated by PDFKit but are not saved
-    // on the context's state stack. (<rdar://problem/14951759>)
+    // on the context's state stack. (<rdar://problem/14951759&35738181>)
     bool allowsSmoothing = CGContextGetAllowsFontSmoothing(context.platformContext());
     bool allowsSubpixelQuantization = CGContextGetAllowsFontSubpixelQuantization(context.platformContext());
+    bool allowsSubpixelPositioning = CGContextGetAllowsFontSubpixelPositioning(context.platformContext());
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    ALLOW_DEPRECATED_DECLARATIONS_BEGIN
     [[m_document pageAtIndex:0] drawWithBox:kPDFDisplayBoxCropBox];
-#pragma clang diagnostic pop
+    ALLOW_DEPRECATED_DECLARATIONS_END
 
     CGContextSetAllowsFontSmoothing(context.platformContext(), allowsSmoothing);
     CGContextSetAllowsFontSubpixelQuantization(context.platformContext(), allowsSubpixelQuantization);
+    CGContextSetAllowsFontSubpixelPositioning(context.platformContext(), allowsSubpixelPositioning);
 }
 
 }

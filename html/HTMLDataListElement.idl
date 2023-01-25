@@ -30,6 +30,8 @@
 
 [
     Conditional=DATALIST_ELEMENT,
+    EnabledAtRuntime=DataListElement,
+    Exposed=Window
 ] interface HTMLDataListElement : HTMLElement {
     readonly attribute HTMLCollection options;
 };

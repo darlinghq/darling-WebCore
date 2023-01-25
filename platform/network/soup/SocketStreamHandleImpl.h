@@ -1,5 +1,6 @@
+
 /*
- * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2009-2018 Apple Inc. All rights reserved.
  * Copyright (C) 2009 Google Inc.  All rights reserved.
  * Copyright (C) 2012 Samsung Electronics Ltd. All Rights Reserved.
  *
@@ -36,54 +37,43 @@
 
 #if USE(SOUP)
 
-#include "SessionID.h"
-#include <wtf/StreamBuffer.h>
-#include <wtf/glib/GRefPtr.h>
+#include <pal/SessionID.h>
 
 namespace WebCore {
 
 class SocketStreamError;
 class SocketStreamHandleClient;
+class StorageSessionProvider;
 
 class SocketStreamHandleImpl final : public SocketStreamHandle {
 public:
-    static Ref<SocketStreamHandleImpl> create(const URL&, SocketStreamHandleClient&, SessionID, const String&, SourceApplicationAuditToken&&);
-    static Ref<SocketStreamHandle> create(GSocketConnection*, SocketStreamHandleClient&);
+    static Ref<SocketStreamHandleImpl> create(const URL&, SocketStreamHandleClient&, PAL::SessionID, const String&, SourceApplicationAuditToken&&, const StorageSessionProvider*)
+    {
+        RELEASE_ASSERT_NOT_REACHED();
+    }
 
-    virtual ~SocketStreamHandleImpl();
+    void platformSend(const uint8_t*, size_t, Function<void(bool)>&&) final
+    {
+        RELEASE_ASSERT_NOT_REACHED();
+    }
 
-    void platformSend(const char* data, size_t length, Function<void(bool)>&&) final;
-    void platformClose() final;
+    void platformSendHandshake(const uint8_t*, size_t, const Optional<CookieRequestHeaderFieldProxy>&, Function<void(bool, bool)>&&) final
+    {
+        RELEASE_ASSERT_NOT_REACHED();
+    }
+
+    void platformClose() final
+    {
+        RELEASE_ASSERT_NOT_REACHED();
+    }
+
 private:
-    SocketStreamHandleImpl(const URL&, SocketStreamHandleClient&);
-
-    size_t bufferedAmount() final;
-    std::optional<size_t> platformSendInternal(const char*, size_t);
-    bool sendPendingData();
-
-    void beginWaitingForSocketWritability();
-    void stopWaitingForSocketWritability();
-
-    static void connectedCallback(GSocketClient*, GAsyncResult*, SocketStreamHandleImpl*);
-    static void readReadyCallback(GInputStream*, GAsyncResult*, SocketStreamHandleImpl*);
-    static gboolean writeReadyCallback(GPollableOutputStream*, SocketStreamHandleImpl*);
-
-    void connected(GRefPtr<GSocketConnection>&&);
-    void readBytes(gssize);
-    void didFail(SocketStreamError&&);
-    void writeReady();
-
-    GRefPtr<GSocketConnection> m_socketConnection;
-    GRefPtr<GInputStream> m_inputStream;
-    GRefPtr<GPollableOutputStream> m_outputStream;
-    GRefPtr<GSource> m_writeReadySource;
-    GRefPtr<GCancellable> m_cancellable;
-    std::unique_ptr<char[]> m_readBuffer;
-
-    StreamBuffer<char, 1024 * 1024> m_buffer;
-    static const unsigned maxBufferSize = 100 * 1024 * 1024;
+    size_t bufferedAmount() final
+    {
+        RELEASE_ASSERT_NOT_REACHED();
+    }
 };
 
 } // namespace WebCore
 
-#endif
+#endif // USE(SOUP)

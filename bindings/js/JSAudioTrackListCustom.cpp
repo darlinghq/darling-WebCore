@@ -25,16 +25,16 @@
 
 #include "config.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "JSAudioTrackList.h"
 
 #include "Element.h"
 #include "JSNodeCustom.h"
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
 void JSAudioTrackList::visitAdditionalChildren(SlotVisitor& visitor)
 {

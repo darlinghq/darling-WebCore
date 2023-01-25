@@ -30,14 +30,12 @@
 #include "SoupNetworkSession.h"
 
 #include "AuthenticationChallenge.h"
-#include "FileSystem.h"
 #include "GUniquePtrSoup.h"
 #include "Logging.h"
-#include "ResourceHandle.h"
-#include "SoupNetworkProxySettings.h"
 #include <glib/gstdio.h>
 #include <libsoup/soup.h>
 #include <pal/crypto/CryptoDigest.h>
+#include <wtf/FileSystem.h>
 #include <wtf/HashSet.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/Base64.h>
@@ -45,15 +43,20 @@
 
 namespace WebCore {
 
-static bool gIgnoreTLSErrors;
-static CString gInitialAcceptLanguages;
-static SoupNetworkProxySettings gProxySettings;
-static GType gCustomProtocolRequestType;
+static CString& initialAcceptLanguages()
+{
+    static NeverDestroyed<CString> storage;
+    return storage.get();
+}
 
-#if !LOG_DISABLED
+#if !LOG_DISABLED || !RELEASE_LOG_DISABLED
 inline static void soupLogPrinter(SoupLogger*, SoupLoggerLogLevel, char direction, const char* data, gpointer)
 {
+#if !LOG_DISABLED
     LOG(Network, "%c %s", direction, data);
+#elif !RELEASE_LOG_DISABLED
+    RELEASE_LOG(Network, "%c %s", direction, data);
+#endif
 }
 #endif
 
@@ -89,32 +92,17 @@ private:
     HashSet<String> m_certificates;
 };
 
-static HashMap<String, HostTLSCertificateSet, ASCIICaseInsensitiveHash>& clientCertificates()
+using AllowedCertificatesMap = HashMap<String, HostTLSCertificateSet, ASCIICaseInsensitiveHash>;
+
+static AllowedCertificatesMap& allowedCertificates()
 {
-    static NeverDestroyed<HashMap<String, HostTLSCertificateSet, ASCIICaseInsensitiveHash>> certificates;
+    static NeverDestroyed<AllowedCertificatesMap> certificates;
     return certificates;
 }
 
-static void authenticateCallback(SoupSession*, SoupMessage* soupMessage, SoupAuth* soupAuth, gboolean retrying)
-{
-    RefPtr<ResourceHandle> handle = static_cast<ResourceHandle*>(g_object_get_data(G_OBJECT(soupMessage), "handle"));
-    if (!handle)
-        return;
-    handle->didReceiveAuthenticationChallenge(AuthenticationChallenge(soupMessage, soupAuth, retrying, handle.get()));
-}
-
-#if ENABLE(WEB_TIMING) && !SOUP_CHECK_VERSION(2, 49, 91)
-static void requestStartedCallback(SoupSession*, SoupMessage* soupMessage, SoupSocket*, gpointer)
-{
-    RefPtr<ResourceHandle> handle = static_cast<ResourceHandle*>(g_object_get_data(G_OBJECT(soupMessage), "handle"));
-    if (!handle)
-        return;
-    handle->didStartRequest();
-}
-#endif
-
-SoupNetworkSession::SoupNetworkSession(SoupCookieJar* cookieJar)
-    : m_soupSession(adoptGRef(soup_session_async_new()))
+SoupNetworkSession::SoupNetworkSession(PAL::SessionID sessionID)
+    : m_soupSession(adoptGRef(soup_session_new()))
+    , m_sessionID(sessionID)
 {
     // Values taken from http://www.browserscope.org/ following
     // the rule "Do What Every Other Modern Browser Is Doing". They seem
@@ -123,55 +111,39 @@ SoupNetworkSession::SoupNetworkSession(SoupCookieJar* cookieJar)
     static const int maxConnections = 17;
     static const int maxConnectionsPerHost = 6;
 
-    GRefPtr<SoupCookieJar> jar = cookieJar;
-    if (!jar) {
-        jar = adoptGRef(soup_cookie_jar_new());
-        soup_cookie_jar_set_accept_policy(jar.get(), SOUP_COOKIE_JAR_ACCEPT_NO_THIRD_PARTY);
-    }
-
     g_object_set(m_soupSession.get(),
         SOUP_SESSION_MAX_CONNS, maxConnections,
         SOUP_SESSION_MAX_CONNS_PER_HOST, maxConnectionsPerHost,
-        SOUP_SESSION_ADD_FEATURE_BY_TYPE, SOUP_TYPE_CONTENT_DECODER,
+        SOUP_SESSION_TIMEOUT, 0,
+        SOUP_SESSION_IDLE_TIMEOUT, 0,
         SOUP_SESSION_ADD_FEATURE_BY_TYPE, SOUP_TYPE_CONTENT_SNIFFER,
-        SOUP_SESSION_ADD_FEATURE_BY_TYPE, SOUP_TYPE_PROXY_RESOLVER_DEFAULT,
-        SOUP_SESSION_ADD_FEATURE, jar.get(),
-        SOUP_SESSION_USE_THREAD_CONTEXT, TRUE,
-        SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE,
-        SOUP_SESSION_SSL_STRICT, FALSE,
+        SOUP_SESSION_ADD_FEATURE_BY_TYPE, SOUP_TYPE_AUTH_NTLM,
+#if SOUP_CHECK_VERSION(2, 67, 1)
+        SOUP_SESSION_ADD_FEATURE_BY_TYPE, SOUP_TYPE_HSTS_ENFORCER,
+#endif
+#if SOUP_CHECK_VERSION(2, 67, 90)
+        SOUP_SESSION_ADD_FEATURE_BY_TYPE, SOUP_TYPE_WEBSOCKET_EXTENSION_MANAGER,
+#endif
         nullptr);
 
-    setupCustomProtocols();
+    if (!initialAcceptLanguages().isNull())
+        setAcceptLanguages(initialAcceptLanguages());
 
-    if (!gInitialAcceptLanguages.isNull())
-        setAcceptLanguages(gInitialAcceptLanguages);
-
-#if SOUP_CHECK_VERSION(2, 53, 92)
-    if (soup_auth_negotiate_supported()) {
+    if (soup_auth_negotiate_supported() && !m_sessionID.isEphemeral()) {
         g_object_set(m_soupSession.get(),
             SOUP_SESSION_ADD_FEATURE_BY_TYPE, SOUP_TYPE_AUTH_NEGOTIATE,
             nullptr);
     }
-#endif
 
-    if (gProxySettings.mode != SoupNetworkProxySettings::Mode::Default)
-        setupProxy();
     setupLogger();
-
-    g_signal_connect(m_soupSession.get(), "authenticate", G_CALLBACK(authenticateCallback), nullptr);
-#if ENABLE(WEB_TIMING) && !SOUP_CHECK_VERSION(2, 49, 91)
-    g_signal_connect(m_soupSession.get(), "request-started", G_CALLBACK(requestStartedCallback), nullptr);
-#endif
 }
 
-SoupNetworkSession::~SoupNetworkSession()
-{
-}
+SoupNetworkSession::~SoupNetworkSession() = default;
 
 void SoupNetworkSession::setupLogger()
 {
-#if !LOG_DISABLED
-    if (LogNetwork.state != WTFLogChannelOn || soup_session_get_feature(m_soupSession.get(), SOUP_TYPE_LOGGER))
+#if !LOG_DISABLED || !RELEASE_LOG_DISABLED
+    if (LogNetwork.state != WTFLogChannelState::On || soup_session_get_feature(m_soupSession.get(), SOUP_TYPE_LOGGER))
         return;
 
     GRefPtr<SoupLogger> logger = adoptGRef(soup_logger_new(SOUP_LOGGER_LOG_BODY, -1));
@@ -192,6 +164,78 @@ SoupCookieJar* SoupNetworkSession::cookieJar() const
     return SOUP_COOKIE_JAR(soup_session_get_feature(m_soupSession.get(), SOUP_TYPE_COOKIE_JAR));
 }
 
+void SoupNetworkSession::setHSTSPersistentStorage(const String& directory)
+{
+    if (m_sessionID.isEphemeral())
+        return;
+
+#if SOUP_CHECK_VERSION(2, 67, 1)
+    if (!FileSystem::makeAllDirectories(directory)) {
+        RELEASE_LOG_ERROR(Network, "Unable to create the HSTS storage directory \"%s\". Using a memory enforcer instead.", directory.utf8().data());
+        return;
+    }
+
+    CString storagePath = FileSystem::fileSystemRepresentation(directory);
+    GUniquePtr<char> dbFilename(g_build_filename(storagePath.data(), "hsts-storage.sqlite", nullptr));
+    GRefPtr<SoupHSTSEnforcer> enforcer = adoptGRef(soup_hsts_enforcer_db_new(dbFilename.get()));
+    soup_session_remove_feature_by_type(m_soupSession.get(), SOUP_TYPE_HSTS_ENFORCER);
+    soup_session_add_feature(m_soupSession.get(), SOUP_SESSION_FEATURE(enforcer.get()));
+#else
+    UNUSED_PARAM(directory);
+#endif
+}
+
+void SoupNetworkSession::getHostNamesWithHSTSCache(HashSet<String>& hostNames)
+{
+#if SOUP_CHECK_VERSION(2, 67, 91)
+    auto* enforcer = SOUP_HSTS_ENFORCER(soup_session_get_feature(m_soupSession.get(), SOUP_TYPE_HSTS_ENFORCER));
+    ASSERT(enforcer);
+
+    GUniquePtr<GList> domains(soup_hsts_enforcer_get_domains(enforcer, FALSE));
+    for (GList* iter = domains.get(); iter; iter = iter->next) {
+        GUniquePtr<gchar> domain(static_cast<gchar*>(iter->data));
+        hostNames.add(String::fromUTF8(domain.get()));
+    }
+#else
+    UNUSED_PARAM(hostNames);
+#endif
+}
+
+void SoupNetworkSession::deleteHSTSCacheForHostNames(const Vector<String>& hostNames)
+{
+#if SOUP_CHECK_VERSION(2, 67, 1)
+    auto* enforcer = SOUP_HSTS_ENFORCER(soup_session_get_feature(m_soupSession.get(), SOUP_TYPE_HSTS_ENFORCER));
+    ASSERT(enforcer);
+
+    for (const auto& hostName : hostNames) {
+        GUniquePtr<SoupHSTSPolicy> policy(soup_hsts_policy_new(hostName.utf8().data(), SOUP_HSTS_POLICY_MAX_AGE_PAST, FALSE));
+        soup_hsts_enforcer_set_policy(enforcer, policy.get());
+    }
+#else
+    UNUSED_PARAM(hostNames);
+#endif
+}
+
+void SoupNetworkSession::clearHSTSCache(WallTime modifiedSince)
+{
+#if SOUP_CHECK_VERSION(2, 67, 91)
+    auto* enforcer = SOUP_HSTS_ENFORCER(soup_session_get_feature(m_soupSession.get(), SOUP_TYPE_HSTS_ENFORCER));
+    ASSERT(enforcer);
+
+    GUniquePtr<GList> policies(soup_hsts_enforcer_get_policies(enforcer, FALSE));
+    for (GList* iter = policies.get(); iter != nullptr; iter = iter->next) {
+        GUniquePtr<SoupHSTSPolicy> policy(static_cast<SoupHSTSPolicy*>(iter->data));
+        auto modified = soup_date_to_time_t(policy.get()->expires) - policy.get()->max_age;
+        if (modified >= modifiedSince.secondsSinceEpoch().seconds()) {
+            GUniquePtr<SoupHSTSPolicy> newPolicy(soup_hsts_policy_new(policy.get()->domain, SOUP_HSTS_POLICY_MAX_AGE_PAST, FALSE));
+            soup_hsts_enforcer_set_policy(enforcer, newPolicy.get());
+        }
+    }
+#else
+    UNUSED_PARAM(modifiedSince);
+#endif
+}
+
 static inline bool stringIsNumeric(const char* str)
 {
     while (*str) {
@@ -205,7 +249,7 @@ static inline bool stringIsNumeric(const char* str)
 // Old versions of WebKit created this cache.
 void SoupNetworkSession::clearOldSoupCache(const String& cacheDirectory)
 {
-    CString cachePath = fileSystemRepresentation(cacheDirectory);
+    CString cachePath = FileSystem::fileSystemRepresentation(cacheDirectory);
     GUniquePtr<char> cacheFile(g_build_filename(cachePath.data(), "soup.cache2", nullptr));
     if (!g_file_test(cacheFile.get(), G_FILE_TEST_IS_REGULAR))
         return;
@@ -224,10 +268,12 @@ void SoupNetworkSession::clearOldSoupCache(const String& cacheDirectory)
     }
 }
 
-void SoupNetworkSession::setupProxy()
+void SoupNetworkSession::setProxySettings(SoupNetworkProxySettings&& settings)
 {
+    m_proxySettings = WTFMove(settings);
+
     GRefPtr<GProxyResolver> resolver;
-    switch (gProxySettings.mode) {
+    switch (m_proxySettings.mode) {
     case SoupNetworkProxySettings::Mode::Default: {
         GRefPtr<GProxyResolver> currentResolver;
         g_object_get(m_soupSession.get(), SOUP_SESSION_PROXY_RESOLVER, &currentResolver.outPtr(), nullptr);
@@ -242,11 +288,11 @@ void SoupNetworkSession::setupProxy()
         break;
     case SoupNetworkProxySettings::Mode::Custom:
         resolver = adoptGRef(g_simple_proxy_resolver_new(nullptr, nullptr));
-        if (!gProxySettings.defaultProxyURL.isNull())
-            g_simple_proxy_resolver_set_default_proxy(G_SIMPLE_PROXY_RESOLVER(resolver.get()), gProxySettings.defaultProxyURL.data());
-        if (gProxySettings.ignoreHosts)
-            g_simple_proxy_resolver_set_ignore_hosts(G_SIMPLE_PROXY_RESOLVER(resolver.get()), gProxySettings.ignoreHosts.get());
-        for (const auto& iter : gProxySettings.proxyMap)
+        if (!m_proxySettings.defaultProxyURL.isNull())
+            g_simple_proxy_resolver_set_default_proxy(G_SIMPLE_PROXY_RESOLVER(resolver.get()), m_proxySettings.defaultProxyURL.data());
+        if (m_proxySettings.ignoreHosts)
+            g_simple_proxy_resolver_set_ignore_hosts(G_SIMPLE_PROXY_RESOLVER(resolver.get()), m_proxySettings.ignoreHosts.get());
+        for (const auto& iter : m_proxySettings.proxyMap)
             g_simple_proxy_resolver_set_uri_proxy(G_SIMPLE_PROXY_RESOLVER(resolver.get()), iter.key.data(), iter.value.data());
         break;
     }
@@ -255,14 +301,9 @@ void SoupNetworkSession::setupProxy()
     soup_session_abort(m_soupSession.get());
 }
 
-void SoupNetworkSession::setProxySettings(const SoupNetworkProxySettings& settings)
-{
-    gProxySettings = settings;
-}
-
 void SoupNetworkSession::setInitialAcceptLanguages(const CString& languages)
 {
-    gInitialAcceptLanguages = languages;
+    initialAcceptLanguages() = languages;
 }
 
 void SoupNetworkSession::setAcceptLanguages(const CString& languages)
@@ -270,57 +311,26 @@ void SoupNetworkSession::setAcceptLanguages(const CString& languages)
     g_object_set(m_soupSession.get(), "accept-language", languages.data(), nullptr);
 }
 
-void SoupNetworkSession::setCustomProtocolRequestType(GType requestType)
+void SoupNetworkSession::setIgnoreTLSErrors(bool ignoreTLSErrors)
 {
-    ASSERT(g_type_is_a(requestType, SOUP_TYPE_REQUEST));
-    gCustomProtocolRequestType = requestType;
+    m_ignoreTLSErrors = ignoreTLSErrors;
 }
 
-void SoupNetworkSession::setupCustomProtocols()
+Optional<ResourceError> SoupNetworkSession::checkTLSErrors(const URL& requestURL, GTlsCertificate* certificate, GTlsCertificateFlags tlsErrors)
 {
-    if (!g_type_is_a(gCustomProtocolRequestType, SOUP_TYPE_REQUEST))
-        return;
+    if (m_ignoreTLSErrors || !tlsErrors)
+        return WTF::nullopt;
 
-    auto* requestClass = static_cast<SoupRequestClass*>(g_type_class_peek(gCustomProtocolRequestType));
-    if (!requestClass || !requestClass->schemes)
-        return;
+    auto it = allowedCertificates().find(requestURL.host().toStringWithoutCopying());
+    if (it != allowedCertificates().end() && it->value.contains(certificate))
+        return WTF::nullopt;
 
-    soup_session_add_feature_by_type(m_soupSession.get(), gCustomProtocolRequestType);
-}
-
-void SoupNetworkSession::setShouldIgnoreTLSErrors(bool ignoreTLSErrors)
-{
-    gIgnoreTLSErrors = ignoreTLSErrors;
-}
-
-void SoupNetworkSession::checkTLSErrors(SoupRequest* soupRequest, SoupMessage* message, WTF::Function<void (const ResourceError&)>&& completionHandler)
-{
-    if (gIgnoreTLSErrors) {
-        completionHandler({ });
-        return;
-    }
-
-    GTlsCertificate* certificate = nullptr;
-    GTlsCertificateFlags tlsErrors = static_cast<GTlsCertificateFlags>(0);
-    soup_message_get_https_status(message, &certificate, &tlsErrors);
-    if (!tlsErrors) {
-        completionHandler({ });
-        return;
-    }
-
-    URL url(soup_request_get_uri(soupRequest));
-    auto it = clientCertificates().find(url.host());
-    if (it != clientCertificates().end() && it->value.contains(certificate)) {
-        completionHandler({ });
-        return;
-    }
-
-    completionHandler(ResourceError::tlsError(soupRequest, tlsErrors, certificate));
+    return ResourceError::tlsError(requestURL, tlsErrors, certificate);
 }
 
 void SoupNetworkSession::allowSpecificHTTPSCertificateForHost(const CertificateInfo& certificateInfo, const String& host)
 {
-    clientCertificates().add(host, HostTLSCertificateSet()).iterator->value.add(certificateInfo.certificate());
+    allowedCertificates().add(host, HostTLSCertificateSet()).iterator->value.add(certificateInfo.certificate());
 }
 
 } // namespace WebCore

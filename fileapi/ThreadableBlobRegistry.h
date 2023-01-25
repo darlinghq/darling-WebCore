@@ -32,17 +32,15 @@
 #pragma once
 
 #include <wtf/Forward.h>
-#include <wtf/Vector.h>
 
 namespace WebCore {
 
 class BlobPart;
-class URL;
 class SecurityOrigin;
 
 class ThreadableBlobRegistry {
 public:
-    static void registerFileBlobURL(const URL&, const String& path, const String& contentType);
+    static void registerFileBlobURL(const URL&, const String& path, const String& replacementPath, const String& contentType);
     static void registerBlobURL(const URL&, Vector<BlobPart>&& blobParts, const String& contentType);
     static void registerBlobURL(SecurityOrigin*, const URL&, const URL& srcURL);
     static void registerBlobURLOptionallyFileBacked(const URL&, const URL& srcURL, const String& fileBackedPath, const String& contentType);

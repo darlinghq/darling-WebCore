@@ -154,7 +154,7 @@ public:
     unsigned width;
     unsigned height;
     int tpixel; // Index of transparent pixel.
-    WebCore::ImageFrame::DisposalMethod disposalMethod; // Restore to background, leave in place, etc.
+    WebCore::ScalableImageDecoderFrame::DisposalMethod disposalMethod; // Restore to background, leave in place, etc.
     size_t localColormapPosition; // Per-image colormap.
     int localColormapSize; // Size of local colormap array.
     int datasize;
@@ -173,7 +173,7 @@ public:
         , width(0)
         , height(0)
         , tpixel(0)
-        , disposalMethod(WebCore::ImageFrame::DisposalMethod::Unspecified)
+        , disposalMethod(WebCore::ScalableImageDecoderFrame::DisposalMethod::Unspecified)
         , localColormapPosition(0)
         , localColormapSize(0)
         , datasize(0)
@@ -186,10 +186,6 @@ public:
         , m_isComplete(false)
         , m_isHeaderDefined(false)
         , m_isDataSizeDefined(false)
-    {
-    }
-    
-    ~GIFFrameContext()
     {
     }
 
@@ -241,11 +237,7 @@ public:
     {
     }
 
-    ~GIFImageReader()
-    {
-    }
-
-    void setData(WebCore::SharedBuffer* data) { m_data = data; }
+    void setData(WebCore::SharedBuffer::DataSegment& data) { m_data = &data; }
     // FIXME: haltAtFrame should be size_t.
     bool decode(WebCore::GIFImageDecoder::GIFQuery, unsigned haltAtFrame);
 
@@ -284,6 +276,11 @@ public:
         return m_currentDecodingFrame < m_frames.size() ? m_frames[m_currentDecodingFrame].get() : 0;
     }
 
+    const GIFFrameContext* frameContext(size_t frame) const
+    {
+        return frame < m_frames.size() ? m_frames[frame].get() : nullptr;
+    }
+
 private:
     bool parse(size_t dataPosition, size_t len, bool parseSizeOnly);
     void setRemainingBytes(size_t);
@@ -319,6 +316,6 @@ private:
     Vector<std::unique_ptr<GIFFrameContext> > m_frames;
     size_t m_currentDecodingFrame;
 
-    RefPtr<WebCore::SharedBuffer> m_data;
+    RefPtr<WebCore::SharedBuffer::DataSegment> m_data;
     bool m_parseCompleted;
 };

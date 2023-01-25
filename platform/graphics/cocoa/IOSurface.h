@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Apple Inc. All rights reserved.
+ * Copyright (C) 2014-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,69 +25,126 @@
 
 #pragma once
 
-#if USE(IOSURFACE)
+#if HAVE(IOSURFACE)
 
-#include "GraphicsContext.h"
+#include <objc/objc.h>
+#include <pal/spi/cocoa/IOSurfaceSPI.h>
 #include "IntSize.h"
+
+#if PLATFORM(IOS_FAMILY) && !PLATFORM(MACCATALYST) && !PLATFORM(IOS_FAMILY_SIMULATOR)
+#define HAVE_IOSURFACE_RGB10 1
+#endif
+
+namespace WTF {
+class MachSendRight;
+class TextStream;
+}
 
 namespace WebCore {
 
-class MachSendRight;
-class TextStream;
+class GraphicsContext;
+class HostWindow;
+    
+#if USE(IOSURFACE_CANVAS_BACKING_STORE)
+class ImageBuffer;
+#endif
+
+enum class PixelFormat : uint8_t;
+enum class VolatilityState : uint8_t;
 
 class IOSurface final {
     WTF_MAKE_FAST_ALLOCATED;
 public:
     enum class Format {
-        RGBA,
+        BGRA,
         YUV422,
+#if HAVE(IOSURFACE_RGB10)
         RGB10,
         RGB10A8,
+#endif
     };
 
-    WEBCORE_EXPORT static std::unique_ptr<IOSurface> create(IntSize, CGColorSpaceRef, Format = Format::RGBA);
-    WEBCORE_EXPORT static std::unique_ptr<IOSurface> create(IntSize, IntSize contextSize, CGColorSpaceRef, Format = Format::RGBA);
-    WEBCORE_EXPORT static std::unique_ptr<IOSurface> createFromSendRight(const MachSendRight&&, CGColorSpaceRef);
+    WEBCORE_EXPORT static IOSurface::Format formatForPixelFormat(WebCore::PixelFormat);
+    
+    class Locker {
+    public:
+        enum class AccessMode {
+            ReadOnly,
+            ReadWrite
+        };
+
+        Locker(IOSurface& surface, AccessMode mode = AccessMode::ReadOnly)
+            : m_surface(surface)
+            , m_flags(flagsFromMode(mode))
+        {
+            IOSurfaceLock(m_surface.surface(), m_flags, nullptr);
+        }
+
+        ~Locker()
+        {
+            IOSurfaceUnlock(m_surface.surface(), m_flags, nullptr);
+        }
+
+        void * surfaceBaseAddress() const
+        {
+            return IOSurfaceGetBaseAddress(m_surface.surface());
+        }
+
+    private:
+        static uint32_t flagsFromMode(AccessMode mode)
+        {
+            return mode == AccessMode::ReadOnly ? kIOSurfaceLockReadOnly : 0;
+        }
+        IOSurface& m_surface;
+        uint32_t m_flags;
+    };
+
+    WEBCORE_EXPORT static std::unique_ptr<IOSurface> create(IntSize, CGColorSpaceRef, Format = Format::BGRA);
+    WEBCORE_EXPORT static std::unique_ptr<IOSurface> create(IntSize, IntSize contextSize, CGColorSpaceRef, Format = Format::BGRA);
+    WEBCORE_EXPORT static std::unique_ptr<IOSurface> createFromSendRight(const WTF::MachSendRight&&, CGColorSpaceRef);
     static std::unique_ptr<IOSurface> createFromSurface(IOSurfaceRef, CGColorSpaceRef);
     WEBCORE_EXPORT static std::unique_ptr<IOSurface> createFromImage(CGImageRef);
     
-    static std::unique_ptr<IOSurface> createFromImageBuffer(std::unique_ptr<ImageBuffer>);
+#if USE(IOSURFACE_CANVAS_BACKING_STORE)
+    static std::unique_ptr<IOSurface> createFromImageBuffer(RefPtr<ImageBuffer>);
+#endif
+
+    WEBCORE_EXPORT ~IOSurface();
 
     WEBCORE_EXPORT static void moveToPool(std::unique_ptr<IOSurface>&&);
 
-    static IntSize maximumSize();
+    WEBCORE_EXPORT static IntSize maximumSize();
+    WEBCORE_EXPORT static void setMaximumSize(IntSize);
 
-    WEBCORE_EXPORT MachSendRight createSendRight() const;
+    WEBCORE_EXPORT WTF::MachSendRight createSendRight() const;
 
     // Any images created from a surface need to be released before releasing
     // the surface, or an expensive GPU readback can result.
     WEBCORE_EXPORT RetainPtr<CGImageRef> createImage();
     WEBCORE_EXPORT static RetainPtr<CGImageRef> sinkIntoImage(std::unique_ptr<IOSurface>);
 
-    id asLayerContents() const { return (id)(CFTypeRef)m_surface.get(); }
+#ifdef __OBJC__
+    id asLayerContents() const { return (__bridge id)m_surface.get(); }
+#endif
     IOSurfaceRef surface() const { return m_surface.get(); }
     WEBCORE_EXPORT GraphicsContext& ensureGraphicsContext();
-    WEBCORE_EXPORT CGContextRef ensurePlatformContext();
-
-    enum class SurfaceState {
-        Valid,
-        Empty
-    };
+    WEBCORE_EXPORT CGContextRef ensurePlatformContext(const HostWindow* = nullptr);
 
     // Querying volatility can be expensive, so in cases where the surface is
-    // going to be used immediately, use the return value of setIsVolatile to
+    // going to be used immediately, use the return value of setVolatile to
     // determine whether the data was purged, instead of first calling state() or isVolatile().
-    SurfaceState state() const;
+    VolatilityState state() const;
     bool isVolatile() const;
 
-    // setIsVolatile only has an effect on iOS and OS 10.9 and above.
-    WEBCORE_EXPORT SurfaceState setIsVolatile(bool);
+    WEBCORE_EXPORT VolatilityState setVolatile(bool);
 
     IntSize size() const { return m_size; }
     size_t totalBytes() const { return m_totalBytes; }
+
     CGColorSpaceRef colorSpace() const { return m_colorSpace.get(); }
     WEBCORE_EXPORT Format format() const;
-    IOSurfaceID surfaceID() const;
+    WEBCORE_EXPORT IOSurfaceID surfaceID() const;
+    size_t bytesPerRow() const;
 
     WEBCORE_EXPORT bool isInUse() const;
 
@@ -95,10 +152,12 @@ public:
     // an accurate result from isInUse(), it needs to be released.
     WEBCORE_EXPORT void releaseGraphicsContext();
 
-#if PLATFORM(IOS)
+#if HAVE(IOSURFACE_ACCELERATOR)
     WEBCORE_EXPORT static bool allowConversionFromFormatToFormat(Format, Format);
     WEBCORE_EXPORT static void convertToFormat(std::unique_ptr<WebCore::IOSurface>&& inSurface, Format, WTF::Function<void(std::unique_ptr<WebCore::IOSurface>)>&&);
-#endif
+#endif // HAVE(IOSURFACE_ACCELERATOR)
+
+    void migrateColorSpaceToProperties();
 
 private:
     IOSurface(IntSize, IntSize contextSize, CGColorSpaceRef, Format, bool& success);
@@ -117,11 +176,13 @@ private:
     RetainPtr<CGContextRef> m_cgContext;
 
     RetainPtr<IOSurfaceRef> m_surface;
+
+    static WTF::Optional<IntSize> s_maximumSize;
 };
 
-WEBCORE_EXPORT TextStream& operator<<(TextStream&, const WebCore::IOSurface&);
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, const WebCore::IOSurface&);
 
 } // namespace WebCore
 
-#endif // USE(IOSURFACE)
+#endif // HAVE(IOSURFACE)
 

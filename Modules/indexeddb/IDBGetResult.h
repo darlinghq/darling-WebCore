@@ -27,39 +27,21 @@
 
 #if ENABLE(INDEXED_DATABASE)
 
+#include "IDBCursorRecord.h"
 #include "IDBKey.h"
 #include "IDBKeyData.h"
 #include "IDBKeyPath.h"
 #include "IDBValue.h"
 #include "SharedBuffer.h"
+#include <wtf/IsoMalloc.h>
 
 namespace WebCore {
 
 class IDBGetResult {
+    WTF_MAKE_ISO_ALLOCATED_EXPORT(IDBGetResult, WEBCORE_EXPORT);
 public:
     IDBGetResult()
         : m_isDefined(false)
-    {
-    }
-
-    IDBGetResult(const IDBValue& value, const IDBKeyData& currentPrimaryKey)
-        : m_value(value)
-        , m_primaryKeyData(currentPrimaryKey)
-    {
-    }
-
-    IDBGetResult(const ThreadSafeDataBuffer& buffer)
-        : m_value(buffer)
-    {
-    }
-
-    IDBGetResult(IDBValue&& buffer)
-        : m_value(WTFMove(buffer))
-    {
-    }
-
-    IDBGetResult(IDBKey& key)
-        : m_keyData(&key)
     {
     }
 
@@ -68,31 +50,40 @@ public:
     {
     }
 
-    IDBGetResult(SharedBuffer* buffer, IDBKey& key, const IDBKeyPath& path)
-        : m_keyData(&key)
-        , m_keyPath(path)
-    {
-        if (buffer)
-            dataFromBuffer(*buffer);
-    }
-
     IDBGetResult(const IDBKeyData& keyData, const IDBKeyData& primaryKeyData)
         : m_keyData(keyData)
         , m_primaryKeyData(primaryKeyData)
     {
     }
 
-    IDBGetResult(const IDBKeyData& keyData, const IDBKeyData& primaryKeyData, IDBValue&& value)
-        : m_value(WTFMove(value))
+    IDBGetResult(const IDBKeyData& keyData, const ThreadSafeDataBuffer& buffer, const Optional<IDBKeyPath>& keyPath)
+        : m_value(buffer)
         , m_keyData(keyData)
-        , m_primaryKeyData(primaryKeyData)
+        , m_keyPath(keyPath)
     {
     }
 
-    IDBGetResult(const IDBKeyData& keyData, const IDBKeyData& primaryKeyData, const IDBValue& value)
-        : m_value(value)
+    IDBGetResult(const IDBKeyData& keyData, IDBValue&& value, const Optional<IDBKeyPath>& keyPath)
+        : m_value(WTFMove(value))
+        , m_keyData(keyData)
+        , m_keyPath(keyPath)
+    {
+    }
+
+    IDBGetResult(const IDBKeyData& keyData, const IDBKeyData& primaryKeyData, IDBValue&& value, const Optional<IDBKeyPath>& keyPath)
+        : m_value(WTFMove(value))
         , m_keyData(keyData)
         , m_primaryKeyData(primaryKeyData)
+        , m_keyPath(keyPath)
+    {
+    }
+
+    IDBGetResult(const IDBKeyData& keyData, const IDBKeyData& primaryKeyData, IDBValue&& value, const Optional<IDBKeyPath>& keyPath, Vector<IDBCursorRecord>&& prefetechedRecords)
+        : m_value(WTFMove(value))
+        , m_keyData(keyData)
+        , m_primaryKeyData(primaryKeyData)
+        , m_keyPath(keyPath)
+        , m_prefetchedRecords(WTFMove(prefetechedRecords))
     {
     }
 
@@ -101,14 +92,17 @@ public:
 
     IDBGetResult isolatedCopy() const;
 
+    void setValue(IDBValue&&);
+
     const IDBValue& value() const { return m_value; }
     const IDBKeyData& keyData() const { return m_keyData; }
     const IDBKeyData& primaryKeyData() const { return m_primaryKeyData; }
-    const IDBKeyPath& keyPath() const { return m_keyPath; }
+    const Optional<IDBKeyPath>& keyPath() const { return m_keyPath; }
+    const Vector<IDBCursorRecord>& prefetchedRecords() const { return m_prefetchedRecords; }
     bool isDefined() const { return m_isDefined; }
 
     template<class Encoder> void encode(Encoder&) const;
-    template<class Decoder> static bool decode(Decoder&, IDBGetResult&);
+    template<class Decoder> static WARN_UNUSED_RETURN bool decode(Decoder&, IDBGetResult&);
 
 private:
     void dataFromBuffer(SharedBuffer&);
@@ -118,24 +112,31 @@ private:
     IDBValue m_value;
     IDBKeyData m_keyData;
     IDBKeyData m_primaryKeyData;
-    IDBKeyPath m_keyPath;
+    Optional<IDBKeyPath> m_keyPath;
+    Vector<IDBCursorRecord> m_prefetchedRecords;
     bool m_isDefined { true };
 };
 
 template<class Encoder>
 void IDBGetResult::encode(Encoder& encoder) const
 {
-    encoder << m_keyData << m_primaryKeyData << m_keyPath << m_isDefined << m_value;
+    encoder << m_keyData << m_primaryKeyData << m_keyPath << m_isDefined << m_value << m_prefetchedRecords;
 }
 
 template<class Decoder>
 bool IDBGetResult::decode(Decoder& decoder, IDBGetResult& result)
 {
-    if (!decoder.decode(result.m_keyData))
+    Optional<IDBKeyData> keyData;
+    decoder >> keyData;
+    if (!keyData)
         return false;
+    result.m_keyData = WTFMove(*keyData);
 
-    if (!decoder.decode(result.m_primaryKeyData))
+    Optional<IDBKeyData> primaryKeyData;
+    decoder >> primaryKeyData;
+    if (!primaryKeyData)
         return false;
+    result.m_primaryKeyData = WTFMove(*primaryKeyData);
 
     if (!decoder.decode(result.m_keyPath))
         return false;
@@ -143,8 +144,17 @@ bool IDBGetResult::decode(Decoder& decoder, IDBGetResult& result)
     if (!decoder.decode(result.m_isDefined))
         return false;
 
-    if (!decoder.decode(result.m_value))
+    Optional<IDBValue> value;
+    decoder >> value;
+    if (!value)
         return false;
+    result.m_value = WTFMove(*value);
+
+    Optional<Vector<IDBCursorRecord>> prefetchedRecords;
+    decoder >> prefetchedRecords;
+    if (!prefetchedRecords)
+        return false;
+    result.m_prefetchedRecords = WTFMove(*prefetchedRecords);
 
     return true;
 }

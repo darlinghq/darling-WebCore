@@ -30,10 +30,10 @@
 #include "AffineTransform.h"
 #include "FloatConversion.h"
 #include "IntPoint.h"
-#include "TextStream.h"
 #include "TransformationMatrix.h"
 #include <limits>
 #include <math.h>
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -62,11 +62,6 @@ void FloatPoint::normalize()
 float FloatPoint::slopeAngleRadians() const
 {
     return atan2f(m_y, m_x);
-}
-
-float FloatPoint::length() const
-{
-    return sqrtf(lengthSquared());
 }
 
 FloatPoint FloatPoint::matrixTransform(const AffineTransform& transform) const

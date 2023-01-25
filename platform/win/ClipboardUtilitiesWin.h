@@ -34,11 +34,11 @@ namespace WebCore {
 
 class Document;
 class DocumentFragment;
-class URL;
 
 HGLOBAL createGlobalData(const String&);
 HGLOBAL createGlobalData(const Vector<char>&);
 HGLOBAL createGlobalData(const URL& url, const String& title);
+HGLOBAL createGlobalData(const uint8_t*, size_t);
 
 FORMATETC* urlWFormat();
 FORMATETC* urlFormat();

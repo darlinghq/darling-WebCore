@@ -30,8 +30,6 @@
 
 #pragma once
 
-#if ENABLE(WEB_TIMING)
-
 #include "DOMWindowProperty.h"
 #include <wtf/MonotonicTime.h>
 #include <wtf/Ref.h>
@@ -40,13 +38,12 @@
 namespace WebCore {
 
 class DocumentLoader;
-class Frame;
 class LoadTiming;
 struct DocumentTiming;
 
 class PerformanceTiming : public RefCounted<PerformanceTiming>, public DOMWindowProperty {
 public:
-    static Ref<PerformanceTiming> create(Frame* frame) { return adoptRef(*new PerformanceTiming(frame)); }
+    static Ref<PerformanceTiming> create(DOMWindow* window) { return adoptRef(*new PerformanceTiming(window)); }
 
     unsigned long long navigationStart() const;
     unsigned long long unloadEventStart() const;
@@ -71,7 +68,7 @@ public:
     unsigned long long loadEventEnd() const;
 
 private:
-    explicit PerformanceTiming(Frame*);
+    explicit PerformanceTiming(DOMWindow*);
 
     const DocumentTiming* documentTiming() const;
     DocumentLoader* documentLoader() const;
@@ -81,5 +78,3 @@ private:
 };
 
 } // namespace WebCore
-
-#endif // ENABLE(WEB_TIMING)

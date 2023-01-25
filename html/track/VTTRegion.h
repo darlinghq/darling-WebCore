@@ -31,7 +31,7 @@
 
 #pragma once
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "ContextDestructionObserver.h"
 #include "FloatPoint.h"
@@ -61,8 +61,8 @@ public:
     double width() const { return m_width; }
     ExceptionOr<void> setWidth(double);
 
-    int height() const { return m_heightInLines; }
-    ExceptionOr<void> setHeight(int);
+    int lines() const { return m_lines; }
+    ExceptionOr<void> setLines(int);
 
     double regionAnchorX() const { return m_regionAnchor.x(); }
     ExceptionOr<void> setRegionAnchorX(double);
@@ -76,8 +76,8 @@ public:
     double viewportAnchorY() const { return m_viewportAnchor.y(); }
     ExceptionOr<void> setViewportAnchorY(double);
 
-    const AtomicString& scroll() const;
-    ExceptionOr<void> setScroll(const AtomicString&);
+    const AtomString& scroll() const;
+    ExceptionOr<void> setScroll(const AtomString&);
 
     void updateParametersFromRegion(const VTTRegion&);
 
@@ -88,9 +88,11 @@ public:
 
     HTMLDivElement& getDisplayTree();
     
-    void appendTextTrackCueBox(Ref<VTTCueBox>&&);
+    void appendTextTrackCueBox(Ref<TextTrackCueBox>&&);
     void displayLastTextTrackCueBox();
     void willRemoveTextTrackCueBox(VTTCueBox*);
+
+    void cueStyleChanged() { m_recalculateStyles = true; }
 
 private:
     VTTRegion(ScriptExecutionContext&);
@@ -106,7 +108,7 @@ private:
         None,
         Id,
         Width,
-        Height,
+        Lines,
         RegionAnchor,
         ViewportAnchor,
         Scroll
@@ -116,15 +118,15 @@ private:
 
     void parseSettingValue(RegionSetting, VTTScanner&);
 
-    static const AtomicString& textTrackCueContainerShadowPseudoId();
-    static const AtomicString& textTrackCueContainerScrollingClass();
-    static const AtomicString& textTrackRegionShadowPseudoId();
+    static const AtomString& textTrackCueContainerShadowPseudoId();
+    static const AtomString& textTrackCueContainerScrollingClass();
+    static const AtomString& textTrackRegionShadowPseudoId();
 
     String m_id;
     String m_settings;
 
     double m_width { 100 };
-    unsigned m_heightInLines { 3 };
+    unsigned m_lines { 3 };
 
     FloatPoint m_regionAnchor { 0, 100 };
     FloatPoint m_viewportAnchor { 0, 100 };
@@ -151,6 +153,8 @@ private:
     // currently it is used also for non-scrolling regions to use a single
     // code path.
     Timer m_scrollTimer;
+
+    bool m_recalculateStyles { true };
 };
 
 } // namespace WebCore

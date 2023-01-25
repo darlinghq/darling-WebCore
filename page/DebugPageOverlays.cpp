@@ -26,10 +26,10 @@
 #include "config.h"
 #include "DebugPageOverlays.h"
 
+#include "ColorHash.h"
 #include "ElementIterator.h"
 #include "FrameView.h"
 #include "GraphicsContext.h"
-#include "MainFrame.h"
 #include "Page.h"
 #include "PageOverlay.h"
 #include "PageOverlayController.h"
@@ -43,14 +43,16 @@ DebugPageOverlays* DebugPageOverlays::sharedDebugOverlays;
 
 class RegionOverlay : public RefCounted<RegionOverlay>, public PageOverlay::Client {
 public:
-    static Ref<RegionOverlay> create(MainFrame&, DebugPageOverlays::RegionType);
+    static Ref<RegionOverlay> create(Page&, DebugPageOverlays::RegionType);
     virtual ~RegionOverlay();
 
     void recomputeRegion();
     PageOverlay& overlay() { return *m_overlay; }
 
+    void setRegionChanged() { m_regionChanged = true; }
+
 protected:
-    RegionOverlay(MainFrame&, Color);
+    RegionOverlay(Page&, Color);
 
 private:
     void willMoveToPage(PageOverlay&, Page*) final;
@@ -64,22 +66,23 @@ protected:
     virtual bool updateRegion() = 0;
     void drawRegion(GraphicsContext&, const Region&, const Color&, const IntRect& dirtyRect);
     
-    MainFrame& m_frame;
+    Page& m_page;
     RefPtr<PageOverlay> m_overlay;
     std::unique_ptr<Region> m_region;
     Color m_color;
+    bool m_regionChanged { true };
 };
 
 class MouseWheelRegionOverlay final : public RegionOverlay {
 public:
-    static Ref<MouseWheelRegionOverlay> create(MainFrame& frame)
+    static Ref<MouseWheelRegionOverlay> create(Page& page)
     {
-        return adoptRef(*new MouseWheelRegionOverlay(frame));
+        return adoptRef(*new MouseWheelRegionOverlay(page));
     }
 
 private:
-    explicit MouseWheelRegionOverlay(MainFrame& frame)
-        : RegionOverlay(frame, Color(0.5f, 0.0f, 0.0f, 0.4f))
+    explicit MouseWheelRegionOverlay(Page& page)
+        : RegionOverlay(page, SRGBA<uint8_t> { 128, 0, 0, 102 })
     {
     }
 
@@ -88,9 +91,13 @@ private:
 
 bool MouseWheelRegionOverlay::updateRegion()
 {
-    auto region = std::make_unique<Region>();
+#if ENABLE(WHEEL_EVENT_REGIONS)
+    // Wheel event regions are painted via RenderLayerBacking::paintDebugOverlays().
+    return false;
+#else
+    auto region = makeUnique<Region>();
     
-    for (const Frame* frame = &m_frame; frame; frame = frame->tree().traverseNext()) {
+    for (const Frame* frame = &m_page.mainFrame(); frame; frame = frame->tree().traverseNext()) {
         if (!frame->view() || !frame->document())
             continue;
 
@@ -104,18 +111,19 @@ bool MouseWheelRegionOverlay::updateRegion()
     bool regionChanged = !m_region || !(*m_region == *region);
     m_region = WTFMove(region);
     return regionChanged;
+#endif
 }
 
 class NonFastScrollableRegionOverlay final : public RegionOverlay {
 public:
-    static Ref<NonFastScrollableRegionOverlay> create(MainFrame& frame)
+    static Ref<NonFastScrollableRegionOverlay> create(Page& page)
     {
-        return adoptRef(*new NonFastScrollableRegionOverlay(frame));
+        return adoptRef(*new NonFastScrollableRegionOverlay(page));
     }
 
 private:
-    explicit NonFastScrollableRegionOverlay(MainFrame& frame)
-        : RegionOverlay(frame, Color(1.0f, 0.5f, 0.0f, 0.4f))
+    explicit NonFastScrollableRegionOverlay(Page& page)
+        : RegionOverlay(page, Color::orange.colorWithAlphaByte(102))
     {
     }
 
@@ -129,32 +137,32 @@ bool NonFastScrollableRegionOverlay::updateRegion()
 {
     bool regionChanged = false;
 
-    if (Page* page = m_frame.page()) {
-        if (ScrollingCoordinator* scrollingCoordinator = page->scrollingCoordinator()) {
-            EventTrackingRegions eventTrackingRegions = scrollingCoordinator->absoluteEventTrackingRegions();
+    if (ScrollingCoordinator* scrollingCoordinator = m_page.scrollingCoordinator()) {
+        EventTrackingRegions eventTrackingRegions = scrollingCoordinator->absoluteEventTrackingRegions();
 
-            if (eventTrackingRegions != m_eventTrackingRegions) {
-                m_eventTrackingRegions = eventTrackingRegions;
-                regionChanged = true;
-            }
+        if (eventTrackingRegions != m_eventTrackingRegions) {
+            m_eventTrackingRegions = eventTrackingRegions;
+            regionChanged = true;
         }
     }
 
     return regionChanged;
 }
 
-static HashMap<String, Color>& touchEventRegionColors()
+static const HashMap<String, SRGBA<uint8_t>>& touchEventRegionColors()
 {
-    static NeverDestroyed<HashMap<String, Color>> regionColors;
-
-    if (regionColors.get().isEmpty()) {
-        regionColors.get().add("touchstart", Color(191, 191, 63, 80));
-        regionColors.get().add("touchmove", Color(63, 191, 191, 80));
-        regionColors.get().add("touchend", Color(191, 63, 127, 80));
-        regionColors.get().add("touchforcechange", Color(63, 63, 191, 80));
-        regionColors.get().add("wheel", Color(255, 128, 0, 80));
-    }
-    
+    static const auto regionColors = makeNeverDestroyed([] {
+        return HashMap<String, SRGBA<uint8_t>> { {
+            { "touchstart"_s, { 191, 191, 63, 50 } },
+            { "touchmove"_s, { 80, 204, 245, 50 } },
+            { "touchend"_s, { 191, 63, 127, 50 } },
+            { "touchforcechange"_s, { 63, 63, 191, 50 } },
+            { "wheel"_s, { 255, 128, 0, 50 } },
+            { "mousedown"_s, { 80, 245, 80, 50 } },
+            { "mousemove"_s, { 245, 245, 80, 50 } },
+            { "mouseup"_s, { 80, 245, 176, 50 } }
+        } };
+    }());
     return regionColors;
 }
 
@@ -163,9 +171,8 @@ static void drawRightAlignedText(const String& text, GraphicsContext& context, c
     float textGap = 10;
     float textBaselineFromTop = 14;
 
-    TextRun textRun = TextRun(StringView(text));
-    context.setFillColor(Color::transparent);
-    float textWidth = context.drawText(font, textRun, { });
+    TextRun textRun = TextRun(text);
+    float textWidth = font.width(textRun);
     context.setFillColor(Color::black);
     context.drawText(font, textRun, boxLocation + FloatSize(-(textWidth + textGap), textBaselineFromTop));
 }
@@ -183,7 +190,7 @@ void NonFastScrollableRegionOverlay::drawRect(PageOverlay& pageOverlay, Graphics
     fontDescription.setSpecifiedSize(12);
     fontDescription.setComputedSize(12);
     fontDescription.setWeight(FontSelectionValue(500));
-    FontCascade font(fontDescription, 0, 0);
+    FontCascade font(WTFMove(fontDescription), 0, 0);
     font.update(nullptr);
 
 #if ENABLE(TOUCH_EVENTS)
@@ -210,6 +217,21 @@ void NonFastScrollableRegionOverlay::drawRect(PageOverlay& pageOverlay, Graphics
     context.setFillColor(m_color);
     context.fillRect(legendRect);
     drawRightAlignedText("passive listeners", context, font, legendRect.location());
+
+    legendRect.move(0, 30);
+    context.setFillColor(touchEventRegionColors().get("mousedown"));
+    context.fillRect(legendRect);
+    drawRightAlignedText("mousedown", context, font, legendRect.location());
+
+    legendRect.move(0, 30);
+    context.setFillColor(touchEventRegionColors().get("mousemove"));
+    context.fillRect(legendRect);
+    drawRightAlignedText("mousemove", context, font, legendRect.location());
+
+    legendRect.move(0, 30);
+    context.setFillColor(touchEventRegionColors().get("mouseup"));
+    context.fillRect(legendRect);
+    drawRightAlignedText("mouseup", context, font, legendRect.location());
 #else
     // On desktop platforms, the "wheel" region includes the non-fast scrollable region.
     context.setFillColor(touchEventRegionColors().get("wheel"));
@@ -218,27 +240,30 @@ void NonFastScrollableRegionOverlay::drawRect(PageOverlay& pageOverlay, Graphics
 #endif
 
     for (const auto& synchronousEventRegion : m_eventTrackingRegions.eventSpecificSynchronousDispatchRegions) {
-        Color regionColor = touchEventRegionColors().get(synchronousEventRegion.key);
+        auto regionColor = Color::black.colorWithAlphaByte(64);
+        auto it = touchEventRegionColors().find(synchronousEventRegion.key);
+        if (it != touchEventRegionColors().end())
+            regionColor = it->value;
         drawRegion(context, synchronousEventRegion.value, regionColor, bounds);
     }
 
     drawRegion(context, m_eventTrackingRegions.asynchronousDispatchRegion, m_color, bounds);
 }
 
-Ref<RegionOverlay> RegionOverlay::create(MainFrame& frame, DebugPageOverlays::RegionType regionType)
+Ref<RegionOverlay> RegionOverlay::create(Page& page, DebugPageOverlays::RegionType regionType)
 {
     switch (regionType) {
     case DebugPageOverlays::RegionType::WheelEventHandlers:
-        return MouseWheelRegionOverlay::create(frame);
+        return MouseWheelRegionOverlay::create(page);
     case DebugPageOverlays::RegionType::NonFastScrollableRegion:
-        return NonFastScrollableRegionOverlay::create(frame);
+        return NonFastScrollableRegionOverlay::create(page);
     }
     ASSERT_NOT_REACHED();
-    return MouseWheelRegionOverlay::create(frame);
+    return MouseWheelRegionOverlay::create(page);
 }
 
-RegionOverlay::RegionOverlay(MainFrame& frame, Color regionColor)
-    : m_frame(frame)
+RegionOverlay::RegionOverlay(Page& page, Color regionColor)
+    : m_page(page)
     , m_overlay(PageOverlay::create(*this, PageOverlay::OverlayType::Document))
     , m_color(regionColor)
 {
@@ -247,7 +272,7 @@ RegionOverlay::RegionOverlay(MainFrame& frame, Color regionColor)
 RegionOverlay::~RegionOverlay()
 {
     if (m_overlay)
-        m_frame.pageOverlayController().uninstallPageOverlay(*m_overlay, PageOverlay::FadeMode::DoNotFade);
+        m_page.pageOverlayController().uninstallPageOverlay(*m_overlay, PageOverlay::FadeMode::DoNotFade);
 }
 
 void RegionOverlay::willMoveToPage(PageOverlay&, Page* page)
@@ -259,7 +284,7 @@ void RegionOverlay::willMoveToPage(PageOverlay&, Page* page)
 void RegionOverlay::didMoveToPage(PageOverlay&, Page* page)
 {
     if (page)
-        recomputeRegion();
+        setRegionChanged();
 }
 
 void RegionOverlay::drawRect(PageOverlay&, GraphicsContext& context, const IntRect& dirtyRect)
@@ -293,8 +318,13 @@ void RegionOverlay::didScrollFrame(PageOverlay&, Frame&)
 
 void RegionOverlay::recomputeRegion()
 {
+    if (!m_regionChanged)
+        return;
+
     if (updateRegion())
         m_overlay->setNeedsDisplay();
+
+    m_regionChanged = false;
 }
 
 DebugPageOverlays& DebugPageOverlays::singleton()
@@ -310,75 +340,85 @@ static inline size_t indexOf(DebugPageOverlays::RegionType regionType)
     return static_cast<size_t>(regionType);
 }
 
-RegionOverlay& DebugPageOverlays::ensureRegionOverlayForFrame(MainFrame& frame, RegionType regionType)
+RegionOverlay& DebugPageOverlays::ensureRegionOverlayForPage(Page& page, RegionType regionType)
 {
-    auto it = m_frameRegionOverlays.find(&frame);
-    if (it != m_frameRegionOverlays.end()) {
+    auto it = m_pageRegionOverlays.find(&page);
+    if (it != m_pageRegionOverlays.end()) {
         auto& visualizer = it->value[indexOf(regionType)];
         if (!visualizer)
-            visualizer = RegionOverlay::create(frame, regionType);
+            visualizer = RegionOverlay::create(page, regionType);
         return *visualizer;
     }
 
     Vector<RefPtr<RegionOverlay>> visualizers(NumberOfRegionTypes);
-    auto visualizer = RegionOverlay::create(frame, regionType);
+    auto visualizer = RegionOverlay::create(page, regionType);
     visualizers[indexOf(regionType)] = visualizer.copyRef();
-    m_frameRegionOverlays.add(&frame, WTFMove(visualizers));
+    m_pageRegionOverlays.add(&page, WTFMove(visualizers));
     return visualizer;
 }
 
-void DebugPageOverlays::showRegionOverlay(MainFrame& frame, RegionType regionType)
+void DebugPageOverlays::showRegionOverlay(Page& page, RegionType regionType)
 {
-    auto& visualizer = ensureRegionOverlayForFrame(frame, regionType);
-    frame.pageOverlayController().installPageOverlay(visualizer.overlay(), PageOverlay::FadeMode::DoNotFade);
+    auto& visualizer = ensureRegionOverlayForPage(page, regionType);
+    page.pageOverlayController().installPageOverlay(visualizer.overlay(), PageOverlay::FadeMode::DoNotFade);
 }
 
-void DebugPageOverlays::hideRegionOverlay(MainFrame& frame, RegionType regionType)
+void DebugPageOverlays::hideRegionOverlay(Page& page, RegionType regionType)
 {
-    auto it = m_frameRegionOverlays.find(&frame);
-    if (it == m_frameRegionOverlays.end())
+    auto it = m_pageRegionOverlays.find(&page);
+    if (it == m_pageRegionOverlays.end())
         return;
     auto& visualizer = it->value[indexOf(regionType)];
     if (!visualizer)
         return;
-    frame.pageOverlayController().uninstallPageOverlay(visualizer->overlay(), PageOverlay::FadeMode::DoNotFade);
+    page.pageOverlayController().uninstallPageOverlay(visualizer->overlay(), PageOverlay::FadeMode::DoNotFade);
     visualizer = nullptr;
 }
 
 void DebugPageOverlays::regionChanged(Frame& frame, RegionType regionType)
 {
-    if (auto* visualizer = regionOverlayForFrame(frame.mainFrame(), regionType))
+    auto* page = frame.page();
+    if (!page)
+        return;
+
+    if (auto* visualizer = regionOverlayForPage(*page, regionType))
+        visualizer->setRegionChanged();
+}
+
+void DebugPageOverlays::updateRegionIfNecessary(Page& page, RegionType regionType)
+{
+    if (auto* visualizer = regionOverlayForPage(page, regionType))
         visualizer->recomputeRegion();
 }
 
-RegionOverlay* DebugPageOverlays::regionOverlayForFrame(MainFrame& frame, RegionType regionType) const
+RegionOverlay* DebugPageOverlays::regionOverlayForPage(Page& page, RegionType regionType) const
 {
-    auto it = m_frameRegionOverlays.find(&frame);
-    if (it == m_frameRegionOverlays.end())
+    auto it = m_pageRegionOverlays.find(&page);
+    if (it == m_pageRegionOverlays.end())
         return nullptr;
     return it->value.at(indexOf(regionType)).get();
 }
 
-void DebugPageOverlays::updateOverlayRegionVisibility(MainFrame& frame, DebugOverlayRegions visibleRegions)
+void DebugPageOverlays::updateOverlayRegionVisibility(Page& page, OptionSet<DebugOverlayRegions> visibleRegions)
 {
-    if (visibleRegions & NonFastScrollableRegion)
-        showRegionOverlay(frame, RegionType::NonFastScrollableRegion);
+    if (visibleRegions.contains(DebugOverlayRegions::NonFastScrollableRegion))
+        showRegionOverlay(page, RegionType::NonFastScrollableRegion);
     else
-        hideRegionOverlay(frame, RegionType::NonFastScrollableRegion);
+        hideRegionOverlay(page, RegionType::NonFastScrollableRegion);
 
-    if (visibleRegions & WheelEventHandlerRegion)
-        showRegionOverlay(frame, RegionType::WheelEventHandlers);
+    if (visibleRegions.contains(DebugOverlayRegions::WheelEventHandlerRegion))
+        showRegionOverlay(page, RegionType::WheelEventHandlers);
     else
-        hideRegionOverlay(frame, RegionType::WheelEventHandlers);
+        hideRegionOverlay(page, RegionType::WheelEventHandlers);
 }
 
-void DebugPageOverlays::settingsChanged(MainFrame& frame)
+void DebugPageOverlays::settingsChanged(Page& page)
 {
-    DebugOverlayRegions activeOverlayRegions = frame.settings().visibleDebugOverlayRegions();
-    if (!activeOverlayRegions && !hasOverlays(frame))
+    auto activeOverlayRegions = OptionSet<DebugOverlayRegions>::fromRaw(page.settings().visibleDebugOverlayRegions());
+    if (!activeOverlayRegions && !hasOverlays(page))
         return;
 
-    DebugPageOverlays::singleton().updateOverlayRegionVisibility(frame, activeOverlayRegions);
+    DebugPageOverlays::singleton().updateOverlayRegionVisibility(page, activeOverlayRegions);
 }
 
 }

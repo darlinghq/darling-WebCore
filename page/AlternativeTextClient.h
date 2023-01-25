@@ -25,14 +25,10 @@
 
 #pragma once
 
+#include "DictationContext.h"
 #include "FloatRect.h"
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
-
-#if PLATFORM(MAC)
-// Some platforms provide UI for suggesting alternative dictation text.
-#define USE_DICTATION_ALTERNATIVES 1
-#endif
 
 namespace WebCore {
 
@@ -57,8 +53,7 @@ enum class AutocorrectionResponse {
 
 class AlternativeTextClient {
 public:
-    virtual ~AlternativeTextClient() { }
-    virtual void pageDestroyed() = 0;
+    virtual ~AlternativeTextClient() = default;
 #if USE(AUTOCORRECTION_PANEL)
     virtual void showCorrectionAlternative(AlternativeTextType, const FloatRect& boundingBoxOfReplacedString, const String& replacedString, const String& replacmentString, const Vector<String>& alternativeReplacementStrings) = 0;
     virtual void dismissAlternative(ReasonForDismissingAlternativeText) = 0;
@@ -66,9 +61,9 @@ public:
     virtual void recordAutocorrectionResponse(AutocorrectionResponse, const String& replacedString, const String& replacementString) = 0;
 #endif
 #if USE(DICTATION_ALTERNATIVES)
-    virtual void showDictationAlternativeUI(const WebCore::FloatRect& boundingBoxOfDictatedText, uint64_t dictationContext) = 0;
-    virtual void removeDictationAlternatives(uint64_t dictationContext) = 0;
-    virtual Vector<String> dictationAlternatives(uint64_t dictationContext) = 0;
+    virtual void showDictationAlternativeUI(const FloatRect& boundingBoxOfDictatedText, DictationContext) = 0;
+    virtual void removeDictationAlternatives(DictationContext) = 0;
+    virtual Vector<String> dictationAlternatives(DictationContext) = 0;
 #endif
 };
     

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,7 +29,6 @@
 #include "DeprecatedCSSOMCounter.h"
 #include "DeprecatedCSSOMRGBColor.h"
 #include "DeprecatedCSSOMRect.h"
-#include "ExceptionCode.h"
 
 namespace WebCore {
     
@@ -37,25 +36,24 @@ namespace WebCore {
 // such as StyleCounterValue, StyleRectValue, and StyleColorValue, these methods will get
 // more complicated.
 
-
 unsigned short DeprecatedCSSOMPrimitiveValue::primitiveType() const
 {
-    return m_value->primitiveType();
+    return static_cast<unsigned short>(m_value->primitiveType());
 }
 
 ExceptionOr<void> DeprecatedCSSOMPrimitiveValue::setFloatValue(unsigned short unitType, double floatValue)
 {
-    return m_value->setFloatValue(unitType, floatValue);
+    return m_value->setFloatValue(static_cast<CSSUnitType>(unitType), floatValue);
 }
 
 ExceptionOr<float> DeprecatedCSSOMPrimitiveValue::getFloatValue(unsigned short unitType) const
 {
-    return m_value->getFloatValue(unitType);
+    return m_value->getFloatValue(static_cast<CSSUnitType>(unitType));
 }
 
 ExceptionOr<void> DeprecatedCSSOMPrimitiveValue::setStringValue(unsigned short stringType, const String& stringValue)
 {
-    return m_value->setStringValue(stringType, stringValue);
+    return m_value->setStringValue(static_cast<CSSUnitType>(stringType), stringValue);
 }
 
 ExceptionOr<String> DeprecatedCSSOMPrimitiveValue::getStringValue() const
@@ -65,26 +63,25 @@ ExceptionOr<String> DeprecatedCSSOMPrimitiveValue::getStringValue() const
 
 ExceptionOr<Ref<DeprecatedCSSOMCounter>> DeprecatedCSSOMPrimitiveValue::getCounterValue() const
 {
-    ExceptionOr<Counter&> counter = m_value->getCounterValue();
-    if (counter.hasException())
-        return Exception { INVALID_ACCESS_ERR };
-    return DeprecatedCSSOMCounter::create(counter.releaseReturnValue());
+    auto* value = m_value->counterValue();
+    if (!value)
+        return Exception { InvalidAccessError };
+    return DeprecatedCSSOMCounter::create(*value, m_owner);
 }
     
 ExceptionOr<Ref<DeprecatedCSSOMRect>> DeprecatedCSSOMPrimitiveValue::getRectValue() const
 {
-    ExceptionOr<Rect&> rect = m_value->getRectValue();
-    if (rect.hasException())
-        return Exception { INVALID_ACCESS_ERR };
-    return DeprecatedCSSOMRect::create(rect.releaseReturnValue());
+    auto* value = m_value->rectValue();
+    if (!value)
+        return Exception { InvalidAccessError };
+    return DeprecatedCSSOMRect::create(*value, m_owner);
 }
 
 ExceptionOr<Ref<DeprecatedCSSOMRGBColor>> DeprecatedCSSOMPrimitiveValue::getRGBColorValue() const
 {
-    ExceptionOr<Ref<RGBColor>> color = m_value->getRGBColorValue();
-    if (color.hasException())
-        return Exception { INVALID_ACCESS_ERR };
-    return DeprecatedCSSOMRGBColor::create(color.releaseReturnValue());
+    if (!m_value->isRGBColor())
+        return Exception { InvalidAccessError };
+    return DeprecatedCSSOMRGBColor::create(m_owner, m_value->color());
 }
 
 }

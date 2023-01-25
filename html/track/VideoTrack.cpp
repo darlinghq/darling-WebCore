@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011 Google Inc. All rights reserved.
- * Copyright (C) 2011-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2011-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -32,7 +32,7 @@
 #include "config.h"
 #include "VideoTrack.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "HTMLMediaElement.h"
 #include "VideoTrackList.h"
@@ -44,47 +44,47 @@
 
 namespace WebCore {
 
-const AtomicString& VideoTrack::alternativeKeyword()
+const AtomString& VideoTrack::alternativeKeyword()
 {
-    static NeverDestroyed<const AtomicString> alternative("alternative", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> alternative("alternative", AtomString::ConstructFromLiteral);
     return alternative;
 }
 
-const AtomicString& VideoTrack::captionsKeyword()
+const AtomString& VideoTrack::captionsKeyword()
 {
-    static NeverDestroyed<const AtomicString> captions("captions", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> captions("captions", AtomString::ConstructFromLiteral);
     return captions;
 }
 
-const AtomicString& VideoTrack::mainKeyword()
+const AtomString& VideoTrack::mainKeyword()
 {
-    static NeverDestroyed<const AtomicString> captions("main", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> captions("main", AtomString::ConstructFromLiteral);
     return captions;
 }
 
-const AtomicString& VideoTrack::signKeyword()
+const AtomString& VideoTrack::signKeyword()
 {
-    static NeverDestroyed<const AtomicString> sign("sign", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> sign("sign", AtomString::ConstructFromLiteral);
     return sign;
 }
 
-const AtomicString& VideoTrack::subtitlesKeyword()
+const AtomString& VideoTrack::subtitlesKeyword()
 {
-    static NeverDestroyed<const AtomicString> subtitles("subtitles", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> subtitles("subtitles", AtomString::ConstructFromLiteral);
     return subtitles;
 }
 
-const AtomicString& VideoTrack::commentaryKeyword()
+const AtomString& VideoTrack::commentaryKeyword()
 {
-    static NeverDestroyed<const AtomicString> commentary("commentary", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> commentary("commentary", AtomString::ConstructFromLiteral);
     return commentary;
 }
 
 VideoTrack::VideoTrack(VideoTrackClient& client, VideoTrackPrivate& trackPrivate)
     : MediaTrackBase(MediaTrackBase::VideoTrack, trackPrivate.id(), trackPrivate.label(), trackPrivate.language())
-    , m_selected(trackPrivate.selected())
     , m_client(&client)
     , m_private(trackPrivate)
+    , m_selected(trackPrivate.selected())
 {
     m_private->setClient(this);
     updateKindFromPrivate();
@@ -103,12 +103,16 @@ void VideoTrack::setPrivate(VideoTrackPrivate& trackPrivate)
     m_private->setClient(nullptr);
     m_private = trackPrivate;
     m_private->setClient(this);
+#if !RELEASE_LOG_DISABLED
+    m_private->setLogger(logger(), logIdentifier());
+#endif
 
     m_private->setSelected(m_selected);
     updateKindFromPrivate();
+    setId(m_private->id());
 }
 
-bool VideoTrack::isValidKind(const AtomicString& value) const
+bool VideoTrack::isValidKind(const AtomString& value) const
 {
     return value == alternativeKeyword()
         || value == commentaryKeyword()
@@ -140,24 +144,24 @@ void VideoTrack::selectedChanged(bool selected)
     setSelected(selected);
 }
 
-void VideoTrack::idChanged(const AtomicString& id)
+void VideoTrack::idChanged(const AtomString& id)
 {
     setId(id);
 }
 
-void VideoTrack::labelChanged(const AtomicString& label)
+void VideoTrack::labelChanged(const AtomString& label)
 {
     setLabel(label);
 }
 
-void VideoTrack::languageChanged(const AtomicString& language)
+void VideoTrack::languageChanged(const AtomString& language)
 {
     setLanguage(language);
 }
 
 void VideoTrack::willRemove()
 {
-    auto* element = mediaElement();
+    auto element = makeRefPtr(mediaElement().get());
     if (!element)
         return;
     element->removeVideoTrack(*this);
@@ -165,7 +169,7 @@ void VideoTrack::willRemove()
 
 #if ENABLE(MEDIA_SOURCE)
 
-void VideoTrack::setKind(const AtomicString& kind)
+void VideoTrack::setKind(const AtomString& kind)
 {
     // 10.1 kind, on setting:
     // 1. If the value being assigned to this attribute does not match one of the video track kinds,
@@ -183,10 +187,10 @@ void VideoTrack::setKind(const AtomicString& kind)
 
     // 4. Queue a task to fire a simple event named change at the VideoTrackList object referenced by
     // the videoTracks attribute on the HTMLMediaElement.
-    mediaElement()->videoTracks().scheduleChangeEvent();
+    mediaElement()->ensureVideoTracks().scheduleChangeEvent();
 }
 
-void VideoTrack::setLanguage(const AtomicString& language)
+void VideoTrack::setLanguage(const AtomString& language)
 {
     // 10.1 language, on setting:
     // 1. If the value being assigned to this attribute is not an empty string or a BCP 47 language
@@ -204,7 +208,8 @@ void VideoTrack::setLanguage(const AtomicString& language)
 
     // 4. Queue a task to fire a simple event named change at the VideoTrackList object referenced by
     // the videoTracks attribute on the HTMLMediaElement.
-    mediaElement()->videoTracks().scheduleChangeEvent();
+    if (mediaElement())
+        mediaElement()->ensureVideoTracks().scheduleChangeEvent();
 }
 
 #endif
@@ -236,6 +241,19 @@ void VideoTrack::updateKindFromPrivate()
     }
     ASSERT_NOT_REACHED();
 }
+
+void VideoTrack::setMediaElement(WeakPtr<HTMLMediaElement> element)
+{
+    TrackBase::setMediaElement(element);
+}
+
+#if !RELEASE_LOG_DISABLED
+void VideoTrack::setLogger(const Logger& logger, const void* logIdentifier)
+{
+    TrackBase::setLogger(logger, logIdentifier);
+    m_private->setLogger(logger, this->logIdentifier());
+}
+#endif
 
 } // namespace WebCore
 

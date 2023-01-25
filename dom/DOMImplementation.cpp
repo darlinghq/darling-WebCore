@@ -39,7 +39,6 @@
 #include "Image.h"
 #include "ImageDocument.h"
 #include "MIMETypeRegistry.h"
-#include "MainFrame.h"
 #include "MediaDocument.h"
 #include "MediaList.h"
 #include "MediaPlayer.h"
@@ -52,36 +51,17 @@
 #include "SecurityOriginPolicy.h"
 #include "Settings.h"
 #include "StyleSheetContents.h"
-#include "SubframeLoader.h"
 #include "Text.h"
 #include "TextDocument.h"
 #include "XMLDocument.h"
-#include <wtf/NeverDestroyed.h>
+#include <wtf/IsoMallocInlines.h>
 #include <wtf/StdLibExtras.h>
 
 namespace WebCore {
 
 using namespace HTMLNames;
 
-#if ENABLE(VIDEO)
-
-class DOMImplementationSupportsTypeClient : public MediaPlayerSupportsTypeClient {
-public:
-    DOMImplementationSupportsTypeClient(bool needsHacks, const String& host)
-        : m_needsHacks(needsHacks)
-        , m_host(host)
-    {
-    }
-
-private:
-    bool mediaPlayerNeedsSiteSpecificHacks() const override { return m_needsHacks; }
-    String mediaPlayerDocumentHost() const override { return m_host; }
-
-    bool m_needsHacks;
-    String m_host;
-};
-
-#endif
+WTF_MAKE_ISO_ALLOCATED_IMPL(DOMImplementation);
 
 DOMImplementation::DOMImplementation(Document& document)
     : m_document(document)
@@ -96,18 +76,18 @@ ExceptionOr<Ref<DocumentType>> DOMImplementation::createDocumentType(const Strin
     return DocumentType::create(m_document, qualifiedName, publicId, systemId);
 }
 
-static inline Ref<XMLDocument> createXMLDocument(const String& namespaceURI)
+static inline Ref<XMLDocument> createXMLDocument(const String& namespaceURI, const Settings& settings)
 {
     if (namespaceURI == SVGNames::svgNamespaceURI)
-        return SVGDocument::create(nullptr, URL());
+        return SVGDocument::create(nullptr, settings, URL());
     if (namespaceURI == HTMLNames::xhtmlNamespaceURI)
-        return XMLDocument::createXHTML(nullptr, URL());
-    return XMLDocument::create(nullptr, URL());
+        return XMLDocument::createXHTML(nullptr, settings, URL());
+    return XMLDocument::create(nullptr, settings, URL());
 }
 
 ExceptionOr<Ref<XMLDocument>> DOMImplementation::createDocument(const String& namespaceURI, const String& qualifiedName, DocumentType* documentType)
 {
-    auto document = createXMLDocument(namespaceURI);
+    auto document = createXMLDocument(namespaceURI, m_document.settings());
     document->setContextDocument(m_document.contextDocument());
     document->setSecurityOriginPolicy(m_document.securityOriginPolicy());
 
@@ -125,7 +105,7 @@ ExceptionOr<Ref<XMLDocument>> DOMImplementation::createDocument(const String& na
     if (documentElement)
         document->appendChild(*documentElement);
 
-    return WTFMove(document);
+    return document;
 }
 
 Ref<CSSStyleSheet> DOMImplementation::createCSSStyleSheet(const String&, const String& media)
@@ -139,9 +119,9 @@ Ref<CSSStyleSheet> DOMImplementation::createCSSStyleSheet(const String&, const S
 
 Ref<HTMLDocument> DOMImplementation::createHTMLDocument(const String& title)
 {
-    auto document = HTMLDocument::create(nullptr, URL());
+    auto document = HTMLDocument::create(nullptr, m_document.settings(), URL());
     document->open();
-    document->write(nullptr, { ASCIILiteral("<!doctype html><html><head></head><body></body></html>") });
+    document->write(nullptr, { "<!doctype html><html><head></head><body></body></html>"_s });
     if (!title.isNull()) {
         auto titleElement = HTMLTitleElement::create(titleTag, document);
         titleElement->appendChild(document->createTextNode(title));
@@ -153,69 +133,65 @@ Ref<HTMLDocument> DOMImplementation::createHTMLDocument(const String& title)
     return document;
 }
 
-Ref<Document> DOMImplementation::createDocument(const String& type, Frame* frame, const URL& url)
+Ref<Document> DOMImplementation::createDocument(const String& contentType, Frame* frame, const Settings& settings, const URL& url)
 {
-    // FIXME: Confusing to have this here with public DOM APIs for creating documents. This is different enough that it should perhaps be moved.
-    // FIXME: This function is doing case insensitive comparisons on MIME types. Should do equalLettersIgnoringASCIICase instead.
+    // FIXME: Inelegant to have this here just because this is the home of DOM APIs for creating documents.
+    // This is internal, not a DOM API. Maybe we should put it in a new class called DocumentFactory,
+    // because of the analogy with HTMLElementFactory.
 
-    // Plugins cannot take HTML and XHTML from us, and we don't even need to initialize the plugin database for those.
-    if (type == "text/html")
-        return HTMLDocument::create(frame, url);
-    if (type == "application/xhtml+xml")
-        return XMLDocument::createXHTML(frame, url);
-
-#if ENABLE(FTPDIR)
-    // Plugins cannot take FTP from us either
-    if (type == "application/x-ftp-directory")
-        return FTPDirectoryDocument::create(frame, url);
-#endif
-
-    // If we want to useImageDocumentForSubframePDF, we'll let that override plugin support.
-    if (frame && !frame->isMainFrame() && MIMETypeRegistry::isPDFMIMEType(type) && frame->settings().useImageDocumentForSubframePDF())
+    // Plug-ins cannot take over for HTML, XHTML, plain text, or non-PDF images.
+    if (equalLettersIgnoringASCIICase(contentType, "text/html"))
+        return HTMLDocument::create(frame, settings, url);
+    if (equalLettersIgnoringASCIICase(contentType, "application/xhtml+xml"))
+        return XMLDocument::createXHTML(frame, settings, url);
+    if (equalLettersIgnoringASCIICase(contentType, "text/plain"))
+        return TextDocument::create(frame, settings, url);
+    bool isImage = MIMETypeRegistry::isSupportedImageMIMEType(contentType);
+    if (frame && isImage && !MIMETypeRegistry::isPDFOrPostScriptMIMEType(contentType))
         return ImageDocument::create(*frame, url);
 
-    PluginData* pluginData = nullptr;
-    auto allowedPluginTypes = PluginData::OnlyApplicationPlugins;
-    if (frame && frame->page()) {
-        if (frame->loader().subframeLoader().allowPlugins())
-            allowedPluginTypes = PluginData::AllPlugins;
-
-        pluginData = &frame->page()->pluginData();
-    }
-
-    // PDF is one image type for which a plugin can override built-in support.
-    // We do not want QuickTime to take over all image types, obviously.
-    if (MIMETypeRegistry::isPDFOrPostScriptMIMEType(type) && pluginData && pluginData->supportsWebVisibleMimeType(type, allowedPluginTypes))
-        return PluginDocument::create(frame, url);
-    if (Image::supportsType(type))
+    // The "image documents for subframe PDFs" mode will override a PDF plug-in.
+    if (frame && !frame->isMainFrame() && MIMETypeRegistry::isPDFMIMEType(contentType) && frame->settings().useImageDocumentForSubframePDF())
         return ImageDocument::create(*frame, url);
 
 #if ENABLE(VIDEO)
-    // Check to see if the type can be played by our MediaPlayer, if so create a MediaDocument
-    // Key system is not applicable here.
-    DOMImplementationSupportsTypeClient client(frame && frame->settings().needsSiteSpecificQuirks(), url.host());
     MediaEngineSupportParameters parameters;
-    parameters.type = ContentType(type);
+    parameters.type = ContentType { contentType };
     parameters.url = url;
-    if (MediaPlayer::supportsType(parameters, &client))
-        return MediaDocument::create(frame, url);
+    if (MediaPlayer::supportsType(parameters) != MediaPlayer::SupportsType::IsNotSupported)
+        return MediaDocument::create(frame, settings, url);
 #endif
 
-    // Everything else except text/plain can be overridden by plugins. In particular, Adobe SVG Viewer should be used for SVG, if installed.
-    // Disallowing plug-ins to use text/plain prevents plug-ins from hijacking a fundamental type that the browser is expected to handle,
-    // and also serves as an optimization to prevent loading the plug-in database in the common case.
-    if (type != "text/plain" && ((pluginData && pluginData->supportsWebVisibleMimeType(type, allowedPluginTypes)) || (frame && frame->loader().client().shouldAlwaysUsePluginDocument(type))))
-        return PluginDocument::create(frame, url);
-    if (MIMETypeRegistry::isTextMIMEType(type))
-        return TextDocument::create(frame, url);
+#if ENABLE(FTPDIR)
+    if (equalLettersIgnoringASCIICase(contentType, "application/x-ftp-directory"))
+        return FTPDirectoryDocument::create(frame, settings, url);
+#endif
 
-    if (type == "image/svg+xml")
-        return SVGDocument::create(frame, url);
+    if (frame && frame->loader().client().shouldAlwaysUsePluginDocument(contentType))
+        return PluginDocument::create(*frame, url);
 
-    if (MIMETypeRegistry::isXMLMIMEType(type))
-        return XMLDocument::create(frame, url);
+    // The following is the relatively costly lookup that requires initializing the plug-in database.
+    if (frame && frame->page()) {
+        auto allowedPluginTypes = frame->arePluginsEnabled()
+            ? PluginData::AllPlugins : PluginData::OnlyApplicationPlugins;
+        if (frame->page()->pluginData().supportsWebVisibleMimeType(contentType, allowedPluginTypes))
+            return PluginDocument::create(*frame, url);
+    }
 
-    return HTMLDocument::create(frame, url);
+    // Items listed here, after the plug-in checks, can be overridden by plug-ins.
+    // For example, plug-ins can take over support for PDF or SVG.
+    if (frame && isImage)
+        return ImageDocument::create(*frame, url);
+    if (MIMETypeRegistry::isTextMIMEType(contentType))
+        return TextDocument::create(frame, settings, url);
+    if (equalLettersIgnoringASCIICase(contentType, "image/svg+xml"))
+        return SVGDocument::create(frame, settings, url);
+    if (MIMETypeRegistry::isXMLMIMEType(contentType)) {
+        auto document = XMLDocument::create(frame, settings, url);
+        document->overrideMIMEType(contentType);
+        return document;
+    }
+    return HTMLDocument::create(frame, settings, url);
 }
 
 }

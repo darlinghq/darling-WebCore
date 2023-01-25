@@ -30,6 +30,7 @@
 #include <wtf/Ref.h>
 #include <wtf/RefCounted.h>
 #include <wtf/RefPtr.h>
+#include <wtf/URL.h>
 
 namespace WebCore {
 
@@ -39,11 +40,11 @@ class CachedScriptFetcher;
 class DeferredPromise;
 class Document;
 class JSDOMGlobalObject;
-class URL;
+class ModuleFetchParameters;
 
 class CachedModuleScriptLoader final : public RefCounted<CachedModuleScriptLoader>, private CachedResourceClient {
 public:
-    static Ref<CachedModuleScriptLoader> create(CachedModuleScriptLoaderClient&, DeferredPromise&, CachedScriptFetcher&);
+    static Ref<CachedModuleScriptLoader> create(CachedModuleScriptLoaderClient&, DeferredPromise&, CachedScriptFetcher&, RefPtr<ModuleFetchParameters>&&);
 
     virtual ~CachedModuleScriptLoader();
 
@@ -51,6 +52,8 @@ public:
 
     CachedScriptFetcher& scriptFetcher() { return m_scriptFetcher.get(); }
     CachedScript* cachedScript() { return m_cachedScript.get(); }
+    ModuleFetchParameters* parameters() { return m_parameters.get(); }
+    const URL& sourceURL() const { return m_sourceURL; }
 
     void clearClient()
     {
@@ -59,14 +62,16 @@ public:
     }
 
 private:
-    CachedModuleScriptLoader(CachedModuleScriptLoaderClient&, DeferredPromise&, CachedScriptFetcher&);
+    CachedModuleScriptLoader(CachedModuleScriptLoaderClient&, DeferredPromise&, CachedScriptFetcher&, RefPtr<ModuleFetchParameters>&&);
 
-    void notifyFinished(CachedResource&) final;
+    void notifyFinished(CachedResource&, const NetworkLoadMetrics&) final;
 
     CachedModuleScriptLoaderClient* m_client { nullptr };
     RefPtr<DeferredPromise> m_promise;
     Ref<CachedScriptFetcher> m_scriptFetcher;
+    RefPtr<ModuleFetchParameters> m_parameters;
     CachedResourceHandle<CachedScript> m_cachedScript;
+    URL m_sourceURL;
 };
 
 } // namespace WebCore

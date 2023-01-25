@@ -28,39 +28,38 @@
 
 #include "AudioBasicInspectorNode.h"
 #include "AudioBus.h"
+#include "AudioNodeOptions.h"
 #include "MediaStream.h"
 
 namespace WebCore {
 
-class AudioContext;
+class BaseAudioContext;
 class MediaStreamAudioSource;
 
-class MediaStreamAudioDestinationNode : public AudioBasicInspectorNode {
+class MediaStreamAudioDestinationNode final : public AudioBasicInspectorNode {
+    WTF_MAKE_ISO_ALLOCATED(MediaStreamAudioDestinationNode);
 public:
-    static Ref<MediaStreamAudioDestinationNode> create(AudioContext&, size_t numberOfChannels);
+    static ExceptionOr<Ref<MediaStreamAudioDestinationNode>> create(BaseAudioContext&, const AudioNodeOptions& = { });
 
     virtual ~MediaStreamAudioDestinationNode();
 
-    MediaStream* stream() { return m_stream.get(); }
+    MediaStream& stream() { return m_stream.get(); }
 
     // AudioNode.
-    void process(size_t framesToProcess) override;
-    void reset() override;
+    void process(size_t framesToProcess) final;
     
-    RealtimeMediaSource* mediaStreamSource();
-
 private:
-    MediaStreamAudioDestinationNode(AudioContext&, size_t numberOfChannels);
+    explicit MediaStreamAudioDestinationNode(BaseAudioContext&);
 
-    double tailTime() const override { return 0; }
-    double latencyTime() const override { return 0; }
+    double tailTime() const final { return 0; }
+    double latencyTime() const final { return 0; }
+    bool requiresTailProcessing() const final { return false; }
 
     // As an audio source, we will never propagate silence.
-    bool propagatesSilence() const override { return false; }
+    bool propagatesSilence() const final { return false; }
 
-    RefPtr<MediaStream> m_stream;
-    RefPtr<MediaStreamAudioSource> m_source;
-    RefPtr<AudioBus> m_mixBus;
+    Ref<MediaStreamAudioSource> m_source;
+    Ref<MediaStream> m_stream;
 };
 
 } // namespace WebCore

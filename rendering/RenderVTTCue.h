@@ -25,7 +25,7 @@
 
 #pragma once
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "FloatPoint.h"
 #include "RenderBlockFlow.h"
@@ -37,6 +37,7 @@ class VTTCue;
 class VTTCueBox;
 
 class RenderVTTCue final : public RenderBlockFlow {
+    WTF_MAKE_ISO_ALLOCATED(RenderVTTCue);
 public:
     RenderVTTCue(VTTCueBox&, RenderStyle&&);
 
@@ -67,4 +68,4 @@ private:
 
 } // namespace WebCore
 
-#endif // ENABLE(VIDEO_TRACK)
+#endif // ENABLE(VIDEO)

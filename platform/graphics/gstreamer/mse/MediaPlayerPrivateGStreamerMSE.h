@@ -26,23 +26,19 @@
 
 #if ENABLE(VIDEO) && USE(GSTREAMER) && ENABLE(MEDIA_SOURCE) 
 
-#include "GRefPtrGStreamer.h"
+#include "GStreamerCommon.h"
 #include "MediaPlayerPrivateGStreamer.h"
 #include "MediaSample.h"
-#include "MediaSourceGStreamer.h"
-#include "PlaybackPipeline.h"
+#include "MediaSourcePrivateGStreamer.h"
 #include "WebKitMediaSourceGStreamer.h"
 
 namespace WebCore {
 
-class MediaSourceClientGStreamerMSE;
 class AppendPipeline;
 class PlaybackPipeline;
 
 class MediaPlayerPrivateGStreamerMSE : public MediaPlayerPrivateGStreamer {
     WTF_MAKE_NONCOPYABLE(MediaPlayerPrivateGStreamerMSE); WTF_MAKE_FAST_ALLOCATED;
-
-    friend class MediaSourceClientGStreamerMSE;
 
 public:
     explicit MediaPlayerPrivateGStreamerMSE(MediaPlayer*);
@@ -51,27 +47,25 @@ public:
     static void registerMediaEngine(MediaEngineRegistrar);
 
     void load(const String&) override;
-    void load(const String&, MediaSourcePrivateClient*) override;
+    void load(const URL&, const ContentType&, MediaSourcePrivateClient*) override;
 
-    void setDownloadBuffering() override { };
+    void updateDownloadBufferingFlag() override { };
 
-    bool isLiveStream() const override { return false; }
     MediaTime currentMediaTime() const override;
 
     void pause() override;
     bool seeking() const override;
-    void seek(float) override;
+    void seek(const MediaTime&) override;
     void configurePlaySink() override;
     bool changePipelineState(GstState) override;
 
     void durationChanged() override;
     MediaTime durationMediaTime() const override;
 
-    void setRate(float) override;
     std::unique_ptr<PlatformTimeRanges> buffered() const override;
-    float maxTimeSeekable() const override;
+    MediaTime maxMediaTimeSeekable() const override;
 
-    void sourceChanged() override;
+    void sourceSetup(GstElement*) override;
 
     void setReadyState(MediaPlayer::ReadyState);
     void waitForSeekCompleted();
@@ -80,43 +74,44 @@ public:
 
     void markEndOfStream(MediaSourcePrivate::EndOfStreamStatus);
 
-    void trackDetected(RefPtr<AppendPipeline>, RefPtr<WebCore::TrackPrivateBase> oldTrack, RefPtr<WebCore::TrackPrivateBase> newTrack);
+    void trackDetected(AppendPipeline&, RefPtr<WebCore::TrackPrivateBase>, bool firstTrackDetected);
     void notifySeekNeedsDataForTime(const MediaTime&);
 
-    static bool supportsCodecs(const String& codecs);
+    void blockDurationChanges();
+    void unblockDurationChanges();
+
+    PlaybackPipeline* playbackPipeline() const { return m_playbackPipeline.get(); }
+
+#if !RELEASE_LOG_DISABLED
+    WTFLogChannel& logChannel() const final { return WebCore::LogMediaSource; }
+#endif
 
 private:
+    friend class MediaPlayerFactoryGStreamerMSE;
     static void getSupportedTypes(HashSet<String, ASCIICaseInsensitiveHash>&);
     static MediaPlayer::SupportsType supportsType(const MediaEngineSupportParameters&);
-
-    static bool isAvailable();
 
     // FIXME: Reduce code duplication.
     void updateStates() override;
 
-    bool doSeek(gint64, float, GstSeekFlags) override;
-    bool doSeek();
+    bool doSeek(const MediaTime&, float, GstSeekFlags) override;
     void maybeFinishSeek();
-    void updatePlaybackRate() override;
+
     void asyncStateChangeDone() override;
 
-    // FIXME: Implement.
-    std::optional<PlatformVideoPlaybackQualityMetrics> videoPlaybackQualityMetrics() override { return std::nullopt; }
+    // FIXME: Implement videoPlaybackQualityMetrics.
     bool isTimeBuffered(const MediaTime&) const;
 
     bool isMediaSource() const override { return true; }
 
-    void setMediaSourceClient(Ref<MediaSourceClientGStreamerMSE>);
-    RefPtr<MediaSourceClientGStreamerMSE> mediaSourceClient();
-
-    HashMap<RefPtr<SourceBufferPrivateGStreamer>, RefPtr<AppendPipeline>> m_appendPipelinesMap;
     bool m_eosMarked = false;
     mutable bool m_eosPending = false;
     bool m_gstSeekCompleted = true;
     RefPtr<MediaSourcePrivateClient> m_mediaSource;
-    RefPtr<MediaSourceClientGStreamerMSE> m_mediaSourceClient;
     MediaTime m_mediaTimeDuration;
     bool m_mseSeekCompleted = true;
+    bool m_areDurationChangesBlocked = false;
+    bool m_shouldReportDurationWhenUnblocking = false;
     RefPtr<PlaybackPipeline> m_playbackPipeline;
 };
 

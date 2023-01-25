@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2011 Ericsson AB. All rights reserved.
  * Copyright (C) 2012 Google Inc. All rights reserved.
- * Copyright (C) 2013-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2013-2019 Apple Inc. All rights reserved.
  * Copyright (C) 2013 Nokia Corporation and/or its subsidiary(-ies).
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,9 +41,13 @@
 #include "MediaSample.h"
 #include "PlatformLayer.h"
 #include "RealtimeMediaSourceCapabilities.h"
-#include <wtf/RefCounted.h>
+#include "RealtimeMediaSourceFactory.h"
+#include <wtf/CompletionHandler.h>
+#include <wtf/LoggerHelper.h>
+#include <wtf/RecursiveLockAdapter.h>
+#include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/Vector.h>
-#include <wtf/WeakPtr.h>
+#include <wtf/WeakHashSet.h>
 #include <wtf/text/WTFString.h>
 
 namespace WTF {
@@ -59,86 +63,68 @@ class MediaStreamPrivate;
 class OrientationNotifier;
 class PlatformAudioData;
 class RealtimeMediaSourceSettings;
+class RemoteVideoSample;
 
 struct CaptureSourceOrError;
 
-class WEBCORE_EXPORT RealtimeMediaSource : public RefCounted<RealtimeMediaSource> {
+class WEBCORE_EXPORT RealtimeMediaSource
+    : public ThreadSafeRefCounted<RealtimeMediaSource, WTF::DestructionThread::MainRunLoop>
+    , public CanMakeWeakPtr<RealtimeMediaSource, WeakPtrFactoryInitialization::Eager>
+#if !RELEASE_LOG_DISABLED
+    , public LoggerHelper
+#endif
+{
 public:
-    class Observer {
+    class Observer : public CanMakeWeakPtr<Observer> {
     public:
-        virtual ~Observer() { }
+        virtual ~Observer();
 
         // Source state changes.
         virtual void sourceStarted() { }
         virtual void sourceStopped() { }
         virtual void sourceMutedChanged() { }
         virtual void sourceSettingsChanged() { }
+        virtual void audioUnitWillStart() { }
 
         // Observer state queries.
         virtual bool preventSourceFromStopping() { return false; }
 
-        // Called on the main thread.
-        virtual void videoSampleAvailable(MediaSample&) { }
+        virtual void hasStartedProducingData() { }
+    };
+    class AudioSampleObserver {
+    public:
+        virtual ~AudioSampleObserver() = default;
 
         // May be called on a background thread.
-        virtual void audioSamplesAvailable(const MediaTime&, const PlatformAudioData&, const AudioStreamDescription&, size_t /*numberOfFrames*/) { }
+        virtual void audioSamplesAvailable(const MediaTime&, const PlatformAudioData&, const AudioStreamDescription&, size_t /*numberOfFrames*/) = 0;
     };
-
-    template<typename Source> class SingleSourceFactory {
+    class VideoSampleObserver {
     public:
-        void setActiveSource(Source& source)
-        {
-            if (m_activeSource == &source)
-                return;
-            if (m_activeSource && m_activeSource->isProducingData())
-                m_activeSource->setMuted(true);
-            m_activeSource = &source;
-        }
+        virtual ~VideoSampleObserver() = default;
 
-        void unsetActiveSource(Source& source)
-        {
-            if (m_activeSource == &source)
-                m_activeSource = nullptr;
-        }
-
-        RealtimeMediaSource* activeSource() { return m_activeSource; }
-    private:
-        RealtimeMediaSource* m_activeSource { nullptr };
+        // May be called on a background thread.
+        virtual void videoSampleAvailable(MediaSample&) = 0;
     };
 
-    class AudioCaptureFactory {
-    public:
-        virtual ~AudioCaptureFactory() = default;
-        virtual CaptureSourceOrError createAudioCaptureSource(const String& audioDeviceID, const MediaConstraints*) = 0;
+    virtual ~RealtimeMediaSource() = default;
 
-    protected:
-        AudioCaptureFactory() = default;
-    };
+    virtual Ref<RealtimeMediaSource> clone() { return *this; }
 
-    class VideoCaptureFactory {
-    public:
-        virtual ~VideoCaptureFactory() = default;
-        virtual CaptureSourceOrError createVideoCaptureSource(const String& videoDeviceID, const MediaConstraints*) = 0;
-        virtual void setVideoCapturePageState(bool, bool) { }
-
-    protected:
-        VideoCaptureFactory() = default;
-    };
-
-    virtual ~RealtimeMediaSource() { }
-
-    const String& id() const { return m_id; }
+    const String& hashedId() const;
+    String deviceIDHashSalt() const;
 
     const String& persistentID() const { return m_persistentID; }
-    virtual void setPersistentID(String&& persistentID) { m_persistentID = WTFMove(persistentID); }
 
     enum class Type { None, Audio, Video };
     Type type() const { return m_type; }
 
+    virtual void whenReady(CompletionHandler<void(String)>&&);
+
     bool isProducingData() const { return m_isProducingData; }
     void start();
     void stop();
-    void requestStop(Observer* callingObserver = nullptr);
+    virtual void requestToEnd(Observer& callingObserver);
+    bool isEnded() const { return m_isEnded; }
 
     bool muted() const { return m_muted; }
     void setMuted(bool);
@@ -146,92 +132,113 @@ public:
     bool captureDidFail() const { return m_captureDidFailed; }
 
     virtual bool interrupted() const { return m_interrupted; }
-    virtual void setInterrupted(bool, bool);
 
     const String& name() const { return m_name; }
-    void setName(const String& name) { m_name = name; }
+    void setName(String&& name) { m_name = WTFMove(name); }
 
     unsigned fitnessScore() const { return m_fitnessScore; }
 
     WEBCORE_EXPORT void addObserver(Observer&);
     WEBCORE_EXPORT void removeObserver(Observer&);
 
-    void setWidth(int);
-    void setHeight(int);
-    const IntSize& size() const { return m_size; }
-    virtual bool applySize(const IntSize&) { return false; }
+    WEBCORE_EXPORT void addAudioSampleObserver(AudioSampleObserver&);
+    WEBCORE_EXPORT void removeAudioSampleObserver(AudioSampleObserver&);
+
+    WEBCORE_EXPORT void addVideoSampleObserver(VideoSampleObserver&);
+    WEBCORE_EXPORT void removeVideoSampleObserver(VideoSampleObserver&);
+
+    const IntSize size() const;
+    void setSize(const IntSize&);
+
+    const IntSize intrinsicSize() const;
+    void setIntrinsicSize(const IntSize&);
 
     double frameRate() const { return m_frameRate; }
     void setFrameRate(double);
-    virtual bool applyFrameRate(double) { return false; }
 
     double aspectRatio() const { return m_aspectRatio; }
     void setAspectRatio(double);
-    virtual bool applyAspectRatio(double) { return false; }
 
     RealtimeMediaSourceSettings::VideoFacingMode facingMode() const { return m_facingMode; }
     void setFacingMode(RealtimeMediaSourceSettings::VideoFacingMode);
-    virtual bool applyFacingMode(RealtimeMediaSourceSettings::VideoFacingMode) { return false; }
 
     double volume() const { return m_volume; }
     void setVolume(double);
-    virtual bool applyVolume(double) { return false; }
 
     int sampleRate() const { return m_sampleRate; }
     void setSampleRate(int);
-    virtual bool applySampleRate(int) { return false; }
+    virtual Optional<Vector<int>> discreteSampleRates() const;
 
     int sampleSize() const { return m_sampleSize; }
     void setSampleSize(int);
-    virtual bool applySampleSize(int) { return false; }
+    virtual Optional<Vector<int>> discreteSampleSizes() const;
 
     bool echoCancellation() const { return m_echoCancellation; }
     void setEchoCancellation(bool);
-    virtual bool applyEchoCancellation(bool) { return false; }
 
-    virtual const RealtimeMediaSourceCapabilities& capabilities() const = 0;
-    virtual const RealtimeMediaSourceSettings& settings() const = 0;
+    virtual const RealtimeMediaSourceCapabilities& capabilities() = 0;
+    virtual const RealtimeMediaSourceSettings& settings() = 0;
 
-    using SuccessHandler = WTF::Function<void()>;
-    using FailureHandler = WTF::Function<void(const String& badConstraint, const String& errorString)>;
-    virtual void applyConstraints(const MediaConstraints&, SuccessHandler&&, FailureHandler&&);
-    std::optional<std::pair<String, String>> applyConstraints(const MediaConstraints&);
+    struct ApplyConstraintsError {
+        String badConstraint;
+        String message;
+    };
+    using ApplyConstraintsHandler = CompletionHandler<void(Optional<ApplyConstraintsError>&&)>;
+    virtual void applyConstraints(const MediaConstraints&, ApplyConstraintsHandler&&);
+    Optional<ApplyConstraintsError> applyConstraints(const MediaConstraints&);
 
-    virtual bool supportsConstraints(const MediaConstraints&, String&);
-    virtual bool supportsConstraint(const MediaConstraint&) const;
-
-    virtual void settingsDidChange();
+    bool supportsConstraints(const MediaConstraints&, String&);
+    bool supportsConstraint(const MediaConstraint&);
 
     virtual bool isIsolated() const { return false; }
 
+    virtual bool isMockSource() const { return false; }
     virtual bool isCaptureSource() const { return false; }
+    virtual CaptureDevice::DeviceType deviceType() const { return CaptureDevice::DeviceType::Unknown; }
 
     virtual void monitorOrientation(OrientationNotifier&) { }
 
-    void captureFailed();
+    virtual void captureFailed();
+
+    virtual bool isSameAs(RealtimeMediaSource& source) const { return this == &source; }
+    virtual bool isIncomingAudioSource() const { return false; }
+    virtual bool isIncomingVideoSource() const { return false; }
+
+#if !RELEASE_LOG_DISABLED
+    virtual void setLogger(const Logger&, const void*);
+    const Logger* loggerPtr() const { return m_logger.get(); }
+    const Logger& logger() const final { ASSERT(m_logger); return *m_logger.get(); }
+    const void* logIdentifier() const final { return m_logIdentifier; }
+    const char* logClassName() const override { return "RealtimeMediaSource"; }
+    WTFLogChannel& logChannel() const final;
+#endif
 
     // Testing only
-    virtual void delaySamples(float) { };
+    virtual void delaySamples(Seconds) { };
+    virtual void setInterruptedForTesting(bool);
+
+    virtual bool setShouldApplyRotation(bool) { return false; }
 
 protected:
-    RealtimeMediaSource(const String& id, Type, const String& name);
+    RealtimeMediaSource(Type, String&& name, String&& deviceID = { }, String&& hashSalt = { });
 
     void scheduleDeferredTask(WTF::Function<void()>&&);
 
     virtual void beginConfiguration() { }
     virtual void commitConfiguration() { }
 
-    enum class SelectType { ForApplyConstraints, ForSupportsConstraints };
-    bool selectSettings(const MediaConstraints&, FlattenedConstraint&, String&, SelectType);
-    virtual double fitnessDistance(const MediaConstraint&);
-    virtual bool supportsSizeAndFrameRate(std::optional<IntConstraint> width, std::optional<IntConstraint> height, std::optional<DoubleConstraint>, String&, double& fitnessDistance);
-    virtual bool supportsSizeAndFrameRate(std::optional<int> width, std::optional<int> height, std::optional<double>);
-    virtual void applyConstraint(const MediaConstraint&);
-    virtual void applyConstraints(const FlattenedConstraint&);
-    virtual void applySizeAndFrameRate(std::optional<int> width, std::optional<int> height, std::optional<double>);
+    bool selectSettings(const MediaConstraints&, FlattenedConstraint&, String&);
+    double fitnessDistance(const MediaConstraint&);
+    void applyConstraint(const MediaConstraint&);
+    void applyConstraints(const FlattenedConstraint&);
+    bool supportsSizeAndFrameRate(Optional<IntConstraint> width, Optional<IntConstraint> height, Optional<DoubleConstraint>, String&, double& fitnessDistance);
 
-    void notifyMutedObservers() const;
+    virtual bool supportsSizeAndFrameRate(Optional<int> width, Optional<int> height, Optional<double>);
+    virtual void setSizeAndFrameRate(Optional<int> width, Optional<int> height, Optional<double>);
+
+    void notifyMutedObservers();
     void notifyMutedChange(bool muted);
+    void notifySettingsDidChangeObservers(OptionSet<RealtimeMediaSourceSettings::Flag>);
 
     void initializeVolume(double volume) { m_volume = volume; }
     void initializeSampleRate(int sampleRate) { m_sampleRate = sampleRate; }
@@ -240,34 +247,61 @@ protected:
     void videoSampleAvailable(MediaSample&);
     void audioSamplesAvailable(const MediaTime&, const PlatformAudioData&, const AudioStreamDescription&, size_t);
 
-    WeakPtr<RealtimeMediaSource> createWeakPtr() { return m_weakPtrFactory.createWeakPtr(); }
+    void forEachObserver(const Function<void(Observer&)>&);
+
+    void end(Observer* = nullptr);
 
 private:
     virtual void startProducingData() { }
     virtual void stopProducingData() { }
+    virtual void settingsDidChange(OptionSet<RealtimeMediaSourceSettings::Flag>) { }
 
-    bool m_muted { false };
+    virtual void stopBeingObserved() { stop(); }
 
-    WeakPtrFactory<RealtimeMediaSource> m_weakPtrFactory;
-    String m_id;
+    virtual void hasEnded() { }
+
+    void updateHasStartedProducingData();
+
+#if !RELEASE_LOG_DISABLED
+    RefPtr<const Logger> m_logger;
+    const void* m_logIdentifier;
+    MonotonicTime m_lastFrameLogTime;
+    unsigned m_frameCount { 0 };
+#endif
+
+    String m_idHashSalt;
+    String m_hashedID;
     String m_persistentID;
     Type m_type;
     String m_name;
-    Vector<std::reference_wrapper<Observer>> m_observers;
+    WeakHashSet<Observer> m_observers;
+
+    mutable RecursiveLock m_audioSampleObserversLock;
+    HashSet<AudioSampleObserver*> m_audioSampleObservers;
+
+    mutable RecursiveLock m_videoSampleObserversLock;
+    HashSet<VideoSampleObserver*> m_videoSampleObservers;
+
+    // Set on the main thread from constraints.
     IntSize m_size;
+    // Set on sample generation thread.
+    IntSize m_intrinsicSize;
     double m_frameRate { 30 };
     double m_aspectRatio { 0 };
     double m_volume { 1 };
     double m_sampleRate { 0 };
     double m_sampleSize { 0 };
-    double m_fitnessScore { std::numeric_limits<double>::infinity() };
+    double m_fitnessScore { 0 };
     RealtimeMediaSourceSettings::VideoFacingMode m_facingMode { RealtimeMediaSourceSettings::User};
 
-    bool m_echoCancellation { false };
+    bool m_muted { false };
     bool m_pendingSettingsDidChangeNotification { false };
+    bool m_echoCancellation { false };
     bool m_isProducingData { false };
     bool m_interrupted { false };
     bool m_captureDidFailed { false };
+    bool m_isEnded { false };
+    bool m_hasStartedProducingData { false };
 };
 
 struct CaptureSourceOrError {
@@ -282,6 +316,28 @@ struct CaptureSourceOrError {
     String errorMessage;
 };
 
+String convertEnumerationToString(RealtimeMediaSource::Type);
+
+inline void RealtimeMediaSource::whenReady(CompletionHandler<void(String)>&& callback)
+{
+    callback({ });
+}
+
 } // namespace WebCore
+
+namespace WTF {
+
+template<typename Type>
+struct LogArgument;
+
+template <>
+struct LogArgument<WebCore::RealtimeMediaSource::Type> {
+    static String toString(const WebCore::RealtimeMediaSource::Type type)
+    {
+        return convertEnumerationToString(type);
+    }
+};
+
+}; // namespace WTF
 
 #endif // ENABLE(MEDIA_STREAM)

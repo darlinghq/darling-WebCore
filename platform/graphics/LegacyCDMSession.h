@@ -27,17 +27,18 @@
 
 #if ENABLE(LEGACY_ENCRYPTED_MEDIA)
 
-#include <runtime/Uint8Array.h>
+#include <JavaScriptCore/Uint8Array.h>
 #include <wtf/Forward.h>
 
 namespace WebCore {
 
-class CDMSessionClient {
+class LegacyCDMSessionClient {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
-    virtual ~CDMSessionClient() { }
+    virtual ~LegacyCDMSessionClient() = default;
     virtual void sendMessage(Uint8Array*, String destinationURL) = 0;
 
-    enum {
+    enum : uint8_t {
         MediaKeyErrorUnknown = 1,
         MediaKeyErrorClient,
         MediaKeyErrorService,
@@ -51,20 +52,21 @@ public:
     virtual String mediaKeysStorageDirectory() const = 0;
 };
 
-enum CDMSessionType {
+enum LegacyCDMSessionType {
     CDMSessionTypeUnknown,
     CDMSessionTypeClearKey,
     CDMSessionTypeAVFoundationObjC,
     CDMSessionTypeAVStreamSession,
     CDMSessionTypeAVContentKeySession,
+    CDMSessionTypeRemote,
 };
 
-class CDMSession {
+class WEBCORE_EXPORT LegacyCDMSession {
 public:
-    virtual ~CDMSession() { }
+    virtual ~LegacyCDMSession() = default;
 
-    virtual CDMSessionType type() { return CDMSessionTypeUnknown; }
-    virtual void setClient(CDMSessionClient*) = 0;
+    virtual LegacyCDMSessionType type() { return CDMSessionTypeUnknown; }
+    virtual void setClient(LegacyCDMSessionClient*) = 0;
     virtual const String& sessionId() const = 0;
     virtual RefPtr<Uint8Array> generateKeyRequest(const String& mimeType, Uint8Array* initData, String& destinationURL, unsigned short& errorCode, uint32_t& systemCode) = 0;
     virtual void releaseKeys() = 0;

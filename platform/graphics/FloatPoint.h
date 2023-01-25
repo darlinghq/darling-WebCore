@@ -30,10 +30,6 @@
 #include "IntPoint.h"
 #include <wtf/MathExtras.h>
 
-#if PLATFORM(MAC) && defined __OBJC__
-#import <Foundation/NSGeometry.h>
-#endif
-
 #if USE(CG)
 typedef struct CGPoint CGPoint;
 #endif
@@ -51,15 +47,19 @@ struct D2D_POINT_2F;
 typedef D2D_POINT_2F D2D1_POINT_2F;
 #endif
 
+namespace WTF {
+class TextStream;
+}
+
 namespace WebCore {
 
 class AffineTransform;
 class TransformationMatrix;
 class IntPoint;
 class IntSize;
-class TextStream;
 
 class FloatPoint {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     FloatPoint() { }
     FloatPoint(float x, float y) : m_x(x), m_y(y) { }
@@ -67,8 +67,9 @@ public:
     explicit FloatPoint(const FloatSize& size) : m_x(size.width()), m_y(size.height()) { }
 
     static FloatPoint zero() { return FloatPoint(); }
+    bool isZero() const { return !m_x && !m_y; }
 
-    static FloatPoint narrowPrecision(double x, double y);
+    WEBCORE_EXPORT static FloatPoint narrowPrecision(double x, double y);
 
     float x() const { return m_x; }
     float y() const { return m_y; }
@@ -124,12 +125,12 @@ public:
         m_y *= scaleY;
     }
 
-    FloatPoint scaled(float scale)
+    FloatPoint scaled(float scale) const
     {
         return { m_x * scale, m_y * scale };
     }
 
-    FloatPoint scaled(float scaleX, float scaleY)
+    FloatPoint scaled(float scaleX, float scaleY) const
     {
         return { m_x * scaleX, m_y * scaleY };
     }
@@ -142,7 +143,11 @@ public:
     }
 
     float slopeAngleRadians() const;
-    float length() const;
+
+    float length() const
+    {
+        return std::hypot(m_x, m_y);
+    }
 
     float lengthSquared() const
     {
@@ -294,7 +299,7 @@ inline bool areEssentiallyEqual(const FloatPoint& a, const FloatPoint& b)
     return WTF::areEssentiallyEqual(a.x(), b.x()) && WTF::areEssentiallyEqual(a.y(), b.y());
 }
 
-WEBCORE_EXPORT TextStream& operator<<(TextStream&, const FloatPoint&);
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, const FloatPoint&);
 
 }
 

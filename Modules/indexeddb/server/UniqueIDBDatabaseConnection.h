@@ -27,8 +27,10 @@
 
 #if ENABLE(INDEXED_DATABASE)
 
-#include "UniqueIDBDatabaseTransaction.h"
+#include "IDBServer.h"
+#include "UniqueIDBDatabase.h"
 #include <wtf/HashMap.h>
+#include <wtf/Identified.h>
 #include <wtf/Ref.h>
 #include <wtf/RefCounted.h>
 
@@ -44,15 +46,15 @@ class ServerOpenDBRequest;
 class UniqueIDBDatabase;
 class UniqueIDBDatabaseTransaction;
 
-class UniqueIDBDatabaseConnection : public RefCounted<UniqueIDBDatabaseConnection> {
+class UniqueIDBDatabaseConnection : public RefCounted<UniqueIDBDatabaseConnection>, public Identified<UniqueIDBDatabaseConnection> {
 public:
     static Ref<UniqueIDBDatabaseConnection> create(UniqueIDBDatabase&, ServerOpenDBRequest&);
 
     ~UniqueIDBDatabaseConnection();
 
-    uint64_t identifier() const { return m_identifier; }
     const IDBResourceIdentifier& openRequestIdentifier() { return m_openRequestIdentifier; }
-    UniqueIDBDatabase& database() { return m_database; }
+    UniqueIDBDatabase* database() { return m_database.get(); }
+    IDBServer* server() { return &m_server; }
     IDBConnectionToClient& connectionToClient() { return m_connectionToClient; }
 
     void connectionPendingCloseFromClient();
@@ -75,20 +77,21 @@ public:
     void didCreateIndex(const IDBResultData&);
     void didDeleteIndex(const IDBResultData&);
     void didRenameIndex(const IDBResultData&);
-    void didFireVersionChangeEvent(const IDBResourceIdentifier& requestIdentifier);
+    void didFireVersionChangeEvent(const IDBResourceIdentifier& requestIdentifier, IndexedDB::ConnectionClosedOnBehalfOfServer);
     void didFinishHandlingVersionChange(const IDBResourceIdentifier& transactionIdentifier);
-    void confirmDidCloseFromServer();
 
     void abortTransactionWithoutCallback(UniqueIDBDatabaseTransaction&);
 
     bool connectionIsClosing() const;
 
+    void deleteTransaction(UniqueIDBDatabaseTransaction&);
+
 private:
     UniqueIDBDatabaseConnection(UniqueIDBDatabase&, ServerOpenDBRequest&);
 
-    uint64_t m_identifier { 0 };
-    UniqueIDBDatabase& m_database;
-    IDBConnectionToClient& m_connectionToClient;
+    WeakPtr<UniqueIDBDatabase> m_database;
+    IDBServer& m_server;
+    Ref<IDBConnectionToClient> m_connectionToClient;
     IDBResourceIdentifier m_openRequestIdentifier;
 
     bool m_closePending { false };

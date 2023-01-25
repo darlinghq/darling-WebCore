@@ -33,11 +33,11 @@ namespace WebCore {
 
 class PlatformCALayerCocoa final : public PlatformCALayer {
 public:
-    static Ref<PlatformCALayer> create(LayerType, PlatformCALayerClient*);
+    static Ref<PlatformCALayerCocoa> create(LayerType, PlatformCALayerClient*);
     
     // This function passes the layer as a void* rather than a PlatformLayer because PlatformLayer
     // is defined differently for Obj C and C++. This allows callers from both languages.
-    static Ref<PlatformCALayer> create(void* platformLayer, PlatformCALayerClient*);
+    static Ref<PlatformCALayerCocoa> create(void* platformLayer, PlatformCALayerClient*);
 
     WEBCORE_EXPORT static LayerType layerTypeForPlatformLayer(PlatformLayer*);
 
@@ -63,7 +63,7 @@ public:
     void addAnimationForKey(const String& key, PlatformCAAnimation&) override;
     void removeAnimationForKey(const String& key) override;
     RefPtr<PlatformCAAnimation> animationForKey(const String& key) override;
-    void animationStarted(const String& key, CFTimeInterval beginTime) override;
+    void animationStarted(const String& key, MonotonicTime beginTime) override;
     void animationEnded(const String& key) override;
 
     void setMask(PlatformCALayer*) override;
@@ -116,6 +116,7 @@ public:
     bool supportsSubpixelAntialiasedText() const override;
     void setSupportsSubpixelAntialiasedText(bool) override;
 
+    bool hasContents() const override;
     CFTypeRef contents() const override;
     void setContents(CFTypeRef) override;
 
@@ -167,13 +168,21 @@ public:
     GraphicsLayer::CustomAppearance customAppearance() const override { return m_customAppearance; }
     void updateCustomAppearance(GraphicsLayer::CustomAppearance) override;
 
+    const EventRegion* eventRegion() const override { return &m_eventRegion; }
+    void setEventRegion(const EventRegion&) override;
+
+#if ENABLE(SCROLLING_THREAD)
+    ScrollingNodeID scrollingNodeID() const override { return m_scrollingNodeID; }
+    void setScrollingNodeID(ScrollingNodeID nodeID) override { m_scrollingNodeID = nodeID; }
+#endif
+
     TiledBacking* tiledBacking() override;
 
     Ref<PlatformCALayer> clone(PlatformCALayerClient* owner) const override;
 
     Ref<PlatformCALayer> createCompatibleLayer(PlatformCALayer::LayerType, PlatformCALayerClient*) const override;
 
-    void enumerateRectsBeingDrawn(CGContextRef, void (^block)(CGRect)) override;
+    void enumerateRectsBeingDrawn(GraphicsContext&, void (^block)(FloatRect)) override;
 
     unsigned backingStoreBytesPerPixel() const override;
 
@@ -193,8 +202,12 @@ private:
 
     RetainPtr<NSObject> m_delegate;
     std::unique_ptr<PlatformCALayerList> m_customSublayers;
-    GraphicsLayer::CustomAppearance m_customAppearance;
+    GraphicsLayer::CustomAppearance m_customAppearance { GraphicsLayer::CustomAppearance::None };
     std::unique_ptr<FloatRoundedRect> m_shapeRoundedRect;
+#if ENABLE(SCROLLING_THREAD)
+    ScrollingNodeID m_scrollingNodeID { 0 };
+#endif
+    EventRegion m_eventRegion;
     bool m_wantsDeepColorBackingStore { false };
     bool m_supportsSubpixelAntialiasedText { false };
     bool m_backingStoreAttached { true };

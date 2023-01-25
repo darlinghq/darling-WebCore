@@ -25,15 +25,15 @@
 
 #include "config.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "JSVideoTrack.h"
 
 #include "JSTrackCustom.h"
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
 void JSVideoTrack::visitAdditionalChildren(SlotVisitor& visitor)
 {

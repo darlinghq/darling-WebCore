@@ -23,7 +23,20 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// @conditional=ENABLE(STREAMS_API)
+function initializeReadableStreamDefaultReader(stream)
+{
+    "use strict";
+
+    if (!@isReadableStream(stream))
+        @throwTypeError("ReadableStreamDefaultReader needs a ReadableStream");
+    if (@isReadableStreamLocked(stream))
+        @throwTypeError("ReadableStream is locked");
+
+    @readableStreamReaderGenericInitialize(this, stream);
+    @putByIdDirectPrivate(this, "readRequests", []);
+
+    return this;
+}
 
 function cancel(reason)
 {
@@ -32,8 +45,8 @@ function cancel(reason)
     if (!@isReadableStreamDefaultReader(this))
         return @Promise.@reject(@makeThisTypeError("ReadableStreamDefaultReader", "cancel"));
 
-    if (!this.@ownerReadableStream)
-        return @Promise.@reject(new @TypeError("cancel() called on a reader owned by no readable stream"));
+    if (!@getByIdDirectPrivate(this, "ownerReadableStream"))
+        return @Promise.@reject(@makeTypeError("cancel() called on a reader owned by no readable stream"));
 
     return @readableStreamReaderGenericCancel(this, reason);
 }
@@ -44,8 +57,8 @@ function read()
 
     if (!@isReadableStreamDefaultReader(this))
         return @Promise.@reject(@makeThisTypeError("ReadableStreamDefaultReader", "read"));
-    if (!this.@ownerReadableStream)
-        return @Promise.@reject(new @TypeError("read() called on a reader owned by no readable stream"));
+    if (!@getByIdDirectPrivate(this, "ownerReadableStream"))
+        return @Promise.@reject(@makeTypeError("read() called on a reader owned by no readable stream"));
 
     return @readableStreamDefaultReaderRead(this);
 }
@@ -57,15 +70,16 @@ function releaseLock()
     if (!@isReadableStreamDefaultReader(this))
         throw @makeThisTypeError("ReadableStreamDefaultReader", "releaseLock");
 
-    if (!this.@ownerReadableStream)
+    if (!@getByIdDirectPrivate(this, "ownerReadableStream"))
         return;
 
-    if (this.@readRequests.length)
+    if (@getByIdDirectPrivate(this, "readRequests").length)
         @throwTypeError("There are still pending read requests, cannot release the lock");
 
     @readableStreamReaderGenericRelease(this);
 }
 
+@getter
 function closed()
 {
     "use strict";
@@ -73,5 +87,5 @@ function closed()
     if (!@isReadableStreamDefaultReader(this))
         return @Promise.@reject(@makeGetterTypeError("ReadableStreamDefaultReader", "closed"));
 
-    return this.@closedPromiseCapability.@promise;
+    return @getByIdDirectPrivate(this, "closedPromiseCapability").@promise;
 }

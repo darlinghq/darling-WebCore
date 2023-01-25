@@ -25,9 +25,9 @@
 
 #pragma once
 
-#include "URL.h"
-#include "WorkerThread.h"
 #include <wtf/HashSet.h>
+#include <wtf/RefPtr.h>
+#include <wtf/URL.h>
 #include <wtf/text/WTFString.h>
 
 // All of these methods should be called on the Main Thread.
@@ -37,6 +37,8 @@ namespace WebCore {
 
 class ScriptExecutionContext;
 class WorkerThread;
+
+enum class WorkerThreadStartMode;
 
 class WorkerInspectorProxy {
     WTF_MAKE_NONCOPYABLE(WorkerInspectorProxy);
@@ -48,22 +50,23 @@ public:
     // A Worker's inspector messages come in and go out through the Page's WorkerAgent.
     class PageChannel {
     public:
-        virtual ~PageChannel() { }
-        virtual void sendMessageFromWorkerToFrontend(WorkerInspectorProxy*, const String&) = 0;
+        virtual ~PageChannel() = default;
+        virtual void sendMessageFromWorkerToFrontend(WorkerInspectorProxy&, const String&) = 0;
     };
 
     static HashSet<WorkerInspectorProxy*>& allWorkerInspectorProxies();
 
     const URL& url() const { return m_url; }
+    const String& name() const { return m_name; }
     const String& identifier() const { return m_identifier; }
     ScriptExecutionContext* scriptExecutionContext() const { return m_scriptExecutionContext.get(); }
 
     WorkerThreadStartMode workerStartMode(ScriptExecutionContext&);
-    void workerStarted(ScriptExecutionContext*, WorkerThread*, const URL&);
+    void workerStarted(ScriptExecutionContext*, WorkerThread*, const URL&, const String& name);
     void workerTerminated();
 
     void resumeWorkerIfPaused();
-    void connectToWorkerInspectorController(PageChannel*);
+    void connectToWorkerInspectorController(PageChannel&);
     void disconnectFromWorkerInspectorController();
     void sendMessageToWorkerInspectorController(const String&);
     void sendMessageFromWorkerToFrontend(const String&);
@@ -73,6 +76,7 @@ private:
     RefPtr<WorkerThread> m_workerThread;
     String m_identifier;
     URL m_url;
+    String m_name;
     PageChannel* m_pageChannel { nullptr };
 };
 

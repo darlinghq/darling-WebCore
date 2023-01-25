@@ -28,13 +28,18 @@
 #include "ActiveDOMObject.h"
 #include "CSSFontFaceSet.h"
 #include "EventTarget.h"
-#include "JSDOMPromiseDeferred.h"
+#include "IDLTypes.h"
+#include <wtf/UniqueRef.h>
 
 namespace WebCore {
 
-class DOMCoreException;
+template<typename IDLType> class DOMPromiseDeferred;
+template<typename IDLType> class DOMPromiseProxyWithResolveCallback;
 
-class FontFaceSet final : public RefCounted<FontFaceSet>, private CSSFontFaceSetClient, public EventTargetWithInlineData, private ActiveDOMObject {
+class DOMException;
+
+class FontFaceSet final : public RefCounted<FontFaceSet>, private CSSFontFaceSetClient, public EventTargetWithInlineData, public ActiveDOMObject {
+    WTF_MAKE_ISO_ALLOCATED(FontFaceSet);
 public:
     static Ref<FontFaceSet> create(Document&, const Vector<RefPtr<FontFace>>& initialFaces);
     static Ref<FontFaceSet> create(Document&, CSSFontFaceSet& backing);
@@ -53,8 +58,9 @@ public:
     enum class LoadStatus { Loading, Loaded };
     LoadStatus status() const;
 
-    using ReadyPromise = DOMPromiseDeferred<IDLInterface<FontFaceSet>>;
-    void registerReady(ReadyPromise&&);
+    using ReadyPromise = DOMPromiseProxyWithResolveCallback<IDLInterface<FontFaceSet>>;
+    ReadyPromise& ready() { return m_readyPromise.get(); }
+    void documentDidFinishLoading();
 
     CSSFontFaceSet& backing() { return m_backing; }
 
@@ -84,8 +90,8 @@ private:
         PendingPromise(LoadPromise&&);
 
     public:
-        Vector<RefPtr<FontFace>> faces;
-        LoadPromise promise;
+        Vector<Ref<FontFace>> faces;
+        UniqueRef<LoadPromise> promise;
         bool hasReachedTerminalState { false };
     };
 
@@ -99,7 +105,6 @@ private:
 
     // ActiveDOMObject
     const char* activeDOMObjectName() const final { return "FontFaceSet"; }
-    bool canSuspendForDocumentSuspension() const final;
 
     // EventTarget
     EventTargetInterface eventTargetInterface() const final { return FontFaceSetEventTargetInterfaceType; }
@@ -107,10 +112,14 @@ private:
     void refEventTarget() final { ref(); }
     void derefEventTarget() final { deref(); }
 
+    // Callback for ReadyPromise.
+    FontFaceSet& readyPromiseResolve();
+
     Ref<CSSFontFaceSet> m_backing;
     HashMap<RefPtr<FontFace>, Vector<Ref<PendingPromise>>> m_pendingPromises;
-    std::optional<ReadyPromise> m_promise;
-    bool m_isReady { true };
+    UniqueRef<ReadyPromise> m_readyPromise;
+
+    bool m_isDocumentLoaded { true };
 };
 
 }

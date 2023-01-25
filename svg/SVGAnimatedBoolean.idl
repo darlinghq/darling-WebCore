@@ -24,9 +24,10 @@
  */
 
 [
-    SkipVTableValidation
+    SkipVTableValidation,
+    Exposed=Window
 ] interface SVGAnimatedBoolean {
-    [SetterMayThrowException] attribute boolean baseVal;
+    attribute boolean baseVal;
     readonly attribute boolean animVal;
 };
 

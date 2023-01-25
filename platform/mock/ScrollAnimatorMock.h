@@ -28,8 +28,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef ScrollAnimatorMock_h
-#define ScrollAnimatorMock_h
+#pragma once
 
 #include "ScrollAnimator.h"
 
@@ -43,20 +42,22 @@ public:
     ScrollAnimatorMock(ScrollableArea&, WTF::Function<void(const String&)>&&);
     virtual ~ScrollAnimatorMock();
 
+private:
+
 #if ENABLE(RUBBER_BANDING)
-    bool allowsHorizontalStretching(const PlatformWheelEvent&) override { return false; }
-    bool allowsVerticalStretching(const PlatformWheelEvent&) override { return false; }
-    IntSize stretchAmount() override { return IntSize(); }
-    bool pinnedInDirection(const FloatSize&) override { return false; }
-    bool canScrollHorizontally() override { return false; }
-    bool canScrollVertically() override { return false; }
-    bool shouldRubberBandInDirection(ScrollDirection) override { return false; }
+    bool allowsHorizontalStretching(const PlatformWheelEvent&) const override { return false; }
+    bool allowsVerticalStretching(const PlatformWheelEvent&) const override { return false; }
+    IntSize stretchAmount() const override { return IntSize(); }
+    bool isPinnedForScrollDelta(const FloatSize&) const override { return false; }
+    RectEdges<bool> edgePinnedState() const override { return { }; }
+    bool allowsHorizontalScrolling() const override { return false; }
+    bool allowsVerticalScrolling() const override { return false; }
+    bool shouldRubberBandInDirection(ScrollDirection) const override { return false; }
     void immediateScrollBy(const FloatSize&) override { }
     void immediateScrollByWithoutContentEdgeConstraints(const FloatSize&) override { }
     void adjustScrollPositionToBoundsIfNecessary() override { }
 #endif
 
-private:
     void didAddVerticalScrollbar(Scrollbar*) override;
     void didAddHorizontalScrollbar(Scrollbar*) override;
     void willRemoveVerticalScrollbar(Scrollbar*) override;
@@ -75,4 +76,3 @@ private:
 
 } // namespace WebCore
 
-#endif // ScrollAnimatorMock_h

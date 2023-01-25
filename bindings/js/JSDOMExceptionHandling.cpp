@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
- *  Copyright (C) 2004-2017 Apple Inc. All rights reserved.
+ *  Copyright (C) 2004-2020 Apple Inc. All rights reserved.
  *  Copyright (C) 2007 Samuel Weinig <sam@webkit.org>
  *  Copyright (C) 2013 Michael Pruett <michael@68k.org>
  *
@@ -23,55 +23,44 @@
 #include "JSDOMExceptionHandling.h"
 
 #include "CachedScript.h"
+#include "DOMException.h"
 #include "DOMWindow.h"
-#include "ExceptionCodeDescription.h"
-#include "ExceptionHeaders.h"
-#include "ExceptionInterfaces.h"
+#include "JSDOMException.h"
 #include "JSDOMPromiseDeferred.h"
 #include "JSDOMWindow.h"
-#include "JSDynamicDowncast.h"
-#include "JSExceptionBase.h"
-#include <inspector/ScriptCallStack.h>
-#include <inspector/ScriptCallStackFactory.h>
-#include <runtime/ErrorHandlingScope.h>
-#include <runtime/Exception.h>
-#include <runtime/ExceptionHelpers.h>
-#include <wtf/text/StringBuilder.h>
-
-#if ENABLE(INDEXED_DATABASE)
-#include "IDBDatabaseException.h"
-#endif
-
-using namespace JSC;
+#include "ScriptExecutionContext.h"
+#include <JavaScriptCore/ErrorHandlingScope.h>
+#include <JavaScriptCore/Exception.h>
+#include <JavaScriptCore/ExceptionHelpers.h>
+#include <JavaScriptCore/ScriptCallStack.h>
+#include <JavaScriptCore/ScriptCallStackFactory.h>
 
 namespace WebCore {
+using namespace JSC;
 
-void reportException(ExecState* exec, JSValue exceptionValue, CachedScript* cachedScript)
+void reportException(JSGlobalObject* lexicalGlobalObject, JSValue exceptionValue, CachedScript* cachedScript)
 {
-    VM& vm = exec->vm();
+    VM& vm = lexicalGlobalObject->vm();
     RELEASE_ASSERT(vm.currentThreadIsHoldingAPILock());
-    auto* exception = jsDynamicDowncast<JSC::Exception*>(vm, exceptionValue);
+    auto* exception = jsDynamicCast<JSC::Exception*>(vm, exceptionValue);
     if (!exception) {
         exception = vm.lastException();
         if (!exception)
-            exception = JSC::Exception::create(exec->vm(), exceptionValue, JSC::Exception::DoNotCaptureStack);
+            exception = JSC::Exception::create(lexicalGlobalObject->vm(), exceptionValue, JSC::Exception::DoNotCaptureStack);
     }
 
-    reportException(exec, exception, cachedScript);
+    reportException(lexicalGlobalObject, exception, cachedScript);
 }
 
-String retrieveErrorMessage(ExecState& state, VM& vm, JSValue exception, CatchScope& catchScope)
+String retrieveErrorMessage(JSGlobalObject& lexicalGlobalObject, VM& vm, JSValue exception, CatchScope& catchScope)
 {
-    if (auto* exceptionBase = toExceptionBase(vm, exception))
-        return exceptionBase->toString();
-
     // FIXME: <http://webkit.org/b/115087> Web Inspector: WebCore::reportException should not evaluate JavaScript handling exceptions
     // If this is a custom exception object, call toString on it to try and get a nice string representation for the exception.
     String errorMessage;
-    if (auto* error = jsDynamicDowncast<ErrorInstance*>(vm, exception))
-        errorMessage = error->sanitizedToString(&state);
+    if (auto* error = jsDynamicCast<ErrorInstance*>(vm, exception))
+        errorMessage = error->sanitizedToString(&lexicalGlobalObject);
     else
-        errorMessage = exception.toWTFString(&state);
+        errorMessage = exception.toWTFString(&lexicalGlobalObject);
 
     // We need to clear any new exception that may be thrown in the toString() call above.
     // reportException() is not supposed to be making new exceptions.
@@ -80,23 +69,23 @@ String retrieveErrorMessage(ExecState& state, VM& vm, JSValue exception, CatchSc
     return errorMessage;
 }
 
-void reportException(ExecState* exec, JSC::Exception* exception, CachedScript* cachedScript, ExceptionDetails* exceptionDetails)
+void reportException(JSGlobalObject* lexicalGlobalObject, JSC::Exception* exception, CachedScript* cachedScript, ExceptionDetails* exceptionDetails)
 {
-    VM& vm = exec->vm();
+    VM& vm = lexicalGlobalObject->vm();
     auto scope = DECLARE_CATCH_SCOPE(vm);
 
     RELEASE_ASSERT(vm.currentThreadIsHoldingAPILock());
     if (isTerminatedExecutionException(vm, exception))
         return;
 
-    ErrorHandlingScope errorScope(exec->vm());
+    ErrorHandlingScope errorScope(lexicalGlobalObject->vm());
 
-    auto callStack = Inspector::createScriptCallStackFromException(exec, exception, Inspector::ScriptCallStack::maxCallStackSizeToCapture);
+    auto callStack = Inspector::createScriptCallStackFromException(lexicalGlobalObject, exception);
     scope.clearException();
     vm.clearLastException();
 
-    auto* globalObject = jsCast<JSDOMGlobalObject*>(exec->lexicalGlobalObject());
-    if (auto* window = jsDynamicDowncast<JSDOMWindow*>(vm, globalObject)) {
+    auto* globalObject = jsCast<JSDOMGlobalObject*>(lexicalGlobalObject);
+    if (auto* window = jsDynamicCast<JSDOMWindow*>(vm, globalObject)) {
         if (!window->wrapped().isCurrentlyDisplayedInFrame())
             return;
     }
@@ -110,7 +99,7 @@ void reportException(ExecState* exec, JSC::Exception* exception, CachedScript* c
         exceptionSourceURL = callFrame->sourceURL();
     }
 
-    auto errorMessage = retrieveErrorMessage(*exec, vm, exception->value(), scope);
+    auto errorMessage = retrieveErrorMessage(*lexicalGlobalObject, vm, exception->value(), scope);
     globalObject->scriptExecutionContext()->reportException(errorMessage, lineNumber, columnNumber, exceptionSourceURL, exception, callStack->size() ? callStack.ptr() : nullptr, cachedScript);
 
     if (exceptionDetails) {
@@ -121,218 +110,135 @@ void reportException(ExecState* exec, JSC::Exception* exception, CachedScript* c
     }
 }
 
-void reportCurrentException(ExecState* exec)
+void reportCurrentException(JSGlobalObject* lexicalGlobalObject)
 {
-    VM& vm = exec->vm();
+    VM& vm = lexicalGlobalObject->vm();
     auto scope = DECLARE_CATCH_SCOPE(vm);
     auto* exception = scope.exception();
     scope.clearException();
-    reportException(exec, exception);
+    reportException(lexicalGlobalObject, exception);
 }
 
-static JSValue createDOMException(ExecState* exec, ExceptionCode ec, const String* message = nullptr)
+JSValue createDOMException(JSGlobalObject* lexicalGlobalObject, ExceptionCode ec, const String& message)
 {
-    if (!ec || ec == ExistingExceptionError)
+    if (ec == ExistingExceptionError)
         return jsUndefined();
 
     // FIXME: Handle other WebIDL exception types.
     if (ec == TypeError) {
-        if (!message || message->isEmpty())
-            return createTypeError(exec);
-        return createTypeError(exec, *message);
+        if (message.isEmpty())
+            return createTypeError(lexicalGlobalObject);
+        return createTypeError(lexicalGlobalObject, message);
     }
 
     if (ec == RangeError) {
-        if (!message || message->isEmpty())
-            return createRangeError(exec, ASCIILiteral("Bad value"));
-        return createRangeError(exec, *message);
+        if (message.isEmpty())
+            return createRangeError(lexicalGlobalObject, "Bad value"_s);
+        return createRangeError(lexicalGlobalObject, message);
     }
 
     if (ec == StackOverflowError)
-        return createStackOverflowError(exec);
+        return createStackOverflowError(lexicalGlobalObject);
+    if (ec == OutOfMemoryError)
+        return createOutOfMemoryError(lexicalGlobalObject);
 
     // FIXME: All callers to createDOMException need to pass in the correct global object.
     // For now, we're going to assume the lexicalGlobalObject. Which is wrong in cases like this:
     // frames[0].document.createElement(null, null); // throws an exception which should have the subframe's prototypes.
-    JSDOMGlobalObject* globalObject = deprecatedGlobalObjectForPrototype(exec);
-
-    ExceptionCodeDescription description(ec);
-
-    CString messageCString;
-    if (message)
-        messageCString = message->utf8();
-    if (message && !message->isEmpty()) {
-        // It is safe to do this because the char* contents of the CString are copied into a new WTF::String before the CString is destroyed.
-        description.description = messageCString.data();
-    }
-
-    JSValue errorObject;
-    switch (description.type) {
-    case DOMCoreExceptionType:
-#if ENABLE(INDEXED_DATABASE)
-    case IDBDatabaseExceptionType:
-#endif
-        errorObject = toJS(exec, globalObject, DOMCoreException::create(description));
-        break;
-    case FileExceptionType:
-        errorObject = toJS(exec, globalObject, FileException::create(description));
-        break;
-    case SQLExceptionType:
-        errorObject = toJS(exec, globalObject, SQLException::create(description));
-        break;
-    case SVGExceptionType:
-        errorObject = toJS(exec, globalObject, SVGException::create(description));
-        break;
-    case XPathExceptionType:
-        errorObject = toJS(exec, globalObject, XPathException::create(description));
-        break;
-    }
+    JSDOMGlobalObject* globalObject = deprecatedGlobalObjectForPrototype(lexicalGlobalObject);
+    JSValue errorObject = toJS(lexicalGlobalObject, globalObject, DOMException::create(ec, message));
     
     ASSERT(errorObject);
-    addErrorInfo(exec, asObject(errorObject), true);
+    addErrorInfo(lexicalGlobalObject, asObject(errorObject), true);
     return errorObject;
 }
 
-JSValue createDOMException(ExecState* exec, ExceptionCode ec, const String& message)
+JSValue createDOMException(JSGlobalObject& lexicalGlobalObject, Exception&& exception)
 {
-    return createDOMException(exec, ec, &message);
+    return createDOMException(&lexicalGlobalObject, exception.code(), exception.releaseMessage());
 }
 
-JSValue createDOMException(ExecState& state, Exception&& exception)
-{
-    return createDOMException(&state, exception.code(), exception.releaseMessage());
-}
-
-void propagateExceptionSlowPath(JSC::ExecState& state, JSC::ThrowScope& throwScope, Exception&& exception)
+void propagateExceptionSlowPath(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& throwScope, Exception&& exception)
 {
     throwScope.assertNoException();
-    throwException(&state, throwScope, createDOMException(state, WTFMove(exception)));
+    throwException(&lexicalGlobalObject, throwScope, createDOMException(lexicalGlobalObject, WTFMove(exception)));
 }
     
-static EncodedJSValue throwTypeError(JSC::ExecState& state, JSC::ThrowScope& scope, const String& errorMessage)
+static EncodedJSValue throwTypeError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, const String& errorMessage)
 {
-    return throwVMTypeError(&state, scope, errorMessage);
+    return throwVMTypeError(&lexicalGlobalObject, scope, errorMessage);
 }
 
-static void appendArgumentMustBe(StringBuilder& builder, unsigned argumentIndex, const char* argumentName, const char* interfaceName, const char* functionName)
+template<typename... StringTypes> static String makeArgumentTypeErrorMessage(unsigned argumentIndex, const char* argumentName, const char* interfaceName, const char* functionName, StringTypes ...strings)
 {
-    builder.appendLiteral("Argument ");
-    builder.appendNumber(argumentIndex + 1);
-    builder.appendLiteral(" ('");
-    builder.append(argumentName);
-    builder.appendLiteral("') to ");
-    if (!functionName) {
-        builder.appendLiteral("the ");
-        builder.append(interfaceName);
-        builder.appendLiteral(" constructor");
-    } else {
-        builder.append(interfaceName);
-        builder.append('.');
-        builder.append(functionName);
-    }
-    builder.appendLiteral(" must be ");
+    return makeString(
+        "Argument ", argumentIndex + 1, " ('", argumentName, "') to ",
+        functionName ? std::make_tuple(interfaceName, ".", functionName) : std::make_tuple("the ", interfaceName, " constructor"),
+        " must be ", strings...
+    );
 }
 
-JSC::EncodedJSValue reportDeprecatedGetterError(JSC::ExecState& state, const char* interfaceName, const char* attributeName)
-{
-    auto& context = *jsCast<JSDOMGlobalObject*>(state.lexicalGlobalObject())->scriptExecutionContext();
-    context.addConsoleMessage(MessageSource::JS, MessageLevel::Error, makeString("Deprecated attempt to access property '", attributeName, "' on a non-", interfaceName, " object."));
-    return JSValue::encode(jsUndefined());
-}
-    
-void reportDeprecatedSetterError(JSC::ExecState& state, const char* interfaceName, const char* attributeName)
-{
-    auto& context = *jsCast<JSDOMGlobalObject*>(state.lexicalGlobalObject())->scriptExecutionContext();
-    context.addConsoleMessage(MessageSource::JS, MessageLevel::Error, makeString("Deprecated attempt to set property '", attributeName, "' on a non-", interfaceName, " object."));
-}
-
-void throwNotSupportedError(JSC::ExecState& state, JSC::ThrowScope& scope)
+void throwNotSupportedError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, ASCIILiteral message)
 {
     scope.assertNoException();
-    throwException(&state, scope, createDOMException(&state, NOT_SUPPORTED_ERR));
+    throwException(&lexicalGlobalObject, scope, createDOMException(&lexicalGlobalObject, NotSupportedError, message));
 }
 
-void throwNotSupportedError(JSC::ExecState& state, JSC::ThrowScope& scope, const char* message)
+void throwInvalidStateError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, ASCIILiteral message)
 {
     scope.assertNoException();
-    String messageString(message);
-    throwException(&state, scope, createDOMException(&state, NOT_SUPPORTED_ERR, &messageString));
+    throwException(&lexicalGlobalObject, scope, createDOMException(&lexicalGlobalObject, InvalidStateError, message));
 }
 
-void throwInvalidStateError(JSC::ExecState& state, JSC::ThrowScope& scope, const char* message)
+void throwSecurityError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, const String& message)
 {
     scope.assertNoException();
-    String messageString(message);
-    throwException(&state, scope, createDOMException(&state, INVALID_STATE_ERR, &messageString));
+    throwException(&lexicalGlobalObject, scope, createDOMException(&lexicalGlobalObject, SecurityError, message));
 }
 
-void throwSecurityError(JSC::ExecState& state, JSC::ThrowScope& scope, const String& message)
+JSC::EncodedJSValue throwArgumentMustBeEnumError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, unsigned argumentIndex, const char* argumentName, const char* functionInterfaceName, const char* functionName, const char* expectedValues)
 {
-    scope.assertNoException();
-    throwException(&state, scope, createDOMException(&state, SECURITY_ERR, message));
+    return throwVMTypeError(&lexicalGlobalObject, scope, makeArgumentTypeErrorMessage(argumentIndex, argumentName, functionInterfaceName, functionName, "one of: ", expectedValues));
 }
 
-JSC::EncodedJSValue throwArgumentMustBeEnumError(JSC::ExecState& state, JSC::ThrowScope& scope, unsigned argumentIndex, const char* argumentName, const char* functionInterfaceName, const char* functionName, const char* expectedValues)
+JSC::EncodedJSValue throwArgumentMustBeFunctionError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, unsigned argumentIndex, const char* argumentName, const char* interfaceName, const char* functionName)
 {
-    StringBuilder builder;
-    appendArgumentMustBe(builder, argumentIndex, argumentName, functionInterfaceName, functionName);
-    builder.appendLiteral("one of: ");
-    builder.append(expectedValues);
-    return throwVMTypeError(&state, scope, builder.toString());
+    return throwVMTypeError(&lexicalGlobalObject, scope, makeArgumentTypeErrorMessage(argumentIndex, argumentName, interfaceName, functionName, "a function"));
 }
 
-JSC::EncodedJSValue throwArgumentMustBeFunctionError(JSC::ExecState& state, JSC::ThrowScope& scope, unsigned argumentIndex, const char* argumentName, const char* interfaceName, const char* functionName)
+JSC::EncodedJSValue throwArgumentMustBeObjectError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, unsigned argumentIndex, const char* argumentName, const char* interfaceName, const char* functionName)
 {
-    StringBuilder builder;
-    appendArgumentMustBe(builder, argumentIndex, argumentName, interfaceName, functionName);
-    builder.appendLiteral("a function");
-    return throwVMTypeError(&state, scope, builder.toString());
+    return throwVMTypeError(&lexicalGlobalObject, scope, makeArgumentTypeErrorMessage(argumentIndex, argumentName, interfaceName, functionName, "an object"));
 }
 
-JSC::EncodedJSValue throwArgumentTypeError(JSC::ExecState& state, JSC::ThrowScope& scope, unsigned argumentIndex, const char* argumentName, const char* functionInterfaceName, const char* functionName, const char* expectedType)
+JSC::EncodedJSValue throwArgumentTypeError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, unsigned argumentIndex, const char* argumentName, const char* functionInterfaceName, const char* functionName, const char* expectedType)
 {
-    StringBuilder builder;
-    appendArgumentMustBe(builder, argumentIndex, argumentName, functionInterfaceName, functionName);
-    builder.appendLiteral("an instance of ");
-    builder.append(expectedType);
-    return throwVMTypeError(&state, scope, builder.toString());
+    return throwVMTypeError(&lexicalGlobalObject, scope, makeArgumentTypeErrorMessage(argumentIndex, argumentName, functionInterfaceName, functionName, "an instance of ", expectedType));
 }
 
-void throwArrayElementTypeError(JSC::ExecState& state, JSC::ThrowScope& scope)
+void throwAttributeTypeError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, const char* interfaceName, const char* attributeName, const char* expectedType)
 {
-    throwTypeError(state, scope, ASCIILiteral("Invalid Array element type"));
+    throwTypeError(lexicalGlobalObject, scope, makeString("The ", interfaceName, '.', attributeName, " attribute must be an instance of ", expectedType));
 }
 
-void throwAttributeTypeError(JSC::ExecState& state, JSC::ThrowScope& scope, const char* interfaceName, const char* attributeName, const char* expectedType)
+JSC::EncodedJSValue throwRequiredMemberTypeError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, const char* memberName, const char* dictionaryName, const char* expectedType)
 {
-    throwTypeError(state, scope, makeString("The ", interfaceName, '.', attributeName, " attribute must be an instance of ", expectedType));
+    return throwVMTypeError(&lexicalGlobalObject, scope, makeString("Member ", dictionaryName, '.', memberName, " is required and must be an instance of ", expectedType));
 }
 
-JSC::EncodedJSValue throwRequiredMemberTypeError(JSC::ExecState& state, JSC::ThrowScope& scope, const char* memberName, const char* dictionaryName, const char* expectedType)
+JSC::EncodedJSValue throwConstructorScriptExecutionContextUnavailableError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, const char* interfaceName)
 {
-    StringBuilder builder;
-    builder.appendLiteral("Member ");
-    builder.append(dictionaryName);
-    builder.append('.');
-    builder.append(memberName);
-    builder.appendLiteral(" is required and must be an instance of ");
-    builder.append(expectedType);
-    return throwVMTypeError(&state, scope, builder.toString());
+    return throwVMError(&lexicalGlobalObject, scope, createReferenceError(&lexicalGlobalObject, makeString(interfaceName, " constructor associated execution context is unavailable")));
 }
 
-JSC::EncodedJSValue throwConstructorScriptExecutionContextUnavailableError(JSC::ExecState& state, JSC::ThrowScope& scope, const char* interfaceName)
+void throwSequenceTypeError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope)
 {
-    return throwVMError(&state, scope, createReferenceError(&state, makeString(interfaceName, " constructor associated execution context is unavailable")));
+    throwTypeError(lexicalGlobalObject, scope, "Value is not a sequence"_s);
 }
 
-void throwSequenceTypeError(JSC::ExecState& state, JSC::ThrowScope& scope)
+void throwNonFiniteTypeError(JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope)
 {
-    throwTypeError(state, scope, ASCIILiteral("Value is not a sequence"));
-}
-
-void throwNonFiniteTypeError(ExecState& state, JSC::ThrowScope& scope)
-{
-    throwTypeError(&state, scope, ASCIILiteral("The provided value is non-finite"));
+    throwTypeError(&lexicalGlobalObject, scope, "The provided value is non-finite"_s);
 }
 
 String makeGetterTypeErrorMessage(const char* interfaceName, const char* attributeName)
@@ -340,19 +246,19 @@ String makeGetterTypeErrorMessage(const char* interfaceName, const char* attribu
     return makeString("The ", interfaceName, '.', attributeName, " getter can only be used on instances of ", interfaceName);
 }
 
-JSC::EncodedJSValue throwGetterTypeError(JSC::ExecState& state, JSC::ThrowScope& scope, const char* interfaceName, const char* attributeName)
+JSC::EncodedJSValue throwGetterTypeError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, const char* interfaceName, const char* attributeName)
 {
-    return throwVMTypeError(&state, scope, makeGetterTypeErrorMessage(interfaceName, attributeName));
+    return throwVMGetterTypeError(&lexicalGlobalObject, scope, makeGetterTypeErrorMessage(interfaceName, attributeName));
 }
 
-JSC::EncodedJSValue rejectPromiseWithGetterTypeError(JSC::ExecState& state, const char* interfaceName, const char* attributeName)
+JSC::EncodedJSValue rejectPromiseWithGetterTypeError(JSC::JSGlobalObject& lexicalGlobalObject, const char* interfaceName, const char* attributeName)
 {
-    return createRejectedPromiseWithTypeError(state, makeGetterTypeErrorMessage(interfaceName, attributeName));
+    return createRejectedPromiseWithTypeError(lexicalGlobalObject, makeGetterTypeErrorMessage(interfaceName, attributeName), RejectedPromiseWithTypeErrorCause::NativeGetter);
 }
 
-bool throwSetterTypeError(JSC::ExecState& state, JSC::ThrowScope& scope, const char* interfaceName, const char* attributeName)
+bool throwSetterTypeError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, const char* interfaceName, const char* attributeName)
 {
-    throwTypeError(state, scope, makeString("The ", interfaceName, '.', attributeName, " setter can only be used on instances of ", interfaceName));
+    throwTypeError(lexicalGlobalObject, scope, makeString("The ", interfaceName, '.', attributeName, " setter can only be used on instances of ", interfaceName));
     return false;
 }
 
@@ -361,9 +267,9 @@ String makeThisTypeErrorMessage(const char* interfaceName, const char* functionN
     return makeString("Can only call ", interfaceName, '.', functionName, " on instances of ", interfaceName);
 }
 
-EncodedJSValue throwThisTypeError(JSC::ExecState& state, JSC::ThrowScope& scope, const char* interfaceName, const char* functionName)
+EncodedJSValue throwThisTypeError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, const char* interfaceName, const char* functionName)
 {
-    return throwTypeError(state, scope, makeThisTypeErrorMessage(interfaceName, functionName));
+    return throwTypeError(lexicalGlobalObject, scope, makeThisTypeErrorMessage(interfaceName, functionName));
 }
 
 JSC::EncodedJSValue rejectPromiseWithThisTypeError(DeferredPromise& promise, const char* interfaceName, const char* methodName)
@@ -372,33 +278,21 @@ JSC::EncodedJSValue rejectPromiseWithThisTypeError(DeferredPromise& promise, con
     return JSValue::encode(jsUndefined());
 }
 
-JSC::EncodedJSValue rejectPromiseWithThisTypeError(JSC::ExecState& state, const char* interfaceName, const char* methodName)
+JSC::EncodedJSValue rejectPromiseWithThisTypeError(JSC::JSGlobalObject& lexicalGlobalObject, const char* interfaceName, const char* methodName)
 {
-    return createRejectedPromiseWithTypeError(state, makeThisTypeErrorMessage(interfaceName, methodName));
+    return createRejectedPromiseWithTypeError(lexicalGlobalObject, makeThisTypeErrorMessage(interfaceName, methodName), RejectedPromiseWithTypeErrorCause::InvalidThis);
 }
 
-void throwDOMSyntaxError(JSC::ExecState& state, JSC::ThrowScope& scope)
+void throwDOMSyntaxError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope, ASCIILiteral message)
 {
     scope.assertNoException();
-    throwException(&state, scope, createDOMException(&state, SYNTAX_ERR));
+    throwException(&lexicalGlobalObject, scope, createDOMException(&lexicalGlobalObject, SyntaxError, message));
 }
 
-void throwDataCloneError(JSC::ExecState& state, JSC::ThrowScope& scope)
+void throwDataCloneError(JSC::JSGlobalObject& lexicalGlobalObject, JSC::ThrowScope& scope)
 {
     scope.assertNoException();
-    throwException(&state, scope, createDOMException(&state, DATA_CLONE_ERR));
-}
-
-void throwIndexSizeError(JSC::ExecState& state, JSC::ThrowScope& scope)
-{
-    scope.assertNoException();
-    throwException(&state, scope, createDOMException(&state, INDEX_SIZE_ERR));
-}
-
-void throwTypeMismatchError(JSC::ExecState& state, JSC::ThrowScope& scope)
-{
-    scope.assertNoException();
-    throwException(&state, scope, createDOMException(&state, TYPE_MISMATCH_ERR));
+    throwException(&lexicalGlobalObject, scope, createDOMException(&lexicalGlobalObject, DataCloneError));
 }
 
 } // namespace WebCore

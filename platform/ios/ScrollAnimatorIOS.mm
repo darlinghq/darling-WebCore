@@ -23,24 +23,24 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "ScrollAnimatorIOS.h"
+#import "config.h"
+#import "ScrollAnimatorIOS.h"
 
-#include "Frame.h"
-#include "RenderLayer.h"
-#include "ScrollableArea.h"
+#if PLATFORM(IOS_FAMILY)
+
+#import "Frame.h"
+#import "RenderLayer.h"
+#import "ScrollableArea.h"
 
 #if ENABLE(TOUCH_EVENTS)
-#include "PlatformTouchEventIOS.h"
+#import "PlatformTouchEventIOS.h"
 #endif
-
-using namespace WebCore;
 
 namespace WebCore {
 
 std::unique_ptr<ScrollAnimator> ScrollAnimator::create(ScrollableArea& scrollableArea)
 {
-    return std::make_unique<ScrollAnimatorIOS>(scrollableArea);
+    return makeUnique<ScrollAnimatorIOS>(scrollableArea);
 }
 
 ScrollAnimatorIOS::ScrollAnimatorIOS(ScrollableArea& scrollableArea)
@@ -103,8 +103,9 @@ bool ScrollAnimatorIOS::handleTouchEvent(const PlatformTouchEvent& touchEvent)
         determineScrollableAreaForTouchSequence(touchDelta);
 
     if (!m_committedToScrollAxis) {
-        bool horizontallyScrollable = m_scrollableArea.scrollSize(HorizontalScrollbar);
-        bool verticallyScrollable = m_scrollableArea.scrollSize(VerticalScrollbar);
+        auto scrollSize = m_scrollableArea.maximumScrollPosition() - m_scrollableArea.minimumScrollPosition();
+        bool horizontallyScrollable = scrollSize.width();
+        bool verticallyScrollable = scrollSize.height();
 
         if (!horizontallyScrollable && !verticallyScrollable)
             return false;
@@ -171,7 +172,7 @@ void ScrollAnimatorIOS::determineScrollableAreaForTouchSequence(const IntSize& s
 
     ScrollableArea* scrollableArea = &m_scrollableArea;
     while (true) {
-        if (!scrollableArea->isPinnedInBothDirections(scrollDelta))
+        if (!scrollableArea->isPinnedForScrollDelta(scrollDelta))
             break;
 
         ScrollableArea* enclosingArea = scrollableArea->enclosingScrollableArea();
@@ -187,3 +188,5 @@ void ScrollAnimatorIOS::determineScrollableAreaForTouchSequence(const IntSize& s
 #endif
 
 } // namespace WebCore
+
+#endif // PLATFORM(IOS_FAMILY)

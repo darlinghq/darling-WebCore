@@ -88,7 +88,7 @@ public:
     void drawTileMapContents(CGContextRef, CGRect layerBounds) const;
 #endif
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     unsigned numberOfUnparentedTiles() const { return m_cohortList.size(); }
     void removeUnparentedTilesNow();
 #endif
@@ -120,13 +120,13 @@ private:
 
     struct TileCohortInfo {
         TileCohort cohort;
-        double creationTime; // in monotonicallyIncreasingTime().
-        TileCohortInfo(TileCohort inCohort, double inTime)
+        MonotonicTime creationTime;
+        TileCohortInfo(TileCohort inCohort, MonotonicTime inTime)
             : cohort(inCohort)
             , creationTime(inTime)
         { }
 
-        double timeUntilExpiration();
+        Seconds timeUntilExpiration();
     };
 
     void removeAllTiles();

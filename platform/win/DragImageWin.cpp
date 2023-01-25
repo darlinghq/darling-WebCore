@@ -34,12 +34,12 @@
 #include "GraphicsContext.h"
 #include "HWndDC.h"
 #include "Image.h"
-#include "URL.h"
 #include "StringTruncator.h"
 #include "TextIndicator.h"
 #include "TextRun.h"
 #include "WebCoreTextRenderer.h"
 #include <wtf/RetainPtr.h>
+#include <wtf/URL.h>
 #include <wtf/win/GDIObject.h>
 
 #include <windows.h>
@@ -72,10 +72,9 @@ DragImageRef dissolveDragImageToFraction(DragImageRef image, float)
         
 DragImageRef createDragImageIconForCachedImageFilename(const String& filename)
 {
-    SHFILEINFO shfi = {0};
-    String fname = filename;
-    if (FAILED(SHGetFileInfo(static_cast<LPCWSTR>(fname.charactersWithNullTermination().data()), FILE_ATTRIBUTE_NORMAL,
-        &shfi, sizeof(shfi), SHGFI_ICON | SHGFI_USEFILEATTRIBUTES)))
+    SHFILEINFO shfi { };
+    auto fname = filename.wideCharacters();
+    if (FAILED(SHGetFileInfo(fname.data(), FILE_ATTRIBUTE_NORMAL, &shfi, sizeof(shfi), SHGFI_ICON | SHGFI_USEFILEATTRIBUTES)))
         return 0;
 
     ICONINFO iconInfo;
@@ -96,7 +95,6 @@ const float DragLabelBorderY = 2;
 const float DragLabelRadius = 5;
 const float LabelBorderYOffset = 2;
 
-const float MinDragLabelWidthBeforeClip = 120;
 const float MaxDragLabelWidth = 200;
 const float MaxDragLabelStringWidth = (MaxDragLabelWidth - 2 * DragLabelBorderX);
 
@@ -116,7 +114,7 @@ static FontCascade dragLabelFont(int size, bool bold, FontRenderingMode renderin
     description.setSpecifiedSize((float)size);
     description.setComputedSize((float)size);
     description.setRenderingMode(renderingMode);
-    result = FontCascade(description, 0, 0);
+    result = FontCascade(WTFMove(description), 0, 0);
     result.update(0);
     return result;
 }
@@ -191,14 +189,14 @@ DragImageRef createDragImageForLink(Element&, URL& url, const String& inLabel, T
     GraphicsContext context(contextRef);
     // On Mac alpha is {0.7, 0.7, 0.7, 0.8}, however we can't control alpha
     // for drag images on win, so we use 1
-    static const Color backgroundColor(140, 140, 140);
+    constexpr auto backgroundColor = SRGBA<uint8_t> { 140, 140, 140 };
     static const IntSize radii(DragLabelRadius, DragLabelRadius);
     IntRect rect(0, 0, imageSize.width(), imageSize.height());
     context.fillRoundedRect(FloatRoundedRect(rect, radii, radii, radii, radii), backgroundColor);
  
     // Draw the text
-    static const Color topColor(0, 0, 0, 255); // original alpha = 0.75
-    static const Color bottomColor(255, 255, 255, 127); // original alpha = 0.5
+    constexpr auto topColor = Color::black; // original alpha = 0.75
+    constexpr auto bottomColor = Color::white.colorWithAlphaByte(127); // original alpha = 0.5
     if (drawURLString) {
         if (clipURLString)
             urlString = StringTruncator::rightTruncate(urlString, imageSize.width() - (DragLabelBorderX * 2.0f), *urlFont);

@@ -18,16 +18,17 @@
  */
 
 #include "config.h"
-
-#if ENABLE(SVG_FONTS)
 #include "SVGAltGlyphDefElement.h"
 
 #include "ElementIterator.h"
 #include "SVGAltGlyphItemElement.h"
 #include "SVGGlyphRefElement.h"
 #include "SVGNames.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(SVGAltGlyphDefElement);
 
 inline SVGAltGlyphDefElement::SVGAltGlyphDefElement(const QualifiedName& tagName, Document& document)
     : SVGElement(tagName, document)
@@ -65,7 +66,7 @@ bool SVGAltGlyphDefElement::hasValidGlyphElements(Vector<String>& glyphNames) co
     // element surrounding those characters.
     //
     // The spec doesn't tell how to deal with the mixing of <glyphRef> and <altGlyItem>.
-    // However, we determine content model by the the type of the first appearing element
+    // However, we determine content model by the type of the first appearing element
     // just like Opera 11 does. After the content model is determined we skip elements
     // which don't comform to it. For example:
     // a.    <altGlyphDef>
@@ -117,5 +118,3 @@ bool SVGAltGlyphDefElement::hasValidGlyphElements(Vector<String>& glyphNames) co
 }
 
 }
-
-#endif

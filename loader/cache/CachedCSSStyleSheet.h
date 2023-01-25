@@ -34,7 +34,7 @@ struct CSSParserContext;
 
 class CachedCSSStyleSheet final : public CachedResource {
 public:
-    CachedCSSStyleSheet(CachedResourceRequest&&, SessionID);
+    CachedCSSStyleSheet(CachedResourceRequest&&, const PAL::SessionID&, const CookieJar*);
     virtual ~CachedCSSStyleSheet();
 
     enum class MIMETypeCheckHint { Strict, Lax };
@@ -55,13 +55,12 @@ private:
     void setEncoding(const String&) final;
     String encoding() const final;
     const TextResourceDecoder* textResourceDecoder() const final { return m_decoder.get(); }
-    void finishLoading(SharedBuffer*) final;
+    void finishLoading(SharedBuffer*, const NetworkLoadMetrics&) final;
     void destroyDecodedData() final;
 
     void setBodyDataFrom(const CachedResource&) final;
 
-protected:
-    void checkNotify() final;
+    void checkNotify(const NetworkLoadMetrics&) final;
 
     RefPtr<TextResourceDecoder> m_decoder;
     String m_decodedSheetText;
@@ -71,4 +70,4 @@ protected:
 
 } // namespace WebCore
 
-SPECIALIZE_TYPE_TRAITS_CACHED_RESOURCE(CachedCSSStyleSheet, CachedResource::CSSStyleSheet)
+SPECIALIZE_TYPE_TRAITS_CACHED_RESOURCE(CachedCSSStyleSheet, CachedResource::Type::CSSStyleSheet)

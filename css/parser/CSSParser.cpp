@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 2003 Lars Knoll (knoll@kde.org)
  * Copyright (C) 2005 Allan Sandfeld Jensen (kde@carewolf.com)
- * Copyright (C) 2004-2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2004-2020 Apple Inc. All rights reserved.
  * Copyright (C) 2007 Nicholas Shanks <webkit@nickshanks.com>
  * Copyright (C) 2008 Eric Seidel <eric@webkit.org>
  * Copyright (C) 2009 Torch Mobile Inc. All rights reserved. (http://www.torchmobile.com/)
@@ -28,98 +28,42 @@
 #include "config.h"
 #include "CSSParser.h"
 
+#include "CSSCustomPropertyValue.h"
 #include "CSSKeyframeRule.h"
 #include "CSSParserFastPaths.h"
 #include "CSSParserImpl.h"
+#include "CSSParserTokenRange.h"
 #include "CSSPendingSubstitutionValue.h"
 #include "CSSPropertyParser.h"
+#include "CSSPropertyParserHelpers.h"
 #include "CSSSelectorParser.h"
 #include "CSSSupportsParser.h"
 #include "CSSTokenizer.h"
+#include "CSSValuePool.h"
 #include "CSSVariableData.h"
 #include "CSSVariableReferenceValue.h"
 #include "Document.h"
 #include "Element.h"
+#include "Page.h"
+#include "RenderStyle.h"
 #include "RenderTheme.h"
-#include "RuntimeEnabledFeatures.h"
 #include "Settings.h"
+#include "StyleBuilder.h"
 #include "StyleColor.h"
+#include "StyleResolver.h"
 #include "StyleRule.h"
 #include "StyleSheetContents.h"
 #include <wtf/NeverDestroyed.h>
 #include <wtf/text/StringBuilder.h>
 
-using namespace WTF;
-
 namespace WebCore {
-
-const CSSParserContext& strictCSSParserContext()
-{
-    static NeverDestroyed<CSSParserContext> strictContext(HTMLStandardMode);
-    return strictContext;
-}
-
-CSSParserContext::CSSParserContext(CSSParserMode mode, const URL& baseURL)
-    : baseURL(baseURL)
-    , mode(mode)
-    , cssGridLayoutEnabled(RuntimeEnabledFeatures::sharedFeatures().isCSSGridLayoutEnabled())
-{
-#if PLATFORM(IOS)
-    // FIXME: Force the site specific quirk below to work on iOS. Investigating other site specific quirks
-    // to see if we can enable the preference all together is to be handled by:
-    // <rdar://problem/8493309> Investigate Enabling Site Specific Quirks in MobileSafari and UIWebView
-    needsSiteSpecificQuirks = true;
-#endif
-}
-
-CSSParserContext::CSSParserContext(Document& document, const URL& baseURL, const String& charset)
-    : baseURL(baseURL.isNull() ? document.baseURL() : baseURL)
-    , charset(charset)
-    , mode(document.inQuirksMode() ? HTMLQuirksMode : HTMLStandardMode)
-    , isHTMLDocument(document.isHTMLDocument())
-    , cssGridLayoutEnabled(document.isCSSGridLayoutEnabled())
-{
-    needsSiteSpecificQuirks = document.settings().needsSiteSpecificQuirks();
-    enforcesCSSMIMETypeInNoQuirksMode = document.settings().enforceCSSMIMETypeInNoQuirksMode();
-    useLegacyBackgroundSizeShorthandBehavior = document.settings().useLegacyBackgroundSizeShorthandBehavior();
-#if ENABLE(TEXT_AUTOSIZING)
-    textAutosizingEnabled = document.settings().textAutosizingEnabled();
-#endif
-    springTimingFunctionEnabled = document.settings().springTimingFunctionEnabled();
-    constantPropertiesEnabled = document.settings().constantPropertiesEnabled();
-    deferredCSSParserEnabled = document.settings().deferredCSSParserEnabled();
-
-#if PLATFORM(IOS)
-    // FIXME: Force the site specific quirk below to work on iOS. Investigating other site specific quirks
-    // to see if we can enable the preference all together is to be handled by:
-    // <rdar://problem/8493309> Investigate Enabling Site Specific Quirks in MobileSafari and UIWebView
-    needsSiteSpecificQuirks = true;
-#endif
-}
-
-bool operator==(const CSSParserContext& a, const CSSParserContext& b)
-{
-    return a.baseURL == b.baseURL
-        && a.charset == b.charset
-        && a.mode == b.mode
-        && a.isHTMLDocument == b.isHTMLDocument
-        && a.cssGridLayoutEnabled == b.cssGridLayoutEnabled
-        && a.needsSiteSpecificQuirks == b.needsSiteSpecificQuirks
-        && a.enforcesCSSMIMETypeInNoQuirksMode == b.enforcesCSSMIMETypeInNoQuirksMode
-        && a.useLegacyBackgroundSizeShorthandBehavior == b.useLegacyBackgroundSizeShorthandBehavior
-        && a.springTimingFunctionEnabled == b.springTimingFunctionEnabled
-        && a.constantPropertiesEnabled == b.constantPropertiesEnabled
-        && a.deferredCSSParserEnabled == b.deferredCSSParserEnabled;
-}
 
 CSSParser::CSSParser(const CSSParserContext& context)
     : m_context(context)
 {
 }
 
-CSSParser::~CSSParser()
-{
-}
+CSSParser::~CSSParser() = default;
 
 void CSSParser::parseSheet(StyleSheetContents* sheet, const String& string, RuleParsing ruleParsing)
 {
@@ -145,47 +89,69 @@ RefPtr<StyleRuleKeyframe> CSSParser::parseKeyframeRule(const String& string)
 bool CSSParser::parseSupportsCondition(const String& condition)
 {
     CSSParserImpl parser(m_context, condition);
+    if (!parser.tokenizer())
+        return false;
     return CSSSupportsParser::supportsCondition(parser.tokenizer()->tokenRange(), parser, CSSSupportsParser::ForWindowCSS) == CSSSupportsParser::Supported;
 }
 
 Color CSSParser::parseColor(const String& string, bool strict)
 {
-    if (string.isEmpty())
-        return Color();
-    
-    // Try named colors first.
-    Color namedColor { string };
-    if (namedColor.isValid())
-        return namedColor;
-    
-    // Try the fast path to parse hex and rgb.
-    RefPtr<CSSValue> value = CSSParserFastPaths::parseColor(string, strict ? HTMLStandardMode : HTMLQuirksMode);
-    
-    // If that fails, try the full parser.
-    if (!value)
-        value = parseSingleValue(CSSPropertyColor, string, strictCSSParserContext());
-    if (!value || !value->isPrimitiveValue())
-        return Color();
-    const auto& primitiveValue = downcast<CSSPrimitiveValue>(*value);
+    if (auto color = CSSParserFastPaths::parseSimpleColor(string, strict))
+        return *color;
+    // FIXME: Unclear why we want to ignore the boolean argument "strict" and always pass strictCSSParserContext here.
+    auto value = parseSingleValue(CSSPropertyColor, string, strictCSSParserContext());
+    if (!is<CSSPrimitiveValue>(value))
+        return { };
+    auto& primitiveValue = downcast<CSSPrimitiveValue>(*value);
     if (!primitiveValue.isRGBColor())
-        return Color();
+        return { };
     return primitiveValue.color();
 }
 
-Color CSSParser::parseSystemColor(const String& string)
+Color CSSParser::parseColorWorkerSafe(const String& string)
 {
-    CSSValueID id = cssValueKeywordID(string);
-    if (!StyleColor::isSystemColor(id))
-        return Color();
-    
-    return RenderTheme::singleton().systemColor(id);
+    if (auto color = CSSParserFastPaths::parseSimpleColor(string))
+        return *color;
+
+    CSSTokenizer tokenizer(string);
+    CSSParserTokenRange range(tokenizer.tokenRange());
+    range.consumeWhitespace();
+
+    return CSSPropertyParserHelpers::consumeColorWorkerSafe(range, HTMLStandardMode);
+}
+
+Color CSSParser::parseSystemColor(StringView string)
+{
+    auto keyword = cssValueKeywordID(string);
+    if (!StyleColor::isSystemColor(keyword))
+        return { };
+    return RenderTheme::singleton().systemColor(keyword, { });
+}
+
+Optional<SRGBA<uint8_t>> CSSParser::parseNamedColor(StringView string)
+{
+    return CSSParserFastPaths::parseNamedColor(string);
+}
+
+Optional<SRGBA<uint8_t>> CSSParser::parseHexColor(StringView string)
+{
+    return CSSParserFastPaths::parseHexColor(string);
+}
+
+Optional<CSSPropertyParserHelpers::FontRaw> CSSParser::parseFontWorkerSafe(const String& string, CSSParserMode cssParserMode)
+{
+    CSSTokenizer tokenizer(string);
+    CSSParserTokenRange range(tokenizer.tokenRange());
+    range.consumeWhitespace();
+
+    return CSSPropertyParserHelpers::consumeFontWorkerSafe(range, cssParserMode);
 }
 
 RefPtr<CSSValue> CSSParser::parseSingleValue(CSSPropertyID propertyID, const String& string, const CSSParserContext& context)
 {
     if (string.isEmpty())
         return nullptr;
-    if (RefPtr<CSSValue> value = CSSParserFastPaths::maybeParseValue(propertyID, string, context.mode))
+    if (auto value = CSSParserFastPaths::maybeParseValue(propertyID, string, context))
         return value;
     CSSTokenizer tokenizer(string);
     return CSSPropertyParser::parseSingleValue(propertyID, tokenizer.tokenRange(), context);
@@ -194,15 +160,13 @@ RefPtr<CSSValue> CSSParser::parseSingleValue(CSSPropertyID propertyID, const Str
 CSSParser::ParseResult CSSParser::parseValue(MutableStyleProperties& declaration, CSSPropertyID propertyID, const String& string, bool important, const CSSParserContext& context)
 {
     ASSERT(!string.isEmpty());
-    RefPtr<CSSValue> value = CSSParserFastPaths::maybeParseValue(propertyID, string, context.mode);
-    if (value)
+    if (auto value = CSSParserFastPaths::maybeParseValue(propertyID, string, context))
         return declaration.addParsedProperty(CSSProperty(propertyID, WTFMove(value), important)) ? CSSParser::ParseResult::Changed : CSSParser::ParseResult::Unchanged;
-
     CSSParser parser(context);
     return parser.parseValue(declaration, propertyID, string, important);
 }
 
-CSSParser::ParseResult CSSParser::parseCustomPropertyValue(MutableStyleProperties& declaration, const AtomicString& propertyName, const String& string, bool important, const CSSParserContext& context)
+CSSParser::ParseResult CSSParser::parseCustomPropertyValue(MutableStyleProperties& declaration, const AtomString& propertyName, const String& string, bool important, const CSSParserContext& context)
 {
     return CSSParserImpl::parseCustomPropertyValue(&declaration, propertyName, string, important, context);
 }
@@ -212,16 +176,13 @@ CSSParser::ParseResult CSSParser::parseValue(MutableStyleProperties& declaration
     return CSSParserImpl::parseValue(&declaration, propertyID, string, important, m_context);
 }
 
-void CSSParser::parseSelector(const String& string, CSSSelectorList& selectorList)
+Optional<CSSSelectorList> CSSParser::parseSelector(const String& string)
 {
-    CSSTokenizer tokenizer(string);
-    selectorList = CSSSelectorParser::parseSelector(tokenizer.tokenRange(), m_context, nullptr);
+    return parseCSSSelector(CSSTokenizer(string).tokenRange(), m_context, nullptr);
 }
 
-Ref<ImmutableStyleProperties> CSSParser::parseInlineStyleDeclaration(const String& string, Element* element)
+Ref<ImmutableStyleProperties> CSSParser::parseInlineStyleDeclaration(const String& string, const Element* element)
 {
-    CSSParserContext context(element->document());
-    context.mode = strictToCSSParserMode(element->isHTMLElement() && !element->document().inQuirksMode());
     return CSSParserImpl::parseInlineStyleDeclaration(string, element);
 }
 
@@ -235,64 +196,75 @@ void CSSParser::parseDeclarationForInspector(const CSSParserContext& context, co
     CSSParserImpl::parseDeclarationListForInspector(string, context, observer);
 }
 
-RefPtr<CSSValue> CSSParser::parseValueWithVariableReferences(CSSPropertyID propID, const CSSValue& value, const CustomPropertyValueMap& customProperties, TextDirection direction, WritingMode writingMode)
+RefPtr<CSSValue> CSSParser::parseValueWithVariableReferences(CSSPropertyID propID, const CSSValue& value, Style::BuilderState& builderState)
 {
-    if (value.isPendingSubstitutionValue()) {
-        // FIXME: Should have a resolvedShorthands cache to stop this from being done
-        // over and over for each longhand value.
-        const CSSPendingSubstitutionValue& pendingSubstitution = downcast<CSSPendingSubstitutionValue>(value);
-        CSSPropertyID shorthandID = pendingSubstitution.shorthandPropertyId();
+    ASSERT((propID == CSSPropertyCustom && value.isCustomPropertyValue()) || (propID != CSSPropertyCustom && !value.isCustomPropertyValue()));
+    auto& style = builderState.style();
+    auto direction = style.direction();
+    auto writingMode = style.writingMode();
+
+    if (is<CSSPendingSubstitutionValue>(value)) {
+        // FIXME: Should have a resolvedShorthands cache to stop this from being done over and over for each longhand value.
+        auto& substitution = downcast<CSSPendingSubstitutionValue>(value);
+
+        auto shorthandID = substitution.shorthandPropertyId();
         if (CSSProperty::isDirectionAwareProperty(shorthandID))
             shorthandID = CSSProperty::resolveDirectionAwareProperty(shorthandID, direction, writingMode);
-        CSSVariableReferenceValue* shorthandValue = pendingSubstitution.shorthandValue();
-        const CSSVariableData* variableData = shorthandValue->variableDataValue();
-        ASSERT(variableData);
-        
-        Vector<CSSParserToken> resolvedTokens;
-        if (!variableData->resolveTokenRange(customProperties, variableData->tokens(), resolvedTokens))
+
+        auto resolvedData = substitution.shorthandValue().resolveVariableReferences(builderState);
+        if (!resolvedData)
             return nullptr;
-        
+
         ParsedPropertyVector parsedProperties;
-        if (!CSSPropertyParser::parseValue(shorthandID, false, resolvedTokens, m_context, parsedProperties, StyleRule::Style))
+        if (!CSSPropertyParser::parseValue(shorthandID, false, resolvedData->tokens(), m_context, parsedProperties, StyleRuleType::Style))
             return nullptr;
-        
+
         for (auto& property : parsedProperties) {
             if (property.id() == propID)
                 return property.value();
         }
-        
+
         return nullptr;
     }
 
     if (value.isVariableReferenceValue()) {
         const CSSVariableReferenceValue& valueWithReferences = downcast<CSSVariableReferenceValue>(value);
-        const CSSVariableData* variableData = valueWithReferences.variableDataValue();
-        ASSERT(variableData);
-        
-        Vector<CSSParserToken> resolvedTokens;
-        if (!variableData->resolveTokenRange(customProperties, variableData->tokens(), resolvedTokens))
+        auto resolvedData = valueWithReferences.resolveVariableReferences(builderState);
+        if (!resolvedData)
             return nullptr;
-        
-        return CSSPropertyParser::parseSingleValue(propID, resolvedTokens, m_context);
+        return CSSPropertyParser::parseSingleValue(propID, resolvedData->tokens(), m_context);
     }
-    
-    return nullptr;
+
+    const auto& customPropValue = downcast<CSSCustomPropertyValue>(value);
+    const auto& valueWithReferences = WTF::get<Ref<CSSVariableReferenceValue>>(customPropValue.value()).get();
+
+    auto& name = downcast<CSSCustomPropertyValue>(value).name();
+    auto* registered = builderState.document().getCSSRegisteredCustomPropertySet().get(name);
+    auto& syntax = registered ? registered->syntax : "*";
+    auto resolvedData = valueWithReferences.resolveVariableReferences(builderState);
+
+    if (!resolvedData)
+        return nullptr;
+
+    // FIXME handle REM cycles.
+    HashSet<CSSPropertyID> dependencies;
+    CSSPropertyParser::collectParsedCustomPropertyValueDependencies(syntax, false, dependencies, resolvedData->tokens(), m_context);
+
+    for (auto id : dependencies)
+        builderState.builder().applyProperty(id);
+
+    return CSSPropertyParser::parseTypedCustomPropertyValue(name, syntax, resolvedData->tokens(), builderState, m_context);
 }
 
-std::unique_ptr<Vector<double>> CSSParser::parseKeyframeKeyList(const String& selector)
+Vector<double> CSSParser::parseKeyframeKeyList(const String& selector)
 {
     return CSSParserImpl::parseKeyframeKeyList(selector);
 }
 
 RefPtr<CSSValue> CSSParser::parseFontFaceDescriptor(CSSPropertyID propertyID, const String& propertyValue, const CSSParserContext& context)
 {
-    StringBuilder builder;
-    builder.appendLiteral("@font-face { ");
-    builder.append(getPropertyNameString(propertyID));
-    builder.appendLiteral(" : ");
-    builder.append(propertyValue);
-    builder.appendLiteral("; }");
-    RefPtr<StyleRuleBase> rule = parseRule(context, nullptr, builder.toString());
+    String string = makeString("@font-face { ", getPropertyNameString(propertyID), " : ", propertyValue, "; }");
+    RefPtr<StyleRuleBase> rule = parseRule(context, nullptr, string);
     if (!rule || !rule->isFontFaceRule())
         return nullptr;
     return downcast<StyleRuleFontFace>(*rule.get()).properties().getPropertyCSSValue(propertyID);

@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
- *  Copyright (C) 2003, 2004, 2005, 2006, 2008, 2009, 2010 Apple Inc. All rights reserved.
+ *  Copyright (C) 2003-2018 Apple Inc. All rights reserved.
  *  Copyright (C) 2007 Samuel Weinig <sam@webkit.org>
  *  Copyright (C) 2009 Google, Inc. All rights reserved.
  *
@@ -23,25 +23,24 @@
 
 #include "JSDOMGlobalObject.h"
 #include "NodeConstants.h"
-#include <runtime/JSDestructibleObject.h>
+#include <JavaScriptCore/JSDestructibleObject.h>
 
 namespace WebCore {
 
-class JSDOMWindow;
 class ScriptExecutionContext;
 
-// JSC allows us to extend JSType. If the highest bit is set, we can add any Object types and they are
+// JSC allows us to extend JSType. If the highest 3 bits are set, we can add any Object types and they are
 // recognized as OtherObj in JSC. And we encode Node type into JSType if the given JSType is subclass of Node.
-// offset | 7 | 6 | 5   4 | 3   2   1   0  |
-// value  | 1 | 0 |  Non-node DOM types    |
+// offset | 7 | 6 | 5 | 4   3   2   1   0  |
+// value  | 1 | 1 | 1 | Non-node DOM types |
 // If the given JSType is a subclass of Node, the format is the following.
-// offset | 7 | 6 | 5   4 | 3   2   1   0  |
-// value  | 1 | 1 |  Kind |       NodeType |
-static const uint8_t JSNodeTypeMask                  = 0b00001111;
+// offset | 7 | 6 | 5 | 4 | 3   2   1   0  |
+// value  | 1 | 1 | 1 | 1 |    NodeType    |
 
-static const uint8_t JSDOMWrapperType                = 0b10000000;
-static const uint8_t JSEventType                     = 0b10000001;
-static const uint8_t JSNodeType                      = 0b11000000;
+static const uint8_t JSDOMWrapperType                = 0b11101110;
+static const uint8_t JSEventType                     = 0b11101111;
+static const uint8_t JSNodeType                      = 0b11110000;
+static const uint8_t JSNodeTypeMask                  = 0b00001111;
 static const uint8_t JSTextNodeType                  = JSNodeType | NodeConstants::TEXT_NODE;
 static const uint8_t JSProcessingInstructionNodeType = JSNodeType | NodeConstants::PROCESSING_INSTRUCTION_NODE;
 static const uint8_t JSDocumentTypeNodeType          = JSNodeType | NodeConstants::DOCUMENT_TYPE_NODE;
@@ -50,7 +49,7 @@ static const uint8_t JSDocumentWrapperType           = JSNodeType | NodeConstant
 static const uint8_t JSCommentNodeType               = JSNodeType | NodeConstants::COMMENT_NODE;
 static const uint8_t JSCDATASectionNodeType          = JSNodeType | NodeConstants::CDATA_SECTION_NODE;
 static const uint8_t JSAttrNodeType                  = JSNodeType | NodeConstants::ATTRIBUTE_NODE;
-static const uint8_t JSElementType                   = 0b11010000 | NodeConstants::ELEMENT_NODE;
+static const uint8_t JSElementType                   = 0b11110000 | NodeConstants::ELEMENT_NODE;
 
 static_assert(JSDOMWrapperType > JSC::LastJSCObjectType, "JSC::JSType offers the highest bit.");
 static_assert(NodeConstants::LastNodeType <= JSNodeTypeMask, "NodeType should be represented in 4bit.");
@@ -60,21 +59,15 @@ public:
     typedef JSC::JSDestructibleObject Base;
     static constexpr bool isDOMWrapper = false;
 
+    template<typename, JSC::SubspaceAccess>
+    static void subspaceFor(JSC::VM&) { RELEASE_ASSERT_NOT_REACHED(); }
+
     JSDOMGlobalObject* globalObject() const { return JSC::jsCast<JSDOMGlobalObject*>(JSC::JSNonFinalObject::globalObject()); }
     ScriptExecutionContext* scriptExecutionContext() const { return globalObject()->scriptExecutionContext(); }
 
-    JSDOMWindow& domWindow() const;
-
 protected:
-    JSDOMObject(JSC::Structure* structure, JSC::JSGlobalObject& globalObject)
-        : Base(globalObject.vm(), structure)
-    {
-        ASSERT(scriptExecutionContext());
-    }
+    WEBCORE_EXPORT JSDOMObject(JSC::Structure*, JSC::JSGlobalObject&);
 };
-
-WEBCORE_EXPORT JSC::Subspace* outputConstraintSubspaceFor(JSC::VM&);
-WEBCORE_EXPORT JSC::Subspace* globalObjectOutputConstraintSubspaceFor(JSC::VM&);
 
 template<typename ImplementationClass> class JSDOMWrapper : public JSDOMObject {
 public:
@@ -115,5 +108,7 @@ public:
     static constexpr bool isComplexWrapper = !isSimpleWrapper;
     static constexpr bool isBuiltin = false;
 };
+
+JSC::JSValue cloneAcrossWorlds(JSC::JSGlobalObject&, const JSDOMObject& owner, JSC::JSValue);
 
 } // namespace WebCore

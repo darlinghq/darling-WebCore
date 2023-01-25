@@ -41,23 +41,31 @@
 #include "DOMWindow.h"
 #include "Document.h"
 #include "Frame.h"
-#include "FrameLoader.h"
 #include "InspectorInstrumentation.h"
+#include "LegacySchemeRegistry.h"
 #include "LoadTiming.h"
+#include "LoaderStrategy.h"
+#include "MixedContentChecker.h"
 #include "Performance.h"
+#include "PlatformStrategies.h"
 #include "ProgressTracker.h"
 #include "ResourceError.h"
 #include "ResourceRequest.h"
 #include "ResourceTiming.h"
+#include "RuntimeApplicationChecks.h"
 #include "RuntimeEnabledFeatures.h"
-#include "SchemeRegistry.h"
 #include "SecurityOrigin.h"
+#include "Settings.h"
 #include "SharedBuffer.h"
 #include "SubresourceIntegrity.h"
 #include "SubresourceLoader.h"
 #include "ThreadableLoaderClient.h"
 #include <wtf/Assertions.h>
 #include <wtf/Ref.h>
+
+#if PLATFORM(IOS_FAMILY)
+#include <wtf/cocoa/RuntimeApplicationChecksCocoa.h>
+#endif
 
 namespace WebCore {
 
@@ -88,6 +96,24 @@ RefPtr<DocumentThreadableLoader> DocumentThreadableLoader::create(Document& docu
     return create(document, client, WTFMove(request), options, nullptr, nullptr, WTFMove(referrer), ShouldLogError::Yes);
 }
 
+static inline bool shouldPerformSecurityChecks()
+{
+    return platformStrategies()->loaderStrategy()->shouldPerformSecurityChecks();
+}
+
+bool DocumentThreadableLoader::shouldSetHTTPHeadersToKeep() const
+{
+    if (m_options.mode == FetchOptions::Mode::Cors && shouldPerformSecurityChecks())
+        return true;
+
+#if ENABLE(SERVICE_WORKER)
+    if (m_options.serviceWorkersMode == ServiceWorkersMode::All && m_async)
+        return m_options.serviceWorkerRegistrationIdentifier || m_document.activeServiceWorker();
+#endif
+
+    return false;
+}
+
 DocumentThreadableLoader::DocumentThreadableLoader(Document& document, ThreadableLoaderClient& client, BlockingBehavior blockingBehavior, ResourceRequest&& request, const ThreadableLoaderOptions& options, RefPtr<SecurityOrigin>&& origin, std::unique_ptr<ContentSecurityPolicy>&& contentSecurityPolicy, String&& referrer, ShouldLogError shouldLogError)
     : m_client(&client)
     , m_document(document)
@@ -106,30 +132,46 @@ DocumentThreadableLoader::DocumentThreadableLoader(Document& document, Threadabl
     // Setting a referrer header is only supported in the async code path.
     ASSERT(m_async || m_referrer.isEmpty());
 
+    if (document.settings().disallowSyncXHRDuringPageDismissalEnabled() && !m_async && (!document.page() || !document.page()->areSynchronousLoadsAllowed())) {
+        document.didRejectSyncXHRDuringPageDismissal();
+        logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, request.url(), "Synchronous loads are not allowed at this time"));
+        return;
+    }
+
     // Referrer and Origin headers should be set after the preflight if any.
     ASSERT(!request.hasHTTPReferrer() && !request.hasHTTPOrigin());
 
     ASSERT_WITH_SECURITY_IMPLICATION(isAllowedByContentSecurityPolicy(request.url(), ContentSecurityPolicy::RedirectResponseReceived::No));
 
-    m_options.allowCredentials = (m_options.credentials == FetchOptions::Credentials::Include || (m_options.credentials == FetchOptions::Credentials::SameOrigin && m_sameOriginRequest)) ? AllowStoredCredentials : DoNotAllowStoredCredentials;
+    m_options.storedCredentialsPolicy = (m_options.credentials == FetchOptions::Credentials::Include || (m_options.credentials == FetchOptions::Credentials::SameOrigin && m_sameOriginRequest)) ? StoredCredentialsPolicy::Use : StoredCredentialsPolicy::DoNotUse;
 
     ASSERT(!request.httpHeaderFields().contains(HTTPHeaderName::Origin));
 
     // Copy headers if we need to replay the request after a redirection.
-    if (m_async && m_options.mode == FetchOptions::Mode::Cors)
+    if (m_options.mode == FetchOptions::Mode::Cors)
         m_originalHeaders = request.httpHeaderFields();
 
-    if (document.page() && document.page()->isRunningUserScripts() && SchemeRegistry::isUserExtensionScheme(request.url().protocol().toStringWithoutCopying())) {
+    if (shouldSetHTTPHeadersToKeep())
+        m_options.httpHeadersToKeep = httpHeadersToKeepFromCleaning(request.httpHeaderFields());
+
+    bool shouldDisableCORS = document.isRunningUserScripts() && LegacySchemeRegistry::isUserExtensionScheme(request.url().protocol().toStringWithoutCopying());
+    if (auto* page = document.page())
+        shouldDisableCORS |= page->shouldDisableCorsForRequestTo(request.url());
+
+    if (shouldDisableCORS) {
         m_options.mode = FetchOptions::Mode::NoCors;
         m_options.filteringPolicy = ResponseFilteringPolicy::Disable;
+        m_responsesCanBeOpaque = false;
     }
+
+    m_options.cspResponseHeaders = m_options.contentSecurityPolicyEnforcement != ContentSecurityPolicyEnforcement::DoNotEnforce ? this->contentSecurityPolicy().responseHeaders() : ContentSecurityPolicyResponseHeaders { };
 
     // As per step 11 of https://fetch.spec.whatwg.org/#main-fetch, data scheme (if same-origin data-URL flag is set) and about scheme are considered same-origin.
     if (request.url().protocolIsData())
         m_sameOriginRequest = options.sameOriginDataURLFlag == SameOriginDataURLFlag::Set;
 
-    if (m_sameOriginRequest || m_options.mode == FetchOptions::Mode::NoCors) {
-        loadRequest(WTFMove(request), DoSecurityCheck);
+    if (m_sameOriginRequest || m_options.mode == FetchOptions::Mode::NoCors || m_options.mode == FetchOptions::Mode::Navigate) {
+        loadRequest(WTFMove(request), SecurityCheckPolicy::DoSecurityCheck);
         return;
     }
 
@@ -141,15 +183,46 @@ DocumentThreadableLoader::DocumentThreadableLoader(Document& document, Threadabl
     makeCrossOriginAccessRequest(WTFMove(request));
 }
 
+bool DocumentThreadableLoader::checkURLSchemeAsCORSEnabled(const URL& url)
+{
+    // Cross-origin requests are only allowed for HTTP and registered schemes. We would catch this when checking response headers later, but there is no reason to send a request that's guaranteed to be denied.
+    if (!LegacySchemeRegistry::shouldTreatURLSchemeAsCORSEnabled(url.protocol().toStringWithoutCopying())) {
+        logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, url, "Cross origin requests are only supported for HTTP.", ResourceError::Type::AccessControl));
+        return false;
+    }
+    return true;
+}
+
 void DocumentThreadableLoader::makeCrossOriginAccessRequest(ResourceRequest&& request)
 {
     ASSERT(m_options.mode == FetchOptions::Mode::Cors);
 
-    if ((m_options.preflightPolicy == ConsiderPreflight && isSimpleCrossOriginAccessRequest(request.httpMethod(), request.httpHeaderFields())) || m_options.preflightPolicy == PreventPreflight)
-        makeSimpleCrossOriginAccessRequest(WTFMove(request));
-    else {
+#if PLATFORM(IOS_FAMILY)
+    bool needsPreflightQuirk = IOSApplication::isMoviStarPlus() && applicationSDKVersion() < DYLD_IOS_VERSION_12_0 && (m_options.preflightPolicy == PreflightPolicy::Consider || m_options.preflightPolicy == PreflightPolicy::Force);
+#else
+    bool needsPreflightQuirk = false;
+#endif
+
+    if ((m_options.preflightPolicy == PreflightPolicy::Consider && isSimpleCrossOriginAccessRequest(request.httpMethod(), request.httpHeaderFields())) || m_options.preflightPolicy == PreflightPolicy::Prevent || (shouldPerformSecurityChecks() && !needsPreflightQuirk)) {
+        if (checkURLSchemeAsCORSEnabled(request.url()))
+            makeSimpleCrossOriginAccessRequest(WTFMove(request));
+    } else {
+#if ENABLE(SERVICE_WORKER)
+        if (m_options.serviceWorkersMode == ServiceWorkersMode::All && m_async) {
+            if (m_options.serviceWorkerRegistrationIdentifier || document().activeServiceWorker()) {
+                ASSERT(!m_bypassingPreflightForServiceWorkerRequest);
+                m_bypassingPreflightForServiceWorkerRequest = WTFMove(request);
+                m_options.serviceWorkersMode = ServiceWorkersMode::Only;
+                loadRequest(ResourceRequest { m_bypassingPreflightForServiceWorkerRequest.value() }, SecurityCheckPolicy::SkipSecurityCheck);
+                return;
+            }
+        }
+#endif
+        if (!needsPreflightQuirk && !checkURLSchemeAsCORSEnabled(request.url()))
+            return;
+
         m_simpleRequest = false;
-        if (CrossOriginPreflightResultCache::singleton().canSkipPreflight(securityOrigin().toString(), request.url(), m_options.allowCredentials, request.httpMethod(), request.httpHeaderFields()))
+        if (CrossOriginPreflightResultCache::singleton().canSkipPreflight(securityOrigin().toString(), request.url(), m_options.storedCredentialsPolicy, request.httpMethod(), request.httpHeaderFields()))
             preflightSuccess(WTFMove(request));
         else
             makeCrossOriginAccessRequestWithPreflight(WTFMove(request));
@@ -158,17 +231,11 @@ void DocumentThreadableLoader::makeCrossOriginAccessRequest(ResourceRequest&& re
 
 void DocumentThreadableLoader::makeSimpleCrossOriginAccessRequest(ResourceRequest&& request)
 {
-    ASSERT(m_options.preflightPolicy != ForcePreflight);
-    ASSERT(m_options.preflightPolicy == PreventPreflight || isSimpleCrossOriginAccessRequest(request.httpMethod(), request.httpHeaderFields()));
+    ASSERT(m_options.preflightPolicy != PreflightPolicy::Force || shouldPerformSecurityChecks());
+    ASSERT(m_options.preflightPolicy == PreflightPolicy::Prevent || isSimpleCrossOriginAccessRequest(request.httpMethod(), request.httpHeaderFields()) || shouldPerformSecurityChecks());
 
-    // Cross-origin requests are only allowed for HTTP and registered schemes. We would catch this when checking response headers later, but there is no reason to send a request that's guaranteed to be denied.
-    if (!SchemeRegistry::shouldTreatURLSchemeAsCORSEnabled(request.url().protocol().toStringWithoutCopying())) {
-        logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, request.url(), "Cross origin requests are only supported for HTTP.", ResourceError::Type::AccessControl));
-        return;
-    }
-
-    updateRequestForAccessControl(request, securityOrigin(), m_options.allowCredentials);
-    loadRequest(WTFMove(request), DoSecurityCheck);
+    updateRequestForAccessControl(request, securityOrigin(), m_options.storedCredentialsPolicy);
+    loadRequest(WTFMove(request), SecurityCheckPolicy::DoSecurityCheck);
 }
 
 void DocumentThreadableLoader::makeCrossOriginAccessRequestWithPreflight(ResourceRequest&& request)
@@ -201,6 +268,19 @@ void DocumentThreadableLoader::cancel()
     m_client = nullptr;
 }
 
+void DocumentThreadableLoader::computeIsDone()
+{
+    if (!m_async || m_preflightChecker || !m_resource) {
+        if (m_client)
+            m_client->notifyIsDone(m_async && !m_preflightChecker && !m_resource);
+        return;
+    }
+    platformStrategies()->loaderStrategy()->isResourceLoadFinished(*m_resource, [this, weakThis = makeWeakPtr(*this)](bool isDone) {
+        if (weakThis && m_client)
+            m_client->notifyIsDone(isDone);
+    });
+}
+
 void DocumentThreadableLoader::setDefersLoading(bool value)
 {
     if (m_resource)
@@ -220,10 +300,10 @@ void DocumentThreadableLoader::clearResource()
         resource->removeClient(*this);
     }
     if (m_preflightChecker)
-        m_preflightChecker = std::nullopt;
+        m_preflightChecker = WTF::nullopt;
 }
 
-void DocumentThreadableLoader::redirectReceived(CachedResource& resource, ResourceRequest& request, const ResourceResponse& redirectResponse)
+void DocumentThreadableLoader::redirectReceived(CachedResource& resource, ResourceRequest&& request, const ResourceResponse& redirectResponse, CompletionHandler<void(ResourceRequest&&)>&& completionHandler)
 {
     ASSERT(m_client);
     ASSERT_UNUSED(resource, &resource == m_resource);
@@ -237,18 +317,23 @@ void DocumentThreadableLoader::redirectReceived(CachedResource& resource, Resour
     if (!request.url().protocolIsInHTTPFamily() && m_options.initiator == cachedResourceRequestInitiators().fetch) {
         reportRedirectionWithBadScheme(request.url());
         clearResource();
+        return completionHandler(WTFMove(request));
+    }
+
+    if (platformStrategies()->loaderStrategy()->havePerformedSecurityChecks(redirectResponse)) {
+        completionHandler(WTFMove(request));
         return;
     }
 
     if (!isAllowedByContentSecurityPolicy(request.url(), redirectResponse.isNull() ? ContentSecurityPolicy::RedirectResponseReceived::No : ContentSecurityPolicy::RedirectResponseReceived::Yes)) {
         reportContentSecurityPolicyError(redirectResponse.url());
         clearResource();
-        return;
+        return completionHandler(WTFMove(request));
     }
 
     // Allow same origin requests to continue after allowing clients to audit the redirect.
     if (isAllowedRedirect(request.url()))
-        return;
+        return completionHandler(WTFMove(request));
 
     // Force any subsequent request to use these checks.
     m_sameOriginRequest = false;
@@ -265,11 +350,16 @@ void DocumentThreadableLoader::redirectReceived(CachedResource& resource, Resour
     // Except in case where preflight is needed, loading should be able to continue on its own.
     // But we also handle credentials here if it is restricted to SameOrigin.
     if (m_options.credentials != FetchOptions::Credentials::SameOrigin && m_simpleRequest && isSimpleCrossOriginAccessRequest(request.httpMethod(), *m_originalHeaders))
-        return;
+        return completionHandler(WTFMove(request));
 
-    m_options.allowCredentials = DoNotAllowStoredCredentials;
+    if (m_options.credentials == FetchOptions::Credentials::SameOrigin)
+        m_options.storedCredentialsPolicy = StoredCredentialsPolicy::DoNotUse;
 
     clearResource();
+
+    m_referrer = request.httpReferrer();
+    if (m_referrer.isNull())
+        m_options.referrerPolicy = ReferrerPolicy::NoReferrer;
 
     // Let's fetch the request with the original headers (equivalent to request cloning specified by fetch algorithm).
     // Do not copy the Authorization header if removed by the network layer.
@@ -277,7 +367,12 @@ void DocumentThreadableLoader::redirectReceived(CachedResource& resource, Resour
         m_originalHeaders->remove(HTTPHeaderName::Authorization);
     request.setHTTPHeaderFields(*m_originalHeaders);
 
+#if ENABLE(SERVICE_WORKER)
+    if (redirectResponse.source() != ResourceResponse::Source::ServiceWorker && redirectResponse.source() != ResourceResponse::Source::MemoryCache)
+        m_options.serviceWorkersMode = ServiceWorkersMode::None;
+#endif
     makeCrossOriginAccessRequest(ResourceRequest(request));
+    completionHandler(WTFMove(request));
 }
 
 void DocumentThreadableLoader::dataSent(CachedResource& resource, unsigned long long bytesSent, unsigned long long totalBytesToBeSent)
@@ -287,13 +382,21 @@ void DocumentThreadableLoader::dataSent(CachedResource& resource, unsigned long 
     m_client->didSendData(bytesSent, totalBytesToBeSent);
 }
 
-void DocumentThreadableLoader::responseReceived(CachedResource& resource, const ResourceResponse& response)
+void DocumentThreadableLoader::responseReceived(CachedResource& resource, const ResourceResponse& response, CompletionHandler<void()>&& completionHandler)
 {
     ASSERT_UNUSED(resource, &resource == m_resource);
-    didReceiveResponse(m_resource->identifier(), response, m_resource->responseTainting());
+    if (!m_responsesCanBeOpaque) {
+        ResourceResponse responseWithoutTainting = response;
+        responseWithoutTainting.setTainting(ResourceResponse::Tainting::Basic);
+        didReceiveResponse(m_resource->identifier(), responseWithoutTainting);
+    } else
+        didReceiveResponse(m_resource->identifier(), response);
+
+    if (completionHandler)
+        completionHandler();
 }
 
-void DocumentThreadableLoader::didReceiveResponse(unsigned long identifier, const ResourceResponse& response, ResourceResponse::Tainting tainting)
+void DocumentThreadableLoader::didReceiveResponse(unsigned long identifier, const ResourceResponse& response)
 {
     ASSERT(m_client);
     ASSERT(response.type() != ResourceResponse::Type::Error);
@@ -309,16 +412,16 @@ void DocumentThreadableLoader::didReceiveResponse(unsigned long identifier, cons
     }
 
     if (response.type() == ResourceResponse::Type::Default) {
-        m_client->didReceiveResponse(identifier, ResourceResponse::filterResponse(response, tainting));
-        if (tainting == ResourceResponse::Tainting::Opaque) {
+        m_client->didReceiveResponse(identifier, ResourceResponse::filter(response, m_options.credentials == FetchOptions::Credentials::Include ? ResourceResponse::PerformExposeAllHeadersCheck::No : ResourceResponse::PerformExposeAllHeadersCheck::Yes));
+        if (response.tainting() == ResourceResponse::Tainting::Opaque) {
             clearResource();
             if (m_client)
                 m_client->didFinishLoading(identifier);
         }
-    } else {
-        ASSERT(response.type() == ResourceResponse::Type::Opaqueredirect);
-        m_client->didReceiveResponse(identifier, response);
+        return;
     }
+    ASSERT(response.type() == ResourceResponse::Type::Opaqueredirect || response.source() == ResourceResponse::Source::ServiceWorker || response.source() == ResourceResponse::Source::MemoryCache);
+    m_client->didReceiveResponse(identifier, response);
 }
 
 void DocumentThreadableLoader::dataReceived(CachedResource& resource, const char* data, int dataLength)
@@ -341,23 +444,18 @@ void DocumentThreadableLoader::finishedTimingForWorkerLoad(CachedResource& resou
 {
     ASSERT(m_client);
     ASSERT_UNUSED(resource, &resource == m_resource);
-    UNUSED_PARAM(resourceTiming);
 
-#if ENABLE(WEB_TIMING)
     finishedTimingForWorkerLoad(resourceTiming);
-#endif
 }
 
-#if ENABLE(WEB_TIMING)
 void DocumentThreadableLoader::finishedTimingForWorkerLoad(const ResourceTiming& resourceTiming)
 {
     ASSERT(m_options.initiatorContext == InitiatorContext::Worker);
 
     m_client->didFinishTiming(resourceTiming);
 }
-#endif
 
-void DocumentThreadableLoader::notifyFinished(CachedResource& resource)
+void DocumentThreadableLoader::notifyFinished(CachedResource& resource, const NetworkLoadMetrics&)
 {
     ASSERT(m_client);
     ASSERT_UNUSED(resource, &resource == m_resource);
@@ -374,7 +472,7 @@ void DocumentThreadableLoader::didFinishLoading(unsigned long identifier)
 
     if (m_delayCallbacksForIntegrityCheck) {
         if (!matchIntegrityMetadata(*m_resource, m_options.integrity)) {
-            reportIntegrityMetadataError(m_resource->url());
+            reportIntegrityMetadataError(*m_resource, m_options.integrity);
             return;
         }
 
@@ -382,13 +480,14 @@ void DocumentThreadableLoader::didFinishLoading(unsigned long identifier)
 
         if (options().filteringPolicy == ResponseFilteringPolicy::Disable) {
             m_client->didReceiveResponse(identifier, response);
-            m_client->didReceiveData(m_resource->resourceBuffer()->data(), m_resource->resourceBuffer()->size());
+            if (m_resource->resourceBuffer())
+                m_client->didReceiveData(m_resource->resourceBuffer()->data(), m_resource->resourceBuffer()->size());
         } else {
             ASSERT(response.type() == ResourceResponse::Type::Default);
-            
-            auto tainting = m_resource->responseTainting();
-            m_client->didReceiveResponse(identifier, ResourceResponse::filterResponse(response, tainting));
-            m_client->didReceiveData(m_resource->resourceBuffer()->data(), m_resource->resourceBuffer()->size());
+
+            m_client->didReceiveResponse(identifier, ResourceResponse::filter(response, m_options.credentials == FetchOptions::Credentials::Include ? ResourceResponse::PerformExposeAllHeadersCheck::No : ResourceResponse::PerformExposeAllHeadersCheck::Yes));
+            if (m_resource->resourceBuffer())
+                m_client->didReceiveData(m_resource->resourceBuffer()->data(), m_resource->resourceBuffer()->size());
         }
     }
 
@@ -398,27 +497,45 @@ void DocumentThreadableLoader::didFinishLoading(unsigned long identifier)
 void DocumentThreadableLoader::didFail(unsigned long, const ResourceError& error)
 {
     ASSERT(m_client);
-    logErrorAndFail(error);
+#if ENABLE(SERVICE_WORKER)
+    if (m_bypassingPreflightForServiceWorkerRequest && error.isCancellation()) {
+        clearResource();
+
+        m_options.serviceWorkersMode = ServiceWorkersMode::None;
+        makeCrossOriginAccessRequestWithPreflight(WTFMove(m_bypassingPreflightForServiceWorkerRequest.value()));
+        ASSERT(m_bypassingPreflightForServiceWorkerRequest->isNull());
+        m_bypassingPreflightForServiceWorkerRequest = WTF::nullopt;
+        return;
+    }
+#endif
+
+    if (m_shouldLogError == ShouldLogError::Yes)
+        logError(m_document, error, m_options.initiator);
+
+    m_client->didFail(error);
 }
 
 void DocumentThreadableLoader::preflightSuccess(ResourceRequest&& request)
 {
     ResourceRequest actualRequest(WTFMove(request));
-    updateRequestForAccessControl(actualRequest, securityOrigin(), m_options.allowCredentials);
+    updateRequestForAccessControl(actualRequest, securityOrigin(), m_options.storedCredentialsPolicy);
 
-    m_preflightChecker = std::nullopt;
+    m_preflightChecker = WTF::nullopt;
 
     // It should be ok to skip the security check since we already asked about the preflight request.
-    loadRequest(WTFMove(actualRequest), SkipSecurityCheck);
+    loadRequest(WTFMove(actualRequest), SecurityCheckPolicy::SkipSecurityCheck);
 }
 
 void DocumentThreadableLoader::preflightFailure(unsigned long identifier, const ResourceError& error)
 {
-    m_preflightChecker = std::nullopt;
+    m_preflightChecker = WTF::nullopt;
 
     InspectorInstrumentation::didFailLoading(m_document.frame(), m_document.frame()->loader().documentLoader(), identifier, error);
-    ASSERT(m_client);
-    logErrorAndFail(error);
+
+    if (m_shouldLogError == ShouldLogError::Yes)
+        logError(m_document, error, m_options.initiator);
+
+    m_client->didFail(error);
 }
 
 void DocumentThreadableLoader::loadRequest(ResourceRequest&& request, SecurityCheckPolicy securityCheck)
@@ -428,8 +545,7 @@ void DocumentThreadableLoader::loadRequest(ResourceRequest&& request, SecurityCh
     // Any credential should have been removed from the cross-site requests.
     const URL& requestURL = request.url();
     m_options.securityCheck = securityCheck;
-    ASSERT(m_sameOriginRequest || requestURL.user().isEmpty());
-    ASSERT(m_sameOriginRequest || requestURL.pass().isEmpty());
+    ASSERT(m_sameOriginRequest || !requestURL.hasCredentials());
 
     if (!m_referrer.isNull())
         request.setHTTPReferrer(m_referrer);
@@ -441,12 +557,11 @@ void DocumentThreadableLoader::loadRequest(ResourceRequest&& request, SecurityCh
         
         // If there is integrity metadata to validate, we must buffer.
         if (!m_options.integrity.isEmpty())
-            options.dataBufferingPolicy = BufferData;
+            options.dataBufferingPolicy = DataBufferingPolicy::BufferData;
 
-        request.setAllowCookies(m_options.allowCredentials == AllowStoredCredentials);
+        request.setAllowCookies(m_options.storedCredentialsPolicy == StoredCredentialsPolicy::Use);
         CachedResourceRequest newRequest(WTFMove(request), options);
-        if (RuntimeEnabledFeatures::sharedFeatures().resourceTimingEnabled())
-            newRequest.setInitiator(m_options.initiator);
+        newRequest.setInitiator(m_options.initiator);
         newRequest.setOrigin(securityOrigin());
 
         ASSERT(!m_resource);
@@ -455,47 +570,40 @@ void DocumentThreadableLoader::loadRequest(ResourceRequest&& request, SecurityCh
             resource->removeClient(*this);
         }
 
-        // We create an URL here as the request will be moved in requestRawResource
-        URL requestUrl = newRequest.resourceRequest().url();
-        m_resource = m_document.cachedResourceLoader().requestRawResource(WTFMove(newRequest));
+        auto cachedResource = m_document.cachedResourceLoader().requestRawResource(WTFMove(newRequest));
+        m_resource = cachedResource.value_or(nullptr);
         if (m_resource)
             m_resource->addClient(*this);
-        else {
-            // FIXME: Since we receive a synchronous error, this is probably due to some AccessControl checks. We should try to retrieve the actual error.
-            logErrorAndFail(ResourceError(String(), 0, requestUrl, String(), ResourceError::Type::AccessControl));
-        }
+        else
+            logErrorAndFail(cachedResource.error());
         return;
     }
 
     // If credentials mode is 'Omit', we should disable cookie sending.
     ASSERT(m_options.credentials != FetchOptions::Credentials::Omit);
 
-#if ENABLE(WEB_TIMING)
     LoadTiming loadTiming;
     loadTiming.markStartTimeAndFetchStart();
-#endif
 
     // FIXME: ThreadableLoaderOptions.sniffContent is not supported for synchronous requests.
     RefPtr<SharedBuffer> data;
     ResourceError error;
     ResourceResponse response;
     unsigned long identifier = std::numeric_limits<unsigned long>::max();
-    if (m_document.frame()) {
-        auto& frameLoader = m_document.frame()->loader();
-        if (!frameLoader.mixedContentChecker().canRunInsecureContent(m_document.securityOrigin(), requestURL))
+    if (auto* frame = m_document.frame()) {
+        if (!MixedContentChecker::canRunInsecureContent(*frame, m_document.securityOrigin(), requestURL))
             return;
-        identifier = frameLoader.loadResourceSynchronously(request, m_options.allowCredentials, m_options.clientCredentialPolicy, error, response, data);
+        auto& frameLoader = frame->loader();
+        identifier = frameLoader.loadResourceSynchronously(request, m_options.clientCredentialPolicy, m_options, *m_originalHeaders, error, response, data);
     }
 
-#if ENABLE(WEB_TIMING)
     loadTiming.setResponseEnd(MonotonicTime::now());
-#endif
 
     if (!error.isNull() && response.httpStatusCode() <= 0) {
         if (requestURL.isLocalFile()) {
             // We don't want XMLHttpRequest to raise an exception for file:// resources, see <rdar://problem/4962298>.
             // FIXME: XMLHttpRequest quirks should be in XMLHttpRequest code, not in DocumentThreadableLoader.cpp.
-            didReceiveResponse(identifier, response, ResourceResponse::Tainting::Basic);
+            didReceiveResponse(identifier, response);
             didFinishLoading(identifier);
             return;
         }
@@ -503,51 +611,59 @@ void DocumentThreadableLoader::loadRequest(ResourceRequest&& request, SecurityCh
         return;
     }
 
-    // FIXME: FrameLoader::loadSynchronously() does not tell us whether a redirect happened or not, so we guess by comparing the
-    // request and response URLs. This isn't a perfect test though, since a server can serve a redirect to the same URL that was
-    // requested. Also comparing the request and response URLs as strings will fail if the requestURL still has its credentials.
-    bool didRedirect = requestURL != response.url();
-    if (didRedirect) {
-        if (!isAllowedByContentSecurityPolicy(response.url(), ContentSecurityPolicy::RedirectResponseReceived::Yes)) {
-            reportContentSecurityPolicyError(requestURL);
-            return;
-        }
-        if (!isAllowedRedirect(response.url())) {
-            reportCrossOriginResourceSharingError(requestURL);
-            return;
-        }
+    if (response.containsInvalidHTTPHeaders()) {
+        didFail(identifier, ResourceError(errorDomainWebKitInternal, 0, request.url(), "Response contained invalid HTTP headers", ResourceError::Type::General));
+        return;
     }
 
-    ResourceResponse::Tainting tainting = ResourceResponse::Tainting::Basic;
-    if (!m_sameOriginRequest) {
-        if (m_options.mode == FetchOptions::Mode::NoCors)
-            tainting = ResourceResponse::Tainting::Opaque;
-        else {
-            ASSERT(m_options.mode == FetchOptions::Mode::Cors);
-            tainting = ResourceResponse::Tainting::Cors;
-            String accessControlErrorDescription;
-            if (!passesAccessControlCheck(response, m_options.allowCredentials, securityOrigin(), accessControlErrorDescription)) {
-                logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, response.url(), accessControlErrorDescription, ResourceError::Type::AccessControl));
+    if (!shouldPerformSecurityChecks()) {
+        // FIXME: FrameLoader::loadSynchronously() does not tell us whether a redirect happened or not, so we guess by comparing the
+        // request and response URLs. This isn't a perfect test though, since a server can serve a redirect to the same URL that was
+        // requested. Also comparing the request and response URLs as strings will fail if the requestURL still has its credentials.
+        bool didRedirect = requestURL != response.url();
+        if (didRedirect) {
+            if (!isAllowedByContentSecurityPolicy(response.url(), ContentSecurityPolicy::RedirectResponseReceived::Yes)) {
+                reportContentSecurityPolicyError(requestURL);
+                return;
+            }
+            if (!isAllowedRedirect(response.url())) {
+                reportCrossOriginResourceSharingError(requestURL);
                 return;
             }
         }
+
+        if (!m_sameOriginRequest) {
+            if (m_options.mode == FetchOptions::Mode::NoCors)
+                response.setTainting(ResourceResponse::Tainting::Opaque);
+            else {
+                ASSERT(m_options.mode == FetchOptions::Mode::Cors);
+                response.setTainting(ResourceResponse::Tainting::Cors);
+                auto accessControlCheckResult = passesAccessControlCheck(response, m_options.storedCredentialsPolicy, securityOrigin(), &CrossOriginAccessControlCheckDisabler::singleton());
+                if (!accessControlCheckResult) {
+                    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, response.url(), accessControlCheckResult.error(), ResourceError::Type::AccessControl));
+                    return;
+                }
+            }
+        }
     }
-    didReceiveResponse(identifier, response, tainting);
+    didReceiveResponse(identifier, response);
 
     if (data)
         didReceiveData(identifier, data->data(), data->size());
 
-#if ENABLE(WEB_TIMING)
-    if (RuntimeEnabledFeatures::sharedFeatures().resourceTimingEnabled()) {
-        auto resourceTiming = ResourceTiming::fromSynchronousLoad(requestURL, m_options.initiator, loadTiming, response.deprecatedNetworkLoadMetrics(), response, securityOrigin());
-        if (options().initiatorContext == InitiatorContext::Worker)
-            finishedTimingForWorkerLoad(resourceTiming);
-        else {
-            if (document().domWindow() && document().domWindow()->performance())
-                document().domWindow()->performance()->addResourceTiming(WTFMove(resourceTiming));
-        }        
+    const auto* timing = response.deprecatedNetworkLoadMetricsOrNull();
+    Optional<NetworkLoadMetrics> empty;
+    if (!timing) {
+        empty.emplace();
+        timing = &empty.value();
     }
-#endif
+    auto resourceTiming = ResourceTiming::fromSynchronousLoad(requestURL, m_options.initiator, loadTiming, *timing, response, securityOrigin());
+    if (options().initiatorContext == InitiatorContext::Worker)
+        finishedTimingForWorkerLoad(resourceTiming);
+    else {
+        if (auto* window = document().domWindow())
+            window->performance().addResourceTiming(WTFMove(resourceTiming));
+    }
 
     didFinishLoading(identifier);
 }
@@ -576,11 +692,6 @@ bool DocumentThreadableLoader::isAllowedRedirect(const URL& url)
     return m_sameOriginRequest && securityOrigin().canRequest(url);
 }
 
-bool DocumentThreadableLoader::isXMLHttpRequest() const
-{
-    return m_options.initiator == cachedResourceRequestInitiators().xmlhttprequest;
-}
-
 SecurityOrigin& DocumentThreadableLoader::securityOrigin() const
 {
     return m_origin ? *m_origin : m_document.securityOrigin();
@@ -596,28 +707,31 @@ const ContentSecurityPolicy& DocumentThreadableLoader::contentSecurityPolicy() c
 
 void DocumentThreadableLoader::reportRedirectionWithBadScheme(const URL& url)
 {
-    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, url, "Redirection to URL with a scheme that is not HTTP(S).", ResourceError::Type::AccessControl));
+    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, url, "Redirection to URL with a scheme that is not HTTP(S)."_s, ResourceError::Type::AccessControl));
 }
 
 void DocumentThreadableLoader::reportContentSecurityPolicyError(const URL& url)
 {
-    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, url, "Cross-origin redirection denied by Content Security Policy.", ResourceError::Type::AccessControl));
+    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, url, "Blocked by Content Security Policy."_s, ResourceError::Type::AccessControl));
 }
 
 void DocumentThreadableLoader::reportCrossOriginResourceSharingError(const URL& url)
 {
-    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, url, "Cross-origin redirection denied by Cross-Origin Resource Sharing policy.", ResourceError::Type::AccessControl));
+    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, url, "Cross-origin redirection denied by Cross-Origin Resource Sharing policy."_s, ResourceError::Type::AccessControl));
 }
 
-void DocumentThreadableLoader::reportIntegrityMetadataError(const URL& url)
+void DocumentThreadableLoader::reportIntegrityMetadataError(const CachedResource& resource, const String& expectedMetadata)
 {
-    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, url, "Failed integrity metadata check.", ResourceError::Type::General));
+    logErrorAndFail(ResourceError(errorDomainWebKitInternal, 0, resource.url(), makeString("Failed integrity metadata check. "_s, integrityMismatchDescription(resource, expectedMetadata)), ResourceError::Type::General));
 }
 
 void DocumentThreadableLoader::logErrorAndFail(const ResourceError& error)
 {
-    if (m_shouldLogError == ShouldLogError::Yes)
+    if (m_shouldLogError == ShouldLogError::Yes) {
+        if (error.isAccessControl() && !error.localizedDescription().isEmpty())
+            m_document.addConsoleMessage(MessageSource::Security, MessageLevel::Error, error.localizedDescription());
         logError(m_document, error, m_options.initiator);
+    }
     ASSERT(m_client);
     m_client->didFail(error);
 }

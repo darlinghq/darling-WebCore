@@ -34,12 +34,10 @@
 
 #include "URLRegistry.h"
 #include <wtf/HashMap.h>
-#include <wtf/NeverDestroyed.h>
 #include <wtf/text/StringHash.h>
 
 namespace WebCore {
 
-class URL;
 class MediaSource;
 
 class MediaSourceRegistry final : public URLRegistry {
@@ -49,9 +47,9 @@ public:
     static MediaSourceRegistry& registry();
 
     // Registers a blob URL referring to the specified media source.
-    void registerURL(SecurityOrigin*, const URL&, URLRegistrable&) override;
-    void unregisterURL(const URL&) override;
-    URLRegistrable* lookup(const String&) const override;
+    void registerURL(ScriptExecutionContext&, const URL&, URLRegistrable&)final;
+    void unregisterURL(const URL&) final;
+    URLRegistrable* lookup(const String&) const final;
 
 private:
     MediaSourceRegistry();

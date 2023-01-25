@@ -29,8 +29,8 @@
 #include "FloatRect.h"
 #include "GraphicsContext.h"
 #include "ImageBuffer.h"
-#include "TextStream.h"
 #include "Theme.h"
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -40,30 +40,29 @@ NamedImageGeneratedImage::NamedImageGeneratedImage(String name, const FloatSize&
     setContainerSize(size);
 }
 
-ImageDrawResult NamedImageGeneratedImage::draw(GraphicsContext& context, const FloatRect& dstRect, const FloatRect& srcRect, CompositeOperator compositeOp, BlendMode blendMode, DecodingMode, ImageOrientationDescription)
+ImageDrawResult NamedImageGeneratedImage::draw(GraphicsContext& context, const FloatRect& dstRect, const FloatRect& srcRect, const ImagePaintingOptions& options)
 {
-#if USE(NEW_THEME) || PLATFORM(IOS)
+#if USE(NEW_THEME) || PLATFORM(IOS_FAMILY)
     GraphicsContextStateSaver stateSaver(context);
-    context.setCompositeOperation(compositeOp, blendMode);
+    context.setCompositeOperation(options.compositeOperator(), options.blendMode());
     context.clip(dstRect);
-    context.translate(dstRect.x(), dstRect.y());
+    context.translate(dstRect.location());
     if (dstRect.size() != srcRect.size())
         context.scale(FloatSize(dstRect.width() / srcRect.width(), dstRect.height() / srcRect.height()));
-    context.translate(-srcRect.x(), -srcRect.y());
+    context.translate(-srcRect.location());
 
-    platformTheme()->drawNamedImage(m_name, context, dstRect);
+    Theme::singleton().drawNamedImage(m_name, context, dstRect);
     return ImageDrawResult::DidDraw;
 #else
     UNUSED_PARAM(context);
     UNUSED_PARAM(dstRect);
     UNUSED_PARAM(srcRect);
-    UNUSED_PARAM(compositeOp);
-    UNUSED_PARAM(blendMode);
+    UNUSED_PARAM(options);
     return ImageDrawResult::DidNothing;
 #endif
 }
 
-void NamedImageGeneratedImage::drawPattern(GraphicsContext& context, const FloatRect& dstRect, const FloatRect& srcRect, const AffineTransform& patternTransform, const FloatPoint& phase, const FloatSize& spacing, CompositeOperator compositeOp, BlendMode blendMode)
+void NamedImageGeneratedImage::drawPattern(GraphicsContext& context, const FloatRect& dstRect, const FloatRect& srcRect, const AffineTransform& patternTransform, const FloatPoint& phase, const FloatSize& spacing, const ImagePaintingOptions& options)
 {
 #if USE(NEW_THEME)
     auto imageBuffer = ImageBuffer::createCompatibleBuffer(size(), context);
@@ -71,19 +70,18 @@ void NamedImageGeneratedImage::drawPattern(GraphicsContext& context, const Float
         return;
 
     GraphicsContext& graphicsContext = imageBuffer->context();
-    platformTheme()->drawNamedImage(m_name, graphicsContext, FloatRect(0, 0, size().width(), size().height()));
+    Theme::singleton().drawNamedImage(m_name, graphicsContext, FloatRect(0, 0, size().width(), size().height()));
 
     // Tile the image buffer into the context.
-    imageBuffer->drawPattern(context, dstRect, srcRect, patternTransform, phase, spacing, compositeOp, blendMode);
+    imageBuffer->drawPattern(context, dstRect, srcRect, patternTransform, phase, spacing, options);
 #else
     UNUSED_PARAM(context);
+    UNUSED_PARAM(dstRect);
     UNUSED_PARAM(srcRect);
     UNUSED_PARAM(patternTransform);
     UNUSED_PARAM(phase);
     UNUSED_PARAM(spacing);
-    UNUSED_PARAM(dstRect);
-    UNUSED_PARAM(compositeOp);
-    UNUSED_PARAM(blendMode);
+    UNUSED_PARAM(options);
 #endif
 }
 

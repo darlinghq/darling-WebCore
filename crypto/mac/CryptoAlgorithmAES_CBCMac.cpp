@@ -26,38 +26,36 @@
 #include "config.h"
 #include "CryptoAlgorithmAES_CBC.h"
 
-#if ENABLE(SUBTLE_CRYPTO)
+#if ENABLE(WEB_CRYPTO)
 
 #include "CryptoAlgorithmAesCbcCfbParams.h"
-#include "CryptoAlgorithmAesCbcParamsDeprecated.h"
 #include "CryptoKeyAES.h"
-#include "ExceptionCode.h"
-#include "ScriptExecutionContext.h"
 #include <CommonCrypto/CommonCrypto.h>
 
 namespace WebCore {
 
-// FIXME: We should change iv and data to Vector<uint8_t> type once WebKitSubtleCrypto is deprecated.
-// https://bugs.webkit.org/show_bug.cgi?id=164939
-static ExceptionOr<Vector<uint8_t>> transformAES_CBC(CCOperation operation, const uint8_t* iv, const Vector<uint8_t>& key, const uint8_t* data, size_t dataLength)
+static ExceptionOr<Vector<uint8_t>> transformAES_CBC(CCOperation operation, const Vector<uint8_t>& iv, const Vector<uint8_t>& key, const Vector<uint8_t>& data, CryptoAlgorithmAES_CBC::Padding padding)
 {
+    CCOptions options = padding == CryptoAlgorithmAES_CBC::Padding::Yes ? kCCOptionPKCS7Padding : 0;
     CCCryptorRef cryptor;
-    CCCryptorStatus status = CCCryptorCreate(operation, kCCAlgorithmAES, kCCOptionPKCS7Padding, key.data(), key.size(), iv, &cryptor);
+    CCCryptorStatus status = CCCryptorCreate(operation, kCCAlgorithmAES, options, key.data(), key.size(), iv.data(), &cryptor);
     if (status)
         return Exception { OperationError };
 
-    Vector<uint8_t> result(CCCryptorGetOutputLength(cryptor, dataLength, true));
+    Vector<uint8_t> result(CCCryptorGetOutputLength(cryptor, data.size(), true));
 
     size_t bytesWritten;
-    status = CCCryptorUpdate(cryptor, data, dataLength, result.data(), result.size(), &bytesWritten);
+    status = CCCryptorUpdate(cryptor, data.data(), data.size(), result.data(), result.size(), &bytesWritten);
     if (status)
         return Exception { OperationError };
 
     uint8_t* p = result.data() + bytesWritten;
-    status = CCCryptorFinal(cryptor, p, result.end() - p, &bytesWritten);
-    p += bytesWritten;
-    if (status)
-        return Exception { OperationError };
+    if (padding == CryptoAlgorithmAES_CBC::Padding::Yes) {
+        status = CCCryptorFinal(cryptor, p, result.end() - p, &bytesWritten);
+        p += bytesWritten;
+        if (status)
+            return Exception { OperationError };
+    }
 
     ASSERT(p <= result.end());
     result.shrink(p - result.begin());
@@ -67,78 +65,20 @@ static ExceptionOr<Vector<uint8_t>> transformAES_CBC(CCOperation operation, cons
     return WTFMove(result);
 }
 
-void CryptoAlgorithmAES_CBC::platformEncrypt(std::unique_ptr<CryptoAlgorithmParameters>&& parameters, Ref<CryptoKey>&& key, Vector<uint8_t>&& plainText, VectorCallback&& callback, ExceptionCallback&& exceptionCallback, ScriptExecutionContext& context, WorkQueue& workQueue)
+ExceptionOr<Vector<uint8_t>> CryptoAlgorithmAES_CBC::platformEncrypt(const CryptoAlgorithmAesCbcCfbParams& parameters, const CryptoKeyAES& key, const Vector<uint8_t>& plainText, Padding padding)
 {
-    context.ref();
-    workQueue.dispatch([parameters = WTFMove(parameters), key = WTFMove(key), plainText = WTFMove(plainText), callback = WTFMove(callback), exceptionCallback = WTFMove(exceptionCallback), &context]() mutable {
-        auto& aesParameters = downcast<CryptoAlgorithmAesCbcCfbParams>(*parameters);
-        auto& aesKey = downcast<CryptoKeyAES>(key.get());
-        ASSERT(aesParameters.ivVector().size() == kCCBlockSizeAES128);
-        auto result = transformAES_CBC(kCCEncrypt, aesParameters.ivVector().data(), aesKey.key(), plainText.data(), plainText.size());
-        if (result.hasException()) {
-            // We should only dereference callbacks after being back to the Document/Worker threads.
-            context.postTask([exceptionCallback = WTFMove(exceptionCallback), ec = result.releaseException().code(), callback = WTFMove(callback)](ScriptExecutionContext& context) {
-                exceptionCallback(ec);
-                context.deref();
-            });
-            return;
-        }
-        // We should only dereference callbacks after being back to the Document/Worker threads.
-        context.postTask([callback = WTFMove(callback), result = result.releaseReturnValue(), exceptionCallback = WTFMove(exceptionCallback)](ScriptExecutionContext& context) {
-            callback(result);
-            context.deref();
-        });
-    });
+    ASSERT(parameters.ivVector().size() == kCCBlockSizeAES128 || parameters.ivVector().isEmpty());
+    ASSERT(padding == Padding::Yes || !(plainText.size() % kCCBlockSizeAES128));
+    return transformAES_CBC(kCCEncrypt, parameters.ivVector(), key.key(), plainText, padding);
 }
 
-void CryptoAlgorithmAES_CBC::platformDecrypt(std::unique_ptr<CryptoAlgorithmParameters>&& parameters, Ref<CryptoKey>&& key, Vector<uint8_t>&& cipherText, VectorCallback&& callback, ExceptionCallback&& exceptionCallback, ScriptExecutionContext& context, WorkQueue& workQueue)
+ExceptionOr<Vector<uint8_t>> CryptoAlgorithmAES_CBC::platformDecrypt(const CryptoAlgorithmAesCbcCfbParams& parameters, const CryptoKeyAES& key, const Vector<uint8_t>& cipherText, Padding padding)
 {
-    context.ref();
-    workQueue.dispatch([parameters = WTFMove(parameters), key = WTFMove(key), cipherText = WTFMove(cipherText), callback = WTFMove(callback), exceptionCallback = WTFMove(exceptionCallback), &context]() mutable {
-        auto& aesParameters = downcast<CryptoAlgorithmAesCbcCfbParams>(*parameters);
-        auto& aesKey = downcast<CryptoKeyAES>(key.get());
-        assert(aesParameters.ivVector().size() == kCCBlockSizeAES128);
-        auto result = transformAES_CBC(kCCDecrypt, aesParameters.ivVector().data(), aesKey.key(), cipherText.data(), cipherText.size());
-        if (result.hasException()) {
-            // We should only dereference callbacks after being back to the Document/Worker threads.
-            context.postTask([exceptionCallback = WTFMove(exceptionCallback), ec = result.releaseException().code(), callback = WTFMove(callback)](ScriptExecutionContext& context) {
-                exceptionCallback(ec);
-                context.deref();
-            });
-            return;
-        }
-        // We should only dereference callbacks after being back to the Document/Worker threads.
-        context.postTask([callback = WTFMove(callback), result = result.releaseReturnValue(), exceptionCallback = WTFMove(exceptionCallback)](ScriptExecutionContext& context) {
-            callback(result);
-            context.deref();
-        });
-    });
-}
-
-ExceptionOr<void> CryptoAlgorithmAES_CBC::platformEncrypt(const CryptoAlgorithmAesCbcParamsDeprecated& parameters, const CryptoKeyAES& key, const CryptoOperationData& data, VectorCallback&& callback, VoidCallback&& failureCallback)
-{
-    ASSERT(sizeof(parameters.iv) == kCCBlockSizeAES128);
-    auto result = transformAES_CBC(kCCEncrypt, parameters.iv.data(), key.key(), data.first, data.second);
-    if (result.hasException()) {
-        failureCallback();
-        return { };
-    }
-    callback(result.releaseReturnValue());
-    return { };
-}
-
-ExceptionOr<void> CryptoAlgorithmAES_CBC::platformDecrypt(const CryptoAlgorithmAesCbcParamsDeprecated& parameters, const CryptoKeyAES& key, const CryptoOperationData& data, VectorCallback&& callback, VoidCallback&& failureCallback)
-{
-    ASSERT(sizeof(parameters.iv) == kCCBlockSizeAES128);
-    auto result = transformAES_CBC(kCCDecrypt, parameters.iv.data(), key.key(), data.first, data.second);
-    if (result.hasException()) {
-        failureCallback();
-        return { };
-    }
-    callback(result.releaseReturnValue());
-    return { };
+    ASSERT(parameters.ivVector().size() == kCCBlockSizeAES128 || parameters.ivVector().isEmpty());
+    ASSERT(padding == Padding::Yes || !(cipherText.size() % kCCBlockSizeAES128));
+    return transformAES_CBC(kCCDecrypt, parameters.ivVector(), key.key(), cipherText, padding);
 }
 
 } // namespace WebCore
 
-#endif // ENABLE(SUBTLE_CRYPTO)
+#endif // ENABLE(WEB_CRYPTO)

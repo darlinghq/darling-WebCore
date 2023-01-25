@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2017-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,7 +26,7 @@
 #import "config.h"
 #import "WebBackgroundTaskController.h"
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
 @implementation WebBackgroundTaskController
 
@@ -40,6 +40,8 @@
 
 - (void)dealloc
 {
+    [_backgroundTaskStartBlock release];
+    [_backgroundTaskEndBlock release];
     [super dealloc];
 }
 

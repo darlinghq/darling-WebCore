@@ -29,12 +29,14 @@
 #include "HitTestResult.h"
 #include "LayoutRepainter.h"
 #include "Page.h"
+#include "RenderChildIterator.h"
 #include "RenderIterator.h"
 #include "RenderLayer.h"
-#include "RenderNamedFlowFragment.h"
+#include "RenderLayoutState.h"
 #include "RenderSVGResource.h"
 #include "RenderSVGResourceContainer.h"
 #include "RenderSVGResourceFilter.h"
+#include "RenderTreeBuilder.h"
 #include "RenderView.h"
 #include "SVGImage.h"
 #include "SVGRenderingContext.h"
@@ -43,23 +45,23 @@
 #include "SVGSVGElement.h"
 #include "SVGViewSpec.h"
 #include "TransformState.h"
+#include <wtf/IsoMallocInlines.h>
+#include <wtf/SetForScope.h>
 #include <wtf/StackStats.h>
 
 namespace WebCore {
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(RenderSVGRoot);
+
 RenderSVGRoot::RenderSVGRoot(SVGSVGElement& element, RenderStyle&& style)
     : RenderReplaced(element, WTFMove(style))
-    , m_objectBoundingBoxValid(false)
     , m_isLayoutSizeChanged(false)
     , m_needsBoundariesOrTransformUpdate(true)
-    , m_hasSVGShadow(false)
     , m_hasBoxDecorations(false)
 {
 }
 
-RenderSVGRoot::~RenderSVGRoot()
-{
-}
+RenderSVGRoot::~RenderSVGRoot() = default;
 
 SVGSVGElement& RenderSVGRoot::svgSVGElement() const
 {
@@ -81,9 +83,14 @@ void RenderSVGRoot::computeIntrinsicRatioInformation(FloatSize& intrinsicSize, d
     intrinsicSize.setWidth(floatValueForLength(svgSVGElement().intrinsicWidth(), 0));
     intrinsicSize.setHeight(floatValueForLength(svgSVGElement().intrinsicHeight(), 0));
 
+    if (style().aspectRatioType() == AspectRatioType::Ratio) {
+        intrinsicRatio = style().logicalAspectRatio();
+        return;
+    }
 
+    Optional<double> intrinsicRatioValue;
     if (!intrinsicSize.isEmpty())
-        intrinsicRatio = intrinsicSize.width() / static_cast<double>(intrinsicSize.height());
+        intrinsicRatioValue = intrinsicSize.width() / static_cast<double>(intrinsicSize.height());
     else {
         // - If either/both of the ‘width’ and ‘height’ of the rootmost ‘svg’ element are in percentage units (or omitted), the
         //   aspect ratio is calculated from the width and height values of the ‘viewBox’ specified for the current SVG document
@@ -92,9 +99,14 @@ void RenderSVGRoot::computeIntrinsicRatioInformation(FloatSize& intrinsicSize, d
         FloatSize viewBoxSize = svgSVGElement().viewBox().size();
         if (!viewBoxSize.isEmpty()) {
             // The viewBox can only yield an intrinsic ratio, not an intrinsic size.
-            intrinsicRatio = viewBoxSize.width() / static_cast<double>(viewBoxSize.height());
+            intrinsicRatioValue = viewBoxSize.width() / static_cast<double>(viewBoxSize.height());
         }
     }
+
+    if (intrinsicRatioValue)
+        intrinsicRatio = *intrinsicRatioValue;
+    else if (style().aspectRatioType() == AspectRatioType::AutoAndRatio)
+        intrinsicRatio = style().logicalAspectRatio();
 }
 
 bool RenderSVGRoot::isEmbeddedThroughSVGImage() const
@@ -111,11 +123,6 @@ bool RenderSVGRoot::isEmbeddedThroughFrameContainingSVGDocument() const
     return frame().document()->isSVGDocument();
 }
 
-static inline LayoutUnit resolveLengthAttributeForSVG(const Length& length, float scale, float maxSize)
-{
-    return valueForLength(length, maxSize) * (length.isFixed() ? scale : 1);
-}
-
 LayoutUnit RenderSVGRoot::computeReplacedLogicalWidth(ShouldComputePreferred shouldComputePreferred) const
 {
     // When we're embedded through SVGImage (border-image/background-image/<html:img>/...) we're forced to resize to a specific size.
@@ -129,7 +136,7 @@ LayoutUnit RenderSVGRoot::computeReplacedLogicalWidth(ShouldComputePreferred sho
     return RenderReplaced::computeReplacedLogicalWidth(shouldComputePreferred);
 }
 
-LayoutUnit RenderSVGRoot::computeReplacedLogicalHeight(std::optional<LayoutUnit> estimatedUsedWidth) const
+LayoutUnit RenderSVGRoot::computeReplacedLogicalHeight(Optional<LayoutUnit> estimatedUsedWidth) const
 {
     // When we're embedded through SVGImage (border-image/background-image/<html:img>/...) we're forced to resize to a specific size.
     if (!m_containerSize.isEmpty())
@@ -144,13 +151,14 @@ LayoutUnit RenderSVGRoot::computeReplacedLogicalHeight(std::optional<LayoutUnit>
 
 void RenderSVGRoot::layout()
 {
+    SetForScope<bool> change(m_inLayout, true);
     StackStats::LayoutCheckPoint layoutCheckPoint;
     ASSERT(needsLayout());
 
     m_resourcesNeedingToInvalidateClients.clear();
 
-    // Arbitrary affine transforms are incompatible with LayoutState.
-    LayoutStateDisabler layoutStateDisabler(view());
+    // Arbitrary affine transforms are incompatible with RenderLayoutState.
+    LayoutStateDisabler layoutStateDisabler(view().frameView().layoutContext());
 
     bool needsLayout = selfNeedsLayout();
     LayoutRepainter repainter(*this, checkForRepaintDuringLayout() && needsLayout);
@@ -167,7 +175,7 @@ void RenderSVGRoot::layout()
         // Invalidate resource clients, which may mark some nodes for layout.
         for (auto& resource :  m_resourcesNeedingToInvalidateClients) {
             resource->removeAllClientsFromCache();
-            SVGResourcesCache::clientStyleChanged(*resource, StyleDifferenceLayout, resource->style());
+            SVGResourcesCache::clientStyleChanged(*resource, StyleDifference::Layout, resource->style());
         }
 
         m_isLayoutSizeChanged = false;
@@ -202,9 +210,9 @@ bool RenderSVGRoot::shouldApplyViewportClip() const
     // the outermost svg is clipped if auto, and svg document roots are always clipped
     // When the svg is stand-alone (isDocumentElement() == true) the viewport clipping should always
     // be applied, noting that the window scrollbars should be hidden if overflow=hidden.
-    return style().overflowX() == OHIDDEN
-        || style().overflowX() == OAUTO
-        || style().overflowX() == OSCROLL
+    return style().overflowX() == Overflow::Hidden
+        || style().overflowX() == Overflow::Auto
+        || style().overflowX() == Overflow::Scroll
         || this->isDocumentElementRenderer();
 }
 
@@ -215,11 +223,11 @@ void RenderSVGRoot::paintReplaced(PaintInfo& paintInfo, const LayoutPoint& paint
         return;
 
     // Don't paint, if the context explicitly disabled it.
-    if (paintInfo.context().paintingDisabled())
+    if (paintInfo.context().paintingDisabled() && !paintInfo.context().detectingContentfulPaint())
         return;
 
-    // SVG outlines are painted during PaintPhaseForeground.
-    if (paintInfo.phase == PaintPhaseOutline || paintInfo.phase == PaintPhaseSelfOutline)
+    // SVG outlines are painted during PaintPhase::Foreground.
+    if (paintInfo.phase == PaintPhase::Outline || paintInfo.phase == PaintPhase::SelfOutline)
         return;
 
     // An empty viewBox also disables rendering.
@@ -227,17 +235,28 @@ void RenderSVGRoot::paintReplaced(PaintInfo& paintInfo, const LayoutPoint& paint
     if (svgSVGElement().hasEmptyViewBox())
         return;
 
+    GraphicsContext& context = paintInfo.context();
+    if (context.detectingContentfulPaint()) {
+        for (auto& current : childrenOfType<RenderObject>(*this)) {
+            if (!current.isSVGHiddenContainer()) {
+                context.setContentfulPaintDetected();
+                return;
+            }
+        }
+        return;
+    }
+
     // Don't paint if we don't have kids, except if we have filters we should paint those.
     if (!firstChild()) {
         auto* resources = SVGResourcesCache::cachedResourcesForRenderer(*this);
         if (!resources || !resources->filter()) {
-            if (paintInfo.phase == PaintPhaseForeground)
+            if (paintInfo.phase == PaintPhase::Foreground)
                 page().addRelevantUnpaintedObject(this, visualOverflowRect());
             return;
         }
     }
 
-    if (paintInfo.phase == PaintPhaseForeground)
+    if (paintInfo.phase == PaintPhase::Foreground)
         page().addRelevantRepaintedObject(this, visualOverflowRect());
 
     // Make a copy of the PaintInfo because applyTransform will modify the damage rect.
@@ -246,7 +265,7 @@ void RenderSVGRoot::paintReplaced(PaintInfo& paintInfo, const LayoutPoint& paint
 
     // Apply initial viewport clip
     if (shouldApplyViewportClip())
-        childPaintInfo.context().clip(snappedIntRect(overflowClipRect(paintOffset, currentRenderNamedFlowFragment())));
+        childPaintInfo.context().clip(snappedIntRect(overflowClipRect(paintOffset)));
 
     // Convert from container offsets (html renderers) to a relative transform (svg renderers).
     // Transform from our paint container's coordinate system to our local coords.
@@ -258,7 +277,7 @@ void RenderSVGRoot::paintReplaced(PaintInfo& paintInfo, const LayoutPoint& paint
     {
         SVGRenderingContext renderingContext;
         bool continueRendering = true;
-        if (childPaintInfo.phase == PaintPhaseForeground) {
+        if (childPaintInfo.phase == PaintPhase::Foreground) {
             renderingContext.prepareToRenderSVGContent(*this, childPaintInfo);
             continueRendering = renderingContext.isRenderingPrepared();
         }
@@ -295,27 +314,15 @@ void RenderSVGRoot::willBeRemovedFromTree()
 
 void RenderSVGRoot::styleDidChange(StyleDifference diff, const RenderStyle* oldStyle)
 {
-    if (diff == StyleDifferenceLayout)
+    if (diff == StyleDifference::Layout)
         setNeedsBoundariesUpdate();
 
     // Box decorations may have appeared/disappeared - recompute status.
-    if (diff == StyleDifferenceRepaint)
+    if (diff == StyleDifference::Repaint)
         m_hasBoxDecorations = hasVisibleBoxDecorationStyle();
 
     RenderReplaced::styleDidChange(diff, oldStyle);
     SVGResourcesCache::clientStyleChanged(*this, diff, style());
-}
-
-void RenderSVGRoot::addChild(RenderObject* child, RenderObject* beforeChild)
-{
-    RenderReplaced::addChild(child, beforeChild);
-    SVGResourcesCache::clientWasAddedToTree(*child);
-}
-
-void RenderSVGRoot::removeChild(RenderObject& child)
-{
-    SVGResourcesCache::clientWillBeRemovedFromTree(child);
-    RenderReplaced::removeChild(child);
 }
 
 // RenderBox methods will expect coordinates w/o any transforms in coordinates
@@ -344,7 +351,7 @@ const AffineTransform& RenderSVGRoot::localToParentTransform() const
 
 LayoutRect RenderSVGRoot::clippedOverflowRectForRepaint(const RenderLayerModelObject* repaintContainer) const
 {
-    if (style().visibility() != VISIBLE && !enclosingLayer()->hasVisibleContent())
+    if (style().visibility() != Visibility::Visible && !enclosingLayer()->hasVisibleContent())
         return LayoutRect();
 
     FloatRect contentRepaintRect = m_localToBorderBoxTransform.mapRect(repaintRectInLocalCoordinates());
@@ -357,19 +364,24 @@ LayoutRect RenderSVGRoot::clippedOverflowRectForRepaint(const RenderLayerModelOb
     return RenderReplaced::computeRectForRepaint(enclosingIntRect(repaintRect), repaintContainer);
 }
 
-FloatRect RenderSVGRoot::computeFloatRectForRepaint(const FloatRect& repaintRect, const RenderLayerModelObject* repaintContainer, bool fixed) const
+Optional<FloatRect> RenderSVGRoot::computeFloatVisibleRectInContainer(const FloatRect& rect, const RenderLayerModelObject* container, VisibleRectContext context) const
 {
     // Apply our local transforms (except for x/y translation), then our shadow, 
     // and then call RenderBox's method to handle all the normal CSS Box model bits
-    FloatRect adjustedRect = m_localToBorderBoxTransform.mapRect(repaintRect);
+    FloatRect adjustedRect = m_localToBorderBoxTransform.mapRect(rect);
 
     const SVGRenderStyle& svgStyle = style().svgStyle();
     if (const ShadowData* shadow = svgStyle.shadow())
         shadow->adjustRectForShadow(adjustedRect);
 
     // Apply initial viewport clip
-    if (shouldApplyViewportClip())
-        adjustedRect.intersect(snappedIntRect(borderBoxRect()));
+    if (shouldApplyViewportClip()) {
+        if (context.options.contains(VisibleRectContextOption::UseEdgeInclusiveIntersection)) {
+            if (!adjustedRect.edgeInclusiveIntersect(snappedIntRect(borderBoxRect())))
+                return WTF::nullopt;
+        } else
+            adjustedRect.intersect(snappedIntRect(borderBoxRect()));
+    }
 
     if (m_hasBoxDecorations || hasRenderOverflow()) {
         // The selectionRect can project outside of the overflowRect, so take their union
@@ -377,18 +389,21 @@ FloatRect RenderSVGRoot::computeFloatRectForRepaint(const FloatRect& repaintRect
         LayoutRect decoratedRepaintRect = unionRect(localSelectionRect(false), visualOverflowRect());
         adjustedRect.unite(decoratedRepaintRect);
     }
-    return RenderReplaced::computeRectForRepaint(enclosingIntRect(adjustedRect), repaintContainer, {fixed, false});
+
+    if (Optional<LayoutRect> rectInContainer = RenderReplaced::computeVisibleRectInContainer(enclosingIntRect(adjustedRect), container, context))
+        return FloatRect(*rectInContainer);
+    return WTF::nullopt;
 }
 
 // This method expects local CSS box coordinates.
 // Callers with local SVG viewport coordinates should first apply the localToBorderBoxTransform
 // to convert from SVG viewport coordinates to local CSS box coordinates.
-void RenderSVGRoot::mapLocalToContainer(const RenderLayerModelObject* repaintContainer, TransformState& transformState, MapCoordinatesFlags mode, bool* wasFixed) const
+void RenderSVGRoot::mapLocalToContainer(const RenderLayerModelObject* ancestorContainer, TransformState& transformState, MapCoordinatesFlags mode, bool* wasFixed) const
 {
     ASSERT(mode & ~IsFixed); // We should have no fixed content in the SVG rendering tree.
     ASSERT(mode & UseTransforms); // mapping a point through SVG w/o respecting trasnforms is useless.
 
-    RenderReplaced::mapLocalToContainer(repaintContainer, transformState, mode | ApplyContainerFlip, wasFixed);
+    RenderReplaced::mapLocalToContainer(ancestorContainer, transformState, mode | ApplyContainerFlip, wasFixed);
 }
 
 const RenderObject* RenderSVGRoot::pushMappingToContainer(const RenderLayerModelObject* ancestorToStopAt, RenderGeometryMap& geometryMap) const
@@ -403,7 +418,6 @@ void RenderSVGRoot::updateCachedBoundaries()
     m_repaintBoundingBoxExcludingShadow.inflate(horizontalBorderAndPaddingExtent());
 
     m_repaintBoundingBox = m_repaintBoundingBoxExcludingShadow;
-    SVGRenderSupport::intersectRepaintRectWithShadows(*this, m_repaintBoundingBox);
 }
 
 bool RenderSVGRoot::nodeAtPoint(const HitTestRequest& request, HitTestResult& result, const HitTestLocation& locationInContainer, const LayoutPoint& accumulatedOffset, HitTestAction hitTestAction)
@@ -411,17 +425,21 @@ bool RenderSVGRoot::nodeAtPoint(const HitTestRequest& request, HitTestResult& re
     LayoutPoint pointInParent = locationInContainer.point() - toLayoutSize(accumulatedOffset);
     LayoutPoint pointInBorderBox = pointInParent - toLayoutSize(location());
 
-    // Only test SVG content if the point is in our content box.
+    ASSERT(SVGHitTestCycleDetectionScope::isEmpty());
+
+    // Test SVG content if the point is in our content box or it is inside the visualOverflowRect and the overflow is visible.
     // FIXME: This should be an intersection when rect-based hit tests are supported by nodeAtFloatPoint.
-    if (contentBoxRect().contains(pointInBorderBox)) {
-        FloatPoint localPoint = localToParentTransform().inverse().value_or(AffineTransform()).mapPoint(FloatPoint(pointInParent));
+    if (contentBoxRect().contains(pointInBorderBox) || (!shouldApplyViewportClip() && visualOverflowRect().contains(pointInParent))) {
+        FloatPoint localPoint = localToParentTransform().inverse().valueOr(AffineTransform()).mapPoint(FloatPoint(pointInParent));
 
         for (RenderObject* child = lastChild(); child; child = child->previousSibling()) {
             // FIXME: nodeAtFloatPoint() doesn't handle rect-based hit tests yet.
             if (child->nodeAtFloatPoint(request, result, localPoint, hitTestAction)) {
                 updateHitTestResult(result, pointInBorderBox);
-                if (!result.addNodeToRectBasedTestResult(child->node(), request, locationInContainer))
+                if (result.addNodeToListBasedTestResult(child->node(), request, locationInContainer) == HitTestProgress::Stop) {
+                    ASSERT(SVGHitTestCycleDetectionScope::isEmpty());
                     return true;
+                }
             }
         }
     }
@@ -435,10 +453,12 @@ bool RenderSVGRoot::nodeAtPoint(const HitTestRequest& request, HitTestResult& re
         LayoutRect boundsRect(accumulatedOffset + location(), size());
         if (locationInContainer.intersects(boundsRect)) {
             updateHitTestResult(result, pointInBorderBox);
-            if (!result.addNodeToRectBasedTestResult(&svgSVGElement(), request, locationInContainer, boundsRect))
+            if (result.addNodeToListBasedTestResult(nodeForHitTest(), request, locationInContainer, boundsRect) == HitTestProgress::Stop)
                 return true;
         }
     }
+
+    ASSERT(SVGHitTestCycleDetectionScope::isEmpty());
 
     return false;
 }

@@ -25,18 +25,12 @@
 
 #pragma once
 
+#include <wtf/EnumTraits.h>
+
 namespace WebCore {
 
 struct Pagination {
-    enum Mode { Unpaginated, LeftToRightPaginated, RightToLeftPaginated, TopToBottomPaginated, BottomToTopPaginated };
-
-    Pagination()
-        : mode(Unpaginated)
-        , behavesLikeColumns(false)
-        , pageLength(0)
-        , gap(0)
-    {
-    };
+    enum Mode : uint8_t { Unpaginated, LeftToRightPaginated, RightToLeftPaginated, TopToBottomPaginated, BottomToTopPaginated };
 
     bool operator==(const Pagination& other) const
     {
@@ -45,13 +39,28 @@ struct Pagination {
 
     bool operator!=(const Pagination& other) const
     {
-        return mode != other.mode || behavesLikeColumns != other.behavesLikeColumns || pageLength != other.pageLength || gap != other.gap;
+        return !(*this == other);
     }
 
-    Mode mode;
-    bool behavesLikeColumns;
-    unsigned pageLength;
-    unsigned gap;
+    Mode mode { Unpaginated };
+    bool behavesLikeColumns { false };
+    unsigned pageLength { 0 };
+    unsigned gap { 0 };
 };
 
 } // namespace WebCore
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::Pagination::Mode> {
+    using values = EnumValues<
+        WebCore::Pagination::Mode,
+        WebCore::Pagination::Mode::Unpaginated,
+        WebCore::Pagination::Mode::LeftToRightPaginated,
+        WebCore::Pagination::Mode::RightToLeftPaginated,
+        WebCore::Pagination::Mode::TopToBottomPaginated,
+        WebCore::Pagination::Mode::BottomToTopPaginated
+    >;
+};
+
+} // namespace WTF

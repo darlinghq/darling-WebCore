@@ -22,80 +22,15 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "ComplexTextController.h"
+#import "config.h"
+#import "ComplexTextController.h"
 
-#include "CoreTextSPI.h"
-#include "FontCache.h"
-#include "FontCascade.h"
-#include "TextRun.h"
-#include "WebCoreSystemInterface.h"
-#include <wtf/SoftLinking.h>
-#include <wtf/WeakPtr.h>
-
-#if PLATFORM(IOS)
-#include <CoreText/CoreText.h>
-#else
-#include <ApplicationServices/ApplicationServices.h>
-#endif
-
-// Note: CTFontDescriptorRefs can live forever in caches inside CoreText, so this object can too.
-@interface WebCascadeList : NSArray {
-    @private
-    WeakPtr<WebCore::FontCascade> _font;
-    UChar32 _character;
-    NSUInteger _count;
-    Vector<RetainPtr<CTFontDescriptorRef>, 16> _fontDescriptors;
-}
-
-- (id)initWithFont:(const WebCore::FontCascade*)font character:(UChar32)character;
-
-@end
-
-@implementation WebCascadeList
-
-- (id)initWithFont:(const WebCore::FontCascade*)font character:(UChar32)character
-{
-    if (!(self = [super init]))
-        return nil;
-
-    _font = font->createWeakPtr();
-    _character = character;
-
-    // By the time a WebCascadeList is used, the FontCascade has already been asked to realize all of its
-    // Fonts, so this loop does not hit the FontCache.
-    while (!_font->fallbackRangesAt(_count).isNull())
-        _count++;
-
-    return self;
-}
-
-- (NSUInteger)count
-{
-    return _font ? _count : 0;
-}
-
-- (id)objectAtIndex:(NSUInteger)index
-{
-    if (!_font)
-        return nil;
-
-    CTFontDescriptorRef fontDescriptor;
-    if (index < _fontDescriptors.size()) {
-        if ((fontDescriptor = _fontDescriptors[index].get()))
-            return (id)fontDescriptor;
-    } else
-        _fontDescriptors.grow(index + 1);
-
-    const WebCore::Font* font = _font->fallbackRangesAt(index).fontForCharacter(_character);
-    if (!font)
-        font = &_font->fallbackRangesAt(index).fontForFirstRange();
-    fontDescriptor = CTFontCopyFontDescriptor(font->platformData().ctFont());
-    _fontDescriptors[index] = adoptCF(fontDescriptor);
-    return (id)fontDescriptor;
-}
-
-@end
+#import "FontCache.h"
+#import "FontCascade.h"
+#import <CoreText/CoreText.h>
+#import <pal/spi/cocoa/CoreTextSPI.h>
+#import <wtf/SoftLinking.h>
+#import <wtf/WeakPtr.h>
 
 namespace WebCore {
 
@@ -170,12 +105,7 @@ static const UniChar* provideStringAndAttributes(CFIndex stringIndex, CFIndex* c
 
     *charCount = info->length - stringIndex;
     *attributes = info->attributes;
-    return info->cp + stringIndex;
-}
-
-static inline bool safeCFEqual(CFTypeRef a, CFTypeRef b)
-{
-    return (!a && !b) || (a && b && CFEqual(a, b));
+    return reinterpret_cast<const UniChar*>(info->cp + stringIndex);
 }
 
 void ComplexTextController::collectComplexTextRunsForCharacters(const UChar* cp, unsigned length, unsigned stringLocation, const Font* font)
@@ -198,32 +128,31 @@ void ComplexTextController::collectComplexTextRunsForCharacters(const UChar* cp,
         font = m_font.fallbackRangesAt(0).fontForCharacter(baseCharacter);
         if (!font)
             font = &m_font.fallbackRangesAt(0).fontForFirstRange();
-
-        RetainPtr<WebCascadeList> cascadeList = adoptNS([[WebCascadeList alloc] initWithFont:&m_font character:baseCharacter]);
-
-        stringAttributes = adoptCF(CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, font->getCFStringAttributes(m_font.enableKerning(), font->platformData().orientation())));
-        static const void* attributeKeys[] = { kCTFontCascadeListAttribute };
-        const void* values[] = { cascadeList.get() };
-        RetainPtr<CFDictionaryRef> attributes = adoptCF(CFDictionaryCreate(kCFAllocatorDefault, attributeKeys, values, sizeof(attributeKeys) / sizeof(*attributeKeys), &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
-        RetainPtr<CTFontDescriptorRef> fontDescriptor = adoptCF(CTFontDescriptorCreateWithAttributes(attributes.get()));
-        RetainPtr<CTFontRef> fontWithCascadeList = adoptCF(CTFontCreateCopyWithAttributes(font->platformData().ctFont(), m_font.pixelSize(), 0, fontDescriptor.get()));
-        CFDictionarySetValue(const_cast<CFMutableDictionaryRef>(stringAttributes.get()), kCTFontAttributeName, fontWithCascadeList.get());
+        stringAttributes = adoptCF(CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, font->getCFStringAttributes(m_font.enableKerning(), font->platformData().orientation(), m_font.fontDescription().computedLocale()).get()));
+        // We don't know which font should be used to render this grapheme cluster, so enable CoreText's fallback mechanism by using the CTFont which doesn't have CoreText's fallback disabled.
+        CFDictionarySetValue(const_cast<CFMutableDictionaryRef>(stringAttributes.get()), kCTFontAttributeName, font->platformData().font());
     } else
-        stringAttributes = font->getCFStringAttributes(m_font.enableKerning(), font->platformData().orientation());
+        stringAttributes = font->getCFStringAttributes(m_font.enableKerning(), font->platformData().orientation(), m_font.fontDescription().computedLocale());
 
     RetainPtr<CTLineRef> line;
 
     if (!m_mayUseNaturalWritingDirection || m_run.directionalOverride()) {
-        static const void* optionKeys[] = { kCTTypesetterOptionForcedEmbeddingLevel };
         const short ltrForcedEmbeddingLevelValue = 0;
         const short rtlForcedEmbeddingLevelValue = 1;
+        static const void* optionKeys[] = { kCTTypesetterOptionForcedEmbeddingLevel };
         static const void* ltrOptionValues[] = { CFNumberCreate(kCFAllocatorDefault, kCFNumberShortType, &ltrForcedEmbeddingLevelValue) };
         static const void* rtlOptionValues[] = { CFNumberCreate(kCFAllocatorDefault, kCFNumberShortType, &rtlForcedEmbeddingLevelValue) };
         static CFDictionaryRef ltrTypesetterOptions = CFDictionaryCreate(kCFAllocatorDefault, optionKeys, ltrOptionValues, WTF_ARRAY_LENGTH(optionKeys), &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         static CFDictionaryRef rtlTypesetterOptions = CFDictionaryCreate(kCFAllocatorDefault, optionKeys, rtlOptionValues, WTF_ARRAY_LENGTH(optionKeys), &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
         ProviderInfo info = { cp, length, stringAttributes.get() };
+        // FIXME: Some SDKs complain that the second parameter below cannot be null.
+        IGNORE_NULL_CHECK_WARNINGS_BEGIN
         RetainPtr<CTTypesetterRef> typesetter = adoptCF(CTTypesetterCreateWithUniCharProviderAndOptions(&provideStringAndAttributes, 0, &info, m_run.ltr() ? ltrTypesetterOptions : rtlTypesetterOptions));
+        IGNORE_NULL_CHECK_WARNINGS_END
+
+        if (!typesetter)
+            return;
 
         line = adoptCF(CTTypesetterCreateLine(typesetter.get(), CFRangeMake(0, 0)));
     } else {
@@ -232,9 +161,15 @@ void ComplexTextController::collectComplexTextRunsForCharacters(const UChar* cp,
         line = adoptCF(CTLineCreateWithUniCharProvider(&provideStringAndAttributes, nullptr, &info));
     }
 
+    if (!line)
+        return;
+
     m_coreTextLines.append(line.get());
 
     CFArrayRef runArray = CTLineGetGlyphRuns(line.get());
+
+    if (!runArray)
+        return;
 
     CFIndex runCount = CFArrayGetCount(runArray);
 
@@ -243,40 +178,31 @@ void ComplexTextController::collectComplexTextRunsForCharacters(const UChar* cp,
         ASSERT(CFGetTypeID(ctRun) == CTRunGetTypeID());
         CFRange runRange = CTRunGetStringRange(ctRun);
         const Font* runFont = font;
+        // If isSystemFallback is false, it means we disabled CoreText's font fallback mechanism, which means all the runs must use this exact font.
+        // Therefore, we only need to inspect which font was actually used if isSystemFallback is true.
         if (isSystemFallback) {
             CFDictionaryRef runAttributes = CTRunGetAttributes(ctRun);
             CTFontRef runCTFont = static_cast<CTFontRef>(CFDictionaryGetValue(runAttributes, kCTFontAttributeName));
             ASSERT(runCTFont && CFGetTypeID(runCTFont) == CTFontGetTypeID());
             RetainPtr<CFTypeRef> runFontEqualityObject = FontPlatformData::objectForEqualityCheck(runCTFont);
-            if (!safeCFEqual(runFontEqualityObject.get(), font->platformData().objectForEqualityCheck().get())) {
+            if (!WTF::safeCFEqual(runFontEqualityObject.get(), font->platformData().objectForEqualityCheck().get())) {
                 // Begin trying to see if runFont matches any of the fonts in the fallback list.
-
                 for (unsigned i = 0; !m_font.fallbackRangesAt(i).isNull(); ++i) {
                     runFont = m_font.fallbackRangesAt(i).fontForCharacter(baseCharacter);
                     if (!runFont)
                         continue;
-                    if (safeCFEqual(runFont->platformData().objectForEqualityCheck().get(), runFontEqualityObject.get()))
+                    if (WTF::safeCFEqual(runFont->platformData().objectForEqualityCheck().get(), runFontEqualityObject.get()))
                         break;
                     runFont = nullptr;
                 }
-                // If there is no matching font, look up by name in the font cache.
                 if (!runFont) {
-                    // Rather than using runFont as an NSFont and wrapping it in a FontPlatformData, go through
-                    // the font cache and ultimately through NSFontManager in order to get an NSFont with the right
-                    // NSFontRenderingMode.
                     RetainPtr<CFStringRef> fontName = adoptCF(CTFontCopyPostScriptName(runCTFont));
                     if (CFEqual(fontName.get(), CFSTR("LastResort"))) {
                         m_complexTextRuns.append(ComplexTextRun::create(m_font.primaryFont(), cp, stringLocation, length, runRange.location, runRange.location + runRange.length, m_run.ltr()));
                         continue;
                     }
-                    auto& fontCache = FontCache::singleton();
-                    runFont = fontCache.fontForFamily(m_font.fontDescription(), fontName.get()).get();
-                    // Core Text may have used a font that our font lookup path cannot find. In that case, fall back on
-                    // using the font as returned.
-                    if (!runFont) {
-                        FontPlatformData runFontPlatformData(runCTFont, CTFontGetSize(runCTFont));
-                        runFont = fontCache.fontForPlatformData(runFontPlatformData).ptr();
-                    }
+                    FontPlatformData runFontPlatformData(runCTFont, CTFontGetSize(runCTFont));
+                    runFont = FontCache::singleton().fontForPlatformData(runFontPlatformData).ptr();
                 }
                 if (m_fallbackFonts && runFont != &m_font.primaryFont())
                     m_fallbackFonts->add(runFont);

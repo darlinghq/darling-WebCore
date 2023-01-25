@@ -26,7 +26,7 @@
 #ifndef AVTrackPrivateAVFObjCImpl_h
 #define AVTrackPrivateAVFObjCImpl_h
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "AudioTrackPrivate.h"
 #include "VideoTrackPrivate.h"
@@ -44,6 +44,7 @@ namespace WebCore {
 class MediaSelectionOptionAVFObjC;
 
 class AVTrackPrivateAVFObjCImpl {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     explicit AVTrackPrivateAVFObjCImpl(AVPlayerItemTrack*);
     explicit AVTrackPrivateAVFObjCImpl(AVAssetTrack*);
@@ -61,9 +62,9 @@ public:
     VideoTrackPrivate::Kind videoKind() const;
 
     int index() const;
-    AtomicString id() const;
-    AtomicString label() const;
-    AtomicString language() const;
+    AtomString id() const;
+    AtomString label() const;
+    AtomString language() const;
 
     int trackID() const;
 
@@ -79,6 +80,6 @@ private:
 
 }
 
-#endif // ENABLE(VIDEO_TRACK)
+#endif // ENABLE(VIDEO)
 
 #endif

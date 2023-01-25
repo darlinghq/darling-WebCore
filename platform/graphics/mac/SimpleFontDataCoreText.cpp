@@ -27,35 +27,57 @@
 #include "config.h"
 #include "Font.h"
 
-#if !PLATFORM(IOS)
-#include <ApplicationServices/ApplicationServices.h>
-#else
 #include <CoreText/CoreText.h>
-#endif
+#include <pal/spi/cocoa/CoreTextSPI.h>
 
 namespace WebCore {
 
-CFDictionaryRef Font::getCFStringAttributes(bool enableKerning, FontOrientation orientation) const
+RetainPtr<CFDictionaryRef> Font::getCFStringAttributes(bool enableKerning, FontOrientation orientation, const AtomString& locale) const
 {
-    auto& attributesDictionary = enableKerning ? m_kernedCFStringAttributes : m_nonKernedCFStringAttributes;
-    if (attributesDictionary)
-        return attributesDictionary.get();
+    CFTypeRef keys[5];
+    CFTypeRef values[5];
 
-    attributesDictionary = adoptCF(CFDictionaryCreateMutable(kCFAllocatorDefault, 4, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
-    CFMutableDictionaryRef mutableAttributes = (CFMutableDictionaryRef)attributesDictionary.get();
+    keys[0] = kCTFontAttributeName;
+    values[0] = platformData().ctFont();
+    size_t count = 1;
 
-    CFDictionarySetValue(mutableAttributes, kCTFontAttributeName, platformData().ctFont());
+#if USE(CTFONTSHAPEGLYPHS)
+    RetainPtr<CFStringRef> localeString;
+    if (!locale.isEmpty()) {
+        localeString = locale.string().createCFString();
+        keys[count] = kCTLanguageAttributeName;
+        values[count] = localeString.get();
+        ++count;
+    }
+#else
+    UNUSED_PARAM(locale);
+#endif
+    static CTParagraphStyleRef paragraphStyle = [] {
+        auto paragraphStyle = CTParagraphStyleCreate(nullptr, 0);
+        CTParagraphStyleSetCompositionLanguage(paragraphStyle, kCTCompositionLanguageNone);
+        return paragraphStyle;
+    }();
+    keys[count] = kCTParagraphStyleAttributeName;
+    values[count] = paragraphStyle;
+    ++count;
 
     if (!enableKerning) {
         const float zero = 0;
         static CFNumberRef zeroKerningValue = CFNumberCreate(kCFAllocatorDefault, kCFNumberFloatType, &zero);
-        CFDictionarySetValue(mutableAttributes, kCTKernAttributeName, zeroKerningValue);
+        keys[count] = kCTKernAttributeName;
+        values[count] = zeroKerningValue;
+        ++count;
     }
 
-    if (orientation == Vertical)
-        CFDictionarySetValue(mutableAttributes, kCTVerticalFormsAttributeName, kCFBooleanTrue);
+    if (orientation == FontOrientation::Vertical) {
+        keys[count] = kCTVerticalFormsAttributeName;
+        values[count] = kCFBooleanTrue;
+        ++count;
+    }
 
-    return attributesDictionary.get();
+    ASSERT(count <= WTF_ARRAY_LENGTH(keys));
+
+    return adoptCF(CFDictionaryCreate(kCFAllocatorDefault, keys, values, count, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks));
 }
 
 } // namespace WebCore

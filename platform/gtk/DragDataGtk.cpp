@@ -41,9 +41,9 @@ unsigned DragData::numberOfFiles() const
     return m_platformDragData->filenames().size();
 }
 
-void DragData::asFilenames(Vector<String>& result) const
+Vector<String> DragData::asFilenames() const
 {
-    result = m_platformDragData->filenames();
+    return m_platformDragData->filenames();
 }
 
 bool DragData::containsPlainText() const
@@ -76,15 +76,13 @@ String DragData::asURL(FilenameConversionPolicy filenamePolicy, String* title) c
     if (!m_platformDragData->hasURL())
         return String();
     if (filenamePolicy != ConvertFilenames) {
-        URL url(URL(), m_platformDragData->url());
-        if (url.isLocalFile())
-            return String();
+        if (m_platformDragData->url().isLocalFile())
+            return { };
     }
 
-    String url(m_platformDragData->url());
     if (title)
         *title = m_platformDragData->urlLabel();
-    return url;
+    return m_platformDragData->url().string();
 }
 
 }

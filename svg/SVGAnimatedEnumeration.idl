@@ -24,9 +24,10 @@
  */
 
 [
-    SkipVTableValidation
+    SkipVTableValidation,
+    Exposed=Window
 ] interface SVGAnimatedEnumeration {
-    [SetterMayThrowException] attribute unsigned short baseVal;
+    attribute unsigned short baseVal;
     readonly attribute unsigned short animVal;
 };
 

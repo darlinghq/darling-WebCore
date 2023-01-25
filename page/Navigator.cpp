@@ -23,119 +23,300 @@
 #include "config.h"
 #include "Navigator.h"
 
+#include "Chrome.h"
 #include "CookieJar.h"
+#include "DOMMimeType.h"
 #include "DOMMimeTypeArray.h"
+#include "DOMPlugin.h"
 #include "DOMPluginArray.h"
 #include "Document.h"
 #include "Frame.h"
 #include "FrameLoader.h"
 #include "FrameLoaderClient.h"
 #include "Geolocation.h"
-#include "Language.h"
+#include "JSDOMPromiseDeferred.h"
+#include "LoaderStrategy.h"
 #include "Page.h"
+#include "PlatformStrategies.h"
 #include "PluginData.h"
+#include "ResourceLoadObserver.h"
+#include "RuntimeEnabledFeatures.h"
 #include "ScriptController.h"
 #include "SecurityOrigin.h"
 #include "Settings.h"
+#include "ShareData.h"
+#include "ShareDataReader.h"
+#include "SharedBuffer.h"
+#include <wtf/IsoMallocInlines.h>
+#include <wtf/Language.h>
 #include <wtf/StdLibExtras.h>
-
-using namespace WTF;
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
-Navigator::Navigator(Frame& frame)
-    : DOMWindowProperty(&frame)
+WTF_MAKE_ISO_ALLOCATED_IMPL(Navigator);
+
+Navigator::Navigator(ScriptExecutionContext* context, DOMWindow& window)
+    : NavigatorBase(context)
+    , DOMWindowProperty(&window)
 {
 }
 
-Navigator::~Navigator()
-{
-}
-
-// If this function returns true, we need to hide the substring "4." that would otherwise
-// appear in the appVersion string. This is to avoid problems with old versions of a
-// library called OpenCube QuickMenu, which as of this writing is still being used on
-// sites such as nwa.com -- the library thinks Safari is Netscape 4 if we don't do this!
-static bool shouldHideFourDot(Frame& frame)
-{
-    auto* sourceURL = frame.script().sourceURL();
-    if (!sourceURL)
-        return false;
-    if (!(sourceURL->endsWith("/dqm_script.js") || sourceURL->endsWith("/dqm_loader.js") || sourceURL->endsWith("/tdqm_loader.js")))
-        return false;
-    return frame.settings().needsSiteSpecificQuirks();
-}
+Navigator::~Navigator() = default;
 
 String Navigator::appVersion() const
 {
-    if (!m_frame)
+    auto* frame = this->frame();
+    if (!frame)
         return String();
-    String appVersion = NavigatorBase::appVersion();
-    if (shouldHideFourDot(*m_frame))
-        appVersion.replace("4.", "4_");
-    return appVersion;
+    if (RuntimeEnabledFeatures::sharedFeatures().webAPIStatisticsEnabled())
+        ResourceLoadObserver::shared().logNavigatorAPIAccessed(*frame->document(), ResourceLoadStatistics::NavigatorAPI::AppVersion);
+    return NavigatorBase::appVersion();
 }
 
-String Navigator::userAgent() const
+const String& Navigator::userAgent() const
 {
-    if (!m_frame)
-        return String();
+    auto* frame = this->frame();
+    if (!frame || !frame->page())
+        return m_userAgent;
+    if (RuntimeEnabledFeatures::sharedFeatures().webAPIStatisticsEnabled())
+        ResourceLoadObserver::shared().logNavigatorAPIAccessed(*frame->document(), ResourceLoadStatistics::NavigatorAPI::UserAgent);
+    if (m_userAgent.isNull())
+        m_userAgent = frame->loader().userAgent(frame->document()->url());
+    return m_userAgent;
+}
+    
+String Navigator::platform() const
+{
+    auto* frame = this->frame();
+    if (!frame || !frame->page())
+        return m_platform;
 
-    // If the frame is already detached, FrameLoader::userAgent may malfunction, because it calls a client method
-    // that uses frame's WebView (at least, in Mac WebKit).
-    if (!m_frame->page())
-        return String();
+    if (m_platform.isNull())
+        m_platform = frame->loader().navigatorPlatform();
+    
+    if (m_platform.isNull())
+        m_platform = NavigatorBase::platform();
+    return m_platform;
+}
 
-    return m_frame->loader().userAgent(m_frame->document()->url());
+void Navigator::userAgentChanged()
+{
+    m_userAgent = String();
+}
+
+bool Navigator::onLine() const
+{
+    return platformStrategies()->loaderStrategy()->isOnLine();
+}
+
+static Optional<URL> shareableURLForShareData(ScriptExecutionContext& context, const ShareData& data)
+{
+    if (data.url.isNull())
+        return WTF::nullopt;
+
+    auto url = context.completeURL(data.url);
+    if (!url.isValid())
+        return WTF::nullopt;
+    if (!url.protocolIsInHTTPFamily() && !url.protocolIsData())
+        return WTF::nullopt;
+
+    return url;
+}
+
+bool Navigator::canShare(Document& document, const ShareData& data)
+{
+    auto* frame = this->frame();
+    if (!frame || !frame->page())
+        return false;
+
+    bool hasShareableTitleOrText = !data.title.isNull() || !data.text.isNull();
+    bool hasShareableURL = !!shareableURLForShareData(document, data);
+#if ENABLE(FILE_SHARE)
+    bool hasShareableFiles = document.settings().webShareFileAPIEnabled() && !data.files.isEmpty();
+#else
+    bool hasShareableFiles = false;
+#endif
+
+    return hasShareableTitleOrText || hasShareableURL || hasShareableFiles;
+}
+
+void Navigator::share(Document& document, const ShareData& data, Ref<DeferredPromise>&& promise)
+{
+    if (!canShare(document, data)) {
+        promise->reject(TypeError);
+        return;
+    }
+
+    auto* window = this->window();
+    // Note that the specification does not indicate we should consume user activation. We are intentionally stricter here.
+    if (!window || !window->consumeTransientActivation() || m_hasPendingShare) {
+        promise->reject(NotAllowedError);
+        return;
+    }
+
+    Optional<URL> url = shareableURLForShareData(document, data);
+    ShareDataWithParsedURL shareData = {
+        data,
+        url,
+        { },
+    };
+#if ENABLE(FILE_SHARE)
+    if (document.settings().webShareFileAPIEnabled() && !data.files.isEmpty()) {
+        if (m_loader)
+            m_loader->cancel();
+        
+        m_loader = ShareDataReader::create([this, promise = WTFMove(promise)] (ExceptionOr<ShareDataWithParsedURL&> readData) mutable {
+            showShareData(readData, WTFMove(promise));
+        });
+        m_loader->start(&document, WTFMove(shareData));
+        return;
+    }
+#endif
+    this->showShareData(shareData, WTFMove(promise));
+}
+
+void Navigator::showShareData(ExceptionOr<ShareDataWithParsedURL&> readData, Ref<DeferredPromise>&& promise)
+{
+    if (readData.hasException()) {
+        promise->reject(readData.releaseException());
+        return;
+    }
+    
+    auto* frame = this->frame();
+    if (!frame || !frame->page())
+        return;
+    
+    m_hasPendingShare = true;
+    auto shareData = readData.returnValue();
+    
+    frame->page()->chrome().showShareSheet(shareData, [promise = WTFMove(promise), this] (bool completed) {
+        m_hasPendingShare = false;
+        if (completed) {
+            promise->resolve();
+            return;
+        }
+        promise->reject(Exception { AbortError, "Abort due to cancellation of share."_s });
+    });
+}
+
+void Navigator::initializePluginAndMimeTypeArrays()
+{
+    if (m_plugins)
+        return;
+
+    auto* frame = this->frame();
+    if (!frame || !frame->page()) {
+        m_plugins = DOMPluginArray::create(*this);
+        m_mimeTypes = DOMMimeTypeArray::create(*this);
+        return;
+    }
+
+    auto [publiclyVisiblePlugins, additionalWebVisiblePlugins] = frame->page()->pluginData().publiclyVisiblePluginsAndAdditionalWebVisiblePlugins();
+
+    Vector<Ref<DOMPlugin>> publiclyVisibleDOMPlugins;
+    Vector<Ref<DOMPlugin>> additionalWebVisibleDOMPlugins;
+    Vector<Ref<DOMMimeType>> webVisibleDOMMimeTypes;
+
+    publiclyVisibleDOMPlugins.reserveInitialCapacity(publiclyVisiblePlugins.size());
+    for (auto& plugin : publiclyVisiblePlugins) {
+        auto wrapper = DOMPlugin::create(*this, plugin);
+        webVisibleDOMMimeTypes.appendVector(wrapper->mimeTypes());
+        publiclyVisibleDOMPlugins.uncheckedAppend(WTFMove(wrapper));
+    }
+
+    additionalWebVisibleDOMPlugins.reserveInitialCapacity(additionalWebVisiblePlugins.size());
+    for (auto& plugin : additionalWebVisiblePlugins) {
+        auto wrapper = DOMPlugin::create(*this, plugin);
+        webVisibleDOMMimeTypes.appendVector(wrapper->mimeTypes());
+        additionalWebVisibleDOMPlugins.uncheckedAppend(WTFMove(wrapper));
+    }
+
+    std::sort(publiclyVisibleDOMPlugins.begin(), publiclyVisibleDOMPlugins.end(), [](const Ref<DOMPlugin>& a, const Ref<DOMPlugin>& b) {
+        if (auto nameComparison = codePointCompare(a->info().name, b->info().name))
+            return nameComparison < 0;
+        return codePointCompareLessThan(a->info().bundleIdentifier, b->info().bundleIdentifier);
+    });
+
+    std::sort(webVisibleDOMMimeTypes.begin(), webVisibleDOMMimeTypes.end(), [](const Ref<DOMMimeType>& a, const Ref<DOMMimeType>& b) {
+        if (auto typeComparison = codePointCompare(a->type(), b->type()))
+            return typeComparison < 0;
+        return codePointCompareLessThan(a->enabledPlugin()->info().bundleIdentifier, b->enabledPlugin()->info().bundleIdentifier);
+    });
+
+    // NOTE: It is not necessary to sort additionalWebVisibleDOMPlugins, as they are only accessible via
+    // named property look up, so their order is not exposed.
+
+    m_plugins = DOMPluginArray::create(*this, WTFMove(publiclyVisibleDOMPlugins), WTFMove(additionalWebVisibleDOMPlugins));
+    m_mimeTypes = DOMMimeTypeArray::create(*this, WTFMove(webVisibleDOMMimeTypes));
 }
 
 DOMPluginArray& Navigator::plugins()
 {
-    if (!m_plugins)
-        m_plugins = DOMPluginArray::create(m_frame);
+    if (RuntimeEnabledFeatures::sharedFeatures().webAPIStatisticsEnabled()) {
+        if (auto* frame = this->frame())
+            ResourceLoadObserver::shared().logNavigatorAPIAccessed(*frame->document(), ResourceLoadStatistics::NavigatorAPI::Plugins);
+    }
+    initializePluginAndMimeTypeArrays();
     return *m_plugins;
 }
 
 DOMMimeTypeArray& Navigator::mimeTypes()
 {
-    if (!m_mimeTypes)
-        m_mimeTypes = DOMMimeTypeArray::create(m_frame);
+    if (RuntimeEnabledFeatures::sharedFeatures().webAPIStatisticsEnabled()) {
+        if (auto* frame = this->frame())
+            ResourceLoadObserver::shared().logNavigatorAPIAccessed(*frame->document(), ResourceLoadStatistics::NavigatorAPI::MimeTypes);
+    }
+    initializePluginAndMimeTypeArrays();
     return *m_mimeTypes;
 }
 
 bool Navigator::cookieEnabled() const
 {
-    if (!m_frame)
+    auto* frame = this->frame();
+    if (!frame)
         return false;
 
-    if (m_frame->page() && !m_frame->page()->settings().cookieEnabled())
+    if (RuntimeEnabledFeatures::sharedFeatures().webAPIStatisticsEnabled())
+        ResourceLoadObserver::shared().logNavigatorAPIAccessed(*frame->document(), ResourceLoadStatistics::NavigatorAPI::CookieEnabled);
+
+    auto* page = frame->page();
+    if (!page)
+        return false;
+    
+    if (!page->settings().cookieEnabled())
         return false;
 
-    auto* document = m_frame->document();
+    auto* document = frame->document();
     if (!document)
         return false;
 
-    return cookiesEnabled(*document);
+    return page->cookieJar().cookiesEnabled(*document);
 }
 
 bool Navigator::javaEnabled() const
 {
-    if (!m_frame)
+    auto* frame = this->frame();
+    if (!frame)
         return false;
 
-    if (!m_frame->settings().isJavaEnabled())
+    if (RuntimeEnabledFeatures::sharedFeatures().webAPIStatisticsEnabled())
+        ResourceLoadObserver::shared().logNavigatorAPIAccessed(*frame->document(), ResourceLoadStatistics::NavigatorAPI::JavaEnabled);
+
+    if (!frame->settings().isJavaEnabled())
         return false;
-    if (m_frame->document()->securityOrigin().isLocal() && !m_frame->settings().isJavaEnabledForLocalFiles())
+    if (frame->document()->securityOrigin().isLocal() && !frame->settings().isJavaEnabledForLocalFiles())
         return false;
 
     return true;
 }
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
 bool Navigator::standalone() const
 {
-    return m_frame && m_frame->settings().standalone();
+    auto* frame = this->frame();
+    return frame && frame->settings().standalone();
 }
 
 #endif

@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 1999 Lars Knoll (knoll@kde.org)
  *           (C) 1999 Antti Koivisto (koivisto@kde.org)
- * Copyright (C) 2003, 2004, 2005, 2006, 2007, 2008, 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2003-2018 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -23,11 +23,9 @@
 #include "Text.h"
 
 #include "Event.h"
-#include "ExceptionCode.h"
 #include "RenderCombineText.h"
 #include "RenderSVGInlineText.h"
 #include "RenderText.h"
-#include "RenderTreeUpdater.h"
 #include "SVGElement.h"
 #include "SVGNames.h"
 #include "ScopedEventQueue.h"
@@ -35,12 +33,16 @@
 #include "StyleInheritedData.h"
 #include "StyleResolver.h"
 #include "StyleUpdate.h"
+#include "TextManipulationController.h"
 #include "TextNodeTraversal.h"
 #include <wtf/CheckedArithmetic.h>
+#include <wtf/IsoMallocInlines.h>
 #include <wtf/text/CString.h>
 #include <wtf/text/StringBuilder.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(Text);
 
 Ref<Text> Text::create(Document& document, const String& data)
 {
@@ -52,14 +54,12 @@ Ref<Text> Text::createEditingText(Document& document, const String& data)
     return adoptRef(*new Text(document, data, CreateEditingText));
 }
 
-Text::~Text()
-{
-}
+Text::~Text() = default;
 
 ExceptionOr<Ref<Text>> Text::splitText(unsigned offset)
 {
     if (offset > length())
-        return Exception { INDEX_SIZE_ERR };
+        return Exception { IndexSizeError };
 
     EventQueueScope scope;
     auto oldData = data();
@@ -74,12 +74,12 @@ ExceptionOr<Ref<Text>> Text::splitText(unsigned offset)
             return insertResult.releaseException();
     }
 
-    document().textNodeSplit(this);
+    document().textNodeSplit(*this);
 
     if (renderer())
         renderer()->setTextWithOffset(data(), 0, oldData.length());
 
-    return WTFMove(newText);
+    return newText;
 }
 
 static const Text* earliestLogicallyAdjacentTextNode(const Text* text)
@@ -154,7 +154,7 @@ RefPtr<Text> Text::replaceWholeText(const String& newText)
 
 String Text::nodeName() const
 {
-    return ASCIILiteral("#text");
+    return "#text"_s;
 }
 
 Node::NodeType Text::nodeType() const
@@ -219,38 +219,43 @@ void Text::updateRendererAfterContentChange(unsigned offsetOfReplacedData, unsig
     if (styleValidity() >= Style::Validity::SubtreeAndRenderersInvalid)
         return;
 
-    auto textUpdate = std::make_unique<Style::Update>(document());
-    textUpdate->addText(*this);
-
-    RenderTreeUpdater renderTreeUpdater(document());
-    renderTreeUpdater.commit(WTFMove(textUpdate));
-
-    if (auto* renderer = this->renderer())
-        renderer->setTextWithOffset(data(), offsetOfReplacedData, lengthOfReplacedData);
+    document().updateTextRenderer(*this, offsetOfReplacedData, lengthOfReplacedData);
 }
 
-#if ENABLE(TREE_DEBUGGING)
-void Text::formatForDebugger(char* buffer, unsigned length) const
+String Text::debugDescription() const
 {
-    StringBuilder result;
-    String s;
+    StringBuilder builder;
 
-    result.append(nodeName());
+    builder.append(CharacterData::debugDescription());
 
-    s = data();
-    if (s.length() > 0) {
-        if (result.length())
-            result.appendLiteral("; ");
-        result.appendLiteral("length=");
-        result.appendNumber(s.length());
-        result.appendLiteral("; value=\"");
-        result.append(s);
-        result.append('"');
+    String value = data();
+    builder.append(" length="_s, value.length());
+
+    value.replaceWithLiteral('\\', "\\\\");
+    value.replaceWithLiteral('\n', "\\n");
+    
+    const size_t maxDumpLength = 30;
+    if (value.length() > maxDumpLength) {
+        value.truncate(maxDumpLength - 10);
+        value.append("..."_s);
     }
 
-    strncpy(buffer, result.toString().utf8().data(), length - 1);
-    buffer[length - 1] = '\0';
+    builder.append(" \"", value, '\"');
+
+    return builder.toString();
 }
-#endif
+
+void Text::setDataAndUpdate(const String& newData, unsigned offsetOfReplacedData, unsigned oldLength, unsigned newLength, UpdateLiveRanges updateLiveRanges)
+{
+    auto oldData = data();
+    CharacterData::setDataAndUpdate(newData, offsetOfReplacedData, oldLength, newLength, updateLiveRanges);
+
+    // FIXME: Does not seem correct to do this for 0 offset only.
+    if (!offsetOfReplacedData) {
+        auto* textManipulationController = document().textManipulationControllerIfExists();
+        if (UNLIKELY(textManipulationController && oldData != newData))
+            textManipulationController->didUpdateContentForText(*this);
+    }
+}
 
 } // namespace WebCore

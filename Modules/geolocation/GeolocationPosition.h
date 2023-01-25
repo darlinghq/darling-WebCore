@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2008 Apple Inc. All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -10,100 +10,52 @@
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
- * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
- * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
- * THE POSSIBILITY OF SUCH DAMAGE.
+ * THIS SOFTWARE IS PROVIDED BY APPLE INC. ``AS IS'' AND ANY
+ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL APPLE INC. OR
+ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
 #pragma once
 
-#include <wtf/Ref.h>
+#include "DOMTimeStamp.h"
+#include "GeolocationCoordinates.h"
 #include <wtf/RefCounted.h>
+#include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
 class GeolocationPosition : public RefCounted<GeolocationPosition> {
 public:
-    static Ref<GeolocationPosition> create(double timestamp, double latitude, double longitude, double accuracy)
+    static Ref<GeolocationPosition> create(Ref<GeolocationCoordinates>&& coordinates, DOMTimeStamp timestamp)
     {
-        return adoptRef(*new GeolocationPosition(timestamp, latitude, longitude, accuracy));
+        return adoptRef(*new GeolocationPosition(WTFMove(coordinates), timestamp));
     }
 
-    static Ref<GeolocationPosition> create(double timestamp, double latitude, double longitude, double accuracy, bool providesAltitude, double altitude, bool providesAltitudeAccuracy, double altitudeAccuracy, bool providesHeading, double heading, bool providesSpeed, double speed)
+    Ref<GeolocationPosition> isolatedCopy() const
     {
-        return adoptRef(*new GeolocationPosition(timestamp, latitude, longitude, accuracy, providesAltitude, altitude, providesAltitudeAccuracy, altitudeAccuracy, providesHeading, heading, providesSpeed, speed));
+        return create(m_coordinates->isolatedCopy(), m_timestamp);
     }
 
-    double timestamp() const { return m_timestamp; }
-
-    double latitude() const { return m_latitude; }
-    double longitude() const { return m_longitude; }
-    double accuracy() const { return m_accuracy; }
-    double altitude() const { return m_altitude; }
-    double altitudeAccuracy() const { return m_altitudeAccuracy; }
-    double heading() const { return m_heading; }
-    double speed() const { return m_speed; }
-
-    bool canProvideAltitude() const { return m_canProvideAltitude; }
-    bool canProvideAltitudeAccuracy() const { return m_canProvideAltitudeAccuracy; }
-    bool canProvideHeading() const { return m_canProvideHeading; }
-    bool canProvideSpeed() const { return m_canProvideSpeed; }
-
+    DOMTimeStamp timestamp() const { return m_timestamp; }
+    const GeolocationCoordinates& coords() const { return m_coordinates.get(); }
+    
 private:
-    GeolocationPosition(double timestamp, double latitude, double longitude, double accuracy)
-        : m_timestamp(timestamp)
-        , m_latitude(latitude)
-        , m_longitude(longitude)
-        , m_accuracy(accuracy)
-        , m_altitude(0)
-        , m_altitudeAccuracy(0)
-        , m_heading(0)
-        , m_speed(0)
-        , m_canProvideAltitude(false)
-        , m_canProvideAltitudeAccuracy(false)
-        , m_canProvideHeading(false)
-        , m_canProvideSpeed(false)
+    GeolocationPosition(Ref<GeolocationCoordinates>&& coordinates, DOMTimeStamp timestamp)
+        : m_coordinates(WTFMove(coordinates))
+        , m_timestamp(timestamp)
     {
     }
 
-    GeolocationPosition(double timestamp, double latitude, double longitude, double accuracy, bool providesAltitude, double altitude, bool providesAltitudeAccuracy, double altitudeAccuracy, bool providesHeading, double heading, bool providesSpeed, double speed)
-        : m_timestamp(timestamp)
-        , m_latitude(latitude)
-        , m_longitude(longitude)
-        , m_accuracy(accuracy)
-        , m_altitude(altitude)
-        , m_altitudeAccuracy(altitudeAccuracy)
-        , m_heading(heading)
-        , m_speed(speed)
-        , m_canProvideAltitude(providesAltitude)
-        , m_canProvideAltitudeAccuracy(providesAltitudeAccuracy)
-        , m_canProvideHeading(providesHeading)
-        , m_canProvideSpeed(providesSpeed)
-    {
-    }
-
-    double m_timestamp;
-
-    double m_latitude;
-    double m_longitude;
-    double m_accuracy;
-    double m_altitude;
-    double m_altitudeAccuracy;
-    double m_heading;
-    double m_speed;
-
-    bool m_canProvideAltitude;
-    bool m_canProvideAltitudeAccuracy;
-    bool m_canProvideHeading;
-    bool m_canProvideSpeed;
+    Ref<GeolocationCoordinates> m_coordinates;
+    DOMTimeStamp m_timestamp;
 };
-
+    
 } // namespace WebCore

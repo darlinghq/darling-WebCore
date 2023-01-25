@@ -33,17 +33,18 @@
 
 #include "RenderRubyText.h"
 #include "RenderRubyRun.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(RenderRubyText);
 
 RenderRubyText::RenderRubyText(Element& element, RenderStyle&& style)
     : RenderBlockFlow(element, WTFMove(style))
 {
 }
 
-RenderRubyText::~RenderRubyText()
-{
-}
+RenderRubyText::~RenderRubyText() = default;
 
 RenderRubyRun* RenderRubyText::rubyRun() const
 {
@@ -56,20 +57,20 @@ bool RenderRubyText::isChildAllowed(const RenderObject& child, const RenderStyle
     return child.isInline();
 }
 
-ETextAlign RenderRubyText::textAlignmentForLine(bool endsWithSoftBreak) const
+Optional<TextAlignMode> RenderRubyText::overrideTextAlignmentForLine(bool) const
 {
-    ETextAlign textAlign = style().textAlign();
+    TextAlignMode textAlign = style().textAlign();
     // FIXME: This check is bogus since user can set the initial value.
     if (textAlign != RenderStyle::initialTextAlign())
-        return RenderBlockFlow::textAlignmentForLine(endsWithSoftBreak);
+        return { };
 
     // The default behavior is to allow ruby text to expand if it is shorter than the ruby base.
-    return JUSTIFY;
+    return TextAlignMode::Justify;
 }
 
 void RenderRubyText::adjustInlineDirectionLineBounds(int expansionOpportunityCount, float& logicalLeft, float& logicalWidth) const
 {
-    ETextAlign textAlign = style().textAlign();
+    TextAlignMode textAlign = style().textAlign();
     // FIXME: This check is bogus since user can set the initial value.
     if (textAlign != RenderStyle::initialTextAlign())
         return RenderBlockFlow::adjustInlineDirectionLineBounds(expansionOpportunityCount, logicalLeft, logicalWidth);

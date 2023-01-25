@@ -19,8 +19,6 @@
 
 #pragma once
 
-#if ENABLE(SVG_FONTS)
-
 #include "CachedFontClient.h"
 #include "CachedResourceHandle.h"
 #include "SVGElement.h"
@@ -30,6 +28,7 @@ namespace WebCore {
 class CSSFontFaceSrcValue;
 
 class SVGFontFaceUriElement final : public SVGElement, public CachedFontClient {
+    WTF_MAKE_ISO_ALLOCATED(SVGFontFaceUriElement);
 public:
     static Ref<SVGFontFaceUriElement> create(const QualifiedName&, Document&);
 
@@ -40,9 +39,9 @@ public:
 private:
     SVGFontFaceUriElement(const QualifiedName&, Document&);
     
-    void parseAttribute(const QualifiedName&, const AtomicString&) final;
+    void parseAttribute(const QualifiedName&, const AtomString&) final;
     void childrenChanged(const ChildChange&) final;
-    InsertionNotificationRequest insertedInto(ContainerNode&) final;
+    InsertedIntoAncestorResult insertedIntoAncestor(InsertionType, ContainerNode&) final;
     bool rendererIsNeeded(const RenderStyle&) final { return false; }
 
     void loadFont();
@@ -51,5 +50,3 @@ private:
 };
 
 } // namespace WebCore
-
-#endif // ENABLE(SVG_FONTS)

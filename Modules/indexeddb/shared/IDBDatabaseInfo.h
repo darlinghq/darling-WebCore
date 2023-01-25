@@ -29,12 +29,14 @@
 
 #include "IDBObjectStoreInfo.h"
 #include <wtf/HashMap.h>
+#include <wtf/IsoMalloc.h>
 
 namespace WebCore {
 
 class IDBDatabaseInfo {
+    WTF_MAKE_ISO_ALLOCATED_EXPORT(IDBDatabaseInfo, WEBCORE_EXPORT);
 public:
-    IDBDatabaseInfo(const String& name, uint64_t version);
+    explicit IDBDatabaseInfo(const String& name, uint64_t version, uint64_t maxIndexID);
 
     enum IsolatedCopyTag { IsolatedCopy };
     IDBDatabaseInfo(const IDBDatabaseInfo&, IsolatedCopyTag);
@@ -47,7 +49,7 @@ public:
     uint64_t version() const { return m_version; }
 
     bool hasObjectStore(const String& name) const;
-    IDBObjectStoreInfo createNewObjectStore(const String& name, std::optional<IDBKeyPath>&&, bool autoIncrement);
+    IDBObjectStoreInfo createNewObjectStore(const String& name, Optional<IDBKeyPath>&&, bool autoIncrement);
     void addExistingObjectStore(const IDBObjectStoreInfo&);
     IDBObjectStoreInfo* infoForExistingObjectStore(uint64_t objectStoreIdentifier);
     IDBObjectStoreInfo* infoForExistingObjectStore(const String& objectStoreName);
@@ -57,6 +59,7 @@ public:
     void renameObjectStore(uint64_t objectStoreIdentifier, const String& newName);
 
     Vector<String> objectStoreNames() const;
+    const HashMap<uint64_t, IDBObjectStoreInfo>& objectStoreMap() const { return m_objectStoreMap; }
 
     void deleteObjectStore(const String& objectStoreName);
     void deleteObjectStore(uint64_t objectStoreIdentifier);
@@ -64,7 +67,10 @@ public:
     WEBCORE_EXPORT IDBDatabaseInfo();
 
     template<class Encoder> void encode(Encoder&) const;
-    template<class Decoder> static bool decode(Decoder&, IDBDatabaseInfo&);
+    template<class Decoder> static WARN_UNUSED_RETURN bool decode(Decoder&, IDBDatabaseInfo&);
+
+    void setMaxIndexID(uint64_t maxIndexID);
+    uint64_t generateNextIndexID() { return ++m_maxIndexID; }
 
 #if !LOG_DISABLED
     String loggingString() const;
@@ -77,6 +83,7 @@ private:
     String m_name;
     uint64_t m_version { 0 };
     uint64_t m_maxObjectStoreID { 0 };
+    uint64_t m_maxIndexID { 0 };
 
     HashMap<uint64_t, IDBObjectStoreInfo> m_objectStoreMap;
 
@@ -85,7 +92,7 @@ private:
 template<class Encoder>
 void IDBDatabaseInfo::encode(Encoder& encoder) const
 {
-    encoder << m_name << m_version << m_maxObjectStoreID << m_objectStoreMap;
+    encoder << m_name << m_version << m_maxObjectStoreID << m_maxIndexID << m_objectStoreMap;
 }
 
 template<class Decoder>
@@ -98,6 +105,9 @@ bool IDBDatabaseInfo::decode(Decoder& decoder, IDBDatabaseInfo& info)
         return false;
 
     if (!decoder.decode(info.m_maxObjectStoreID))
+        return false;
+
+    if (!decoder.decode(info.m_maxIndexID))
         return false;
 
     if (!decoder.decode(info.m_objectStoreMap))

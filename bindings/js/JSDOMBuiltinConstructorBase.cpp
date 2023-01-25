@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
- *  Copyright (C) 2004-2011, 2013, 2016 Apple Inc. All rights reserved.
+ *  Copyright (C) 2004-2017 Apple Inc. All rights reserved.
  *  Copyright (C) 2007 Samuel Weinig <sam@webkit.org>
  *  Copyright (C) 2013 Michael Pruett <michael@68k.org>
  *
@@ -22,22 +22,27 @@
 #include "config.h"
 #include "JSDOMBuiltinConstructorBase.h"
 
-#include <runtime/JSCInlines.h>
-
-using namespace JSC;
+#include "WebCoreJSClientData.h"
+#include <JavaScriptCore/JSCInlines.h>
 
 namespace WebCore {
+using namespace JSC;
     
-void JSDOMBuiltinConstructorBase::callFunctionWithCurrentArguments(JSC::ExecState& state, JSC::JSObject& thisObject, JSC::JSFunction& function)
+void JSDOMBuiltinConstructorBase::callFunctionWithCurrentArguments(JSC::JSGlobalObject& lexicalGlobalObject, JSC::CallFrame& callFrame, JSC::JSObject& thisObject, JSC::JSFunction& function)
 {
-    JSC::CallData callData;
-    JSC::CallType callType = JSC::getCallData(&function, callData);
-    ASSERT(callType != CallType::None);
+    JSC::VM& vm = lexicalGlobalObject.vm();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    auto callData = JSC::getCallData(vm, &function);
+    ASSERT(callData.type != CallData::Type::None);
 
     JSC::MarkedArgumentBuffer arguments;
-    for (unsigned i = 0; i < state.argumentCount(); ++i)
-        arguments.append(state.uncheckedArgument(i));
-    JSC::call(&state, &function, callType, callData, &thisObject, arguments);
+    for (unsigned i = 0; i < callFrame.argumentCount(); ++i)
+        arguments.append(callFrame.uncheckedArgument(i));
+    if (UNLIKELY(arguments.hasOverflowed())) {
+        throwOutOfMemoryError(&lexicalGlobalObject, scope);
+        return;
+    }
+    JSC::call(&lexicalGlobalObject, &function, callData, &thisObject, arguments);
 }
 
 void JSDOMBuiltinConstructorBase::visitChildren(JSC::JSCell* cell, JSC::SlotVisitor& visitor)
@@ -46,6 +51,11 @@ void JSDOMBuiltinConstructorBase::visitChildren(JSC::JSCell* cell, JSC::SlotVisi
     ASSERT_GC_OBJECT_INHERITS(thisObject, info());
     Base::visitChildren(thisObject, visitor);
     visitor.append(thisObject->m_initializeFunction);
+}
+
+JSC::IsoSubspace* JSDOMBuiltinConstructorBase::subspaceForImpl(JSC::VM& vm)
+{
+    return &static_cast<JSVMClientData*>(vm.clientData)->domBuiltinConstructorSpace();
 }
 
 } // namespace WebCore

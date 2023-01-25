@@ -28,9 +28,12 @@
 
 namespace WebCore {
 
+class Settings;
+
 class CachedSVGDocument final : public CachedResource {
 public:
-    explicit CachedSVGDocument(CachedResourceRequest&&, SessionID);
+    explicit CachedSVGDocument(CachedResourceRequest&&, const PAL::SessionID&, const CookieJar*, const Settings&);
+    explicit CachedSVGDocument(CachedResourceRequest&&, CachedSVGDocument&);
     virtual ~CachedSVGDocument();
 
     SVGDocument* document() const { return m_document.get(); }
@@ -40,12 +43,13 @@ private:
     void setEncoding(const String&) override;
     String encoding() const override;
     const TextResourceDecoder* textResourceDecoder() const override { return m_decoder.get(); }
-    void finishLoading(SharedBuffer*) override;
+    void finishLoading(SharedBuffer*, const NetworkLoadMetrics&) override;
 
     RefPtr<SVGDocument> m_document;
     RefPtr<TextResourceDecoder> m_decoder;
+    const Ref<const Settings> m_settings;
 };
 
 } // namespace WebCore
 
-SPECIALIZE_TYPE_TRAITS_CACHED_RESOURCE(CachedSVGDocument, CachedResource::SVGDocumentResource)
+SPECIALIZE_TYPE_TRAITS_CACHED_RESOURCE(CachedSVGDocument, CachedResource::Type::SVGDocumentResource)

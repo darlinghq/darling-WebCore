@@ -43,7 +43,7 @@ static inline LayoutUnit adjustRadiusForMarginBoxShape(LayoutUnit radius, Layout
 
     LayoutUnit ratio = radius / margin;
     if (ratio < 1)
-        return radius + (margin * (1 + pow(ratio - 1, 3.0)));
+        return LayoutUnit(radius + (margin * (1 + pow(ratio - 1, 3.0))));
 
     return radius + margin;
 }
@@ -66,7 +66,7 @@ RoundedRect computeRoundedRectForBoxShape(CSSBoxType box, const RenderBox& rende
 {
     const RenderStyle& style = renderer.style();
     switch (box) {
-    case MarginBox: {
+    case CSSBoxType::MarginBox: {
         if (!style.hasBorderRadius())
             return RoundedRect(renderer.marginBoxRect(), RoundedRect::Radii());
 
@@ -75,18 +75,19 @@ RoundedRect computeRoundedRectForBoxShape(CSSBoxType box, const RenderBox& rende
         radii.scale(calcBorderRadiiConstraintScaleFor(marginBox, radii));
         return RoundedRect(marginBox, radii);
     }
-    case PaddingBox:
+    case CSSBoxType::PaddingBox:
         return style.getRoundedInnerBorderFor(renderer.borderBoxRect());
-    case ContentBox:
+    // fill-box compute to content-box for HTML elements.
+    case CSSBoxType::FillBox:
+    case CSSBoxType::ContentBox:
         return style.getRoundedInnerBorderFor(renderer.borderBoxRect(),
             renderer.paddingTop() + renderer.borderTop(), renderer.paddingBottom() + renderer.borderBottom(),
             renderer.paddingLeft() + renderer.borderLeft(), renderer.paddingRight() + renderer.borderRight());
-    // fill, stroke, view-box compute to border-box for HTML elements.
-    case BorderBox:
-    case Fill:
-    case Stroke:
-    case ViewBox:
-    case BoxMissing:
+    // stroke-box, view-box compute to border-box for HTML elements.
+    case CSSBoxType::BorderBox:
+    case CSSBoxType::StrokeBox:
+    case CSSBoxType::ViewBox:
+    case CSSBoxType::BoxMissing:
         return style.getRoundedBorderFor(renderer.borderBoxRect());
     }
 
@@ -158,9 +159,9 @@ LineSegment BoxShape::getExcludedInterval(LayoutUnit logicalTop, LayoutUnit logi
 
 void BoxShape::buildDisplayPaths(DisplayPaths& paths) const
 {
-    paths.shape.addRoundedRect(m_bounds, Path::PreferBezierRoundedRect);
+    paths.shape.addRoundedRect(m_bounds, Path::RoundedRectStrategy::PreferBezier);
     if (shapeMargin())
-        paths.marginShape.addRoundedRect(shapeMarginBounds(), Path::PreferBezierRoundedRect);
+        paths.marginShape.addRoundedRect(shapeMarginBounds(), Path::RoundedRectStrategy::PreferBezier);
 }
 
 } // namespace WebCore

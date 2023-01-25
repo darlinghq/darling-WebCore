@@ -40,11 +40,6 @@
 
 namespace WebCore {
 
-Widget::Widget(PlatformWidget widget)
-{
-    init(widget);
-}
-
 Widget::~Widget() 
 {
     ASSERT(!parent());
@@ -75,7 +70,7 @@ void Widget::setCursor(const Cursor& cursor)
     view->hostWindow()->setCursor(cursor);
 }
 
-void Widget::paint(GraphicsContext&, const IntRect&, SecurityOriginPaintPolicy)
+void Widget::paint(GraphicsContext&, const IntRect&, SecurityOriginPaintPolicy, EventRegionContext*)
 {
 }
 
@@ -85,11 +80,6 @@ void Widget::setFocus(bool focused)
 
 void Widget::setIsSelected(bool)
 {
-}
-
-IntRect Widget::frameRect() const
-{
-    return m_frame;
 }
 
 void Widget::setFrameRect(const IntRect& rect)

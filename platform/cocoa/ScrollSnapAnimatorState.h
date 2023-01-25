@@ -23,12 +23,10 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef ScrollSnapAnimatorState_h
-#define ScrollSnapAnimatorState_h
+#pragma once
 
 #if ENABLE(CSS_SCROLL_SNAP)
 
-#include "AxisScrollSnapOffsets.h"
 #include "FloatPoint.h"
 #include "FloatSize.h"
 #include "LayoutPoint.h"
@@ -37,6 +35,10 @@
 #include "ScrollTypes.h"
 #include "ScrollingMomentumCalculator.h"
 #include <wtf/MonotonicTime.h>
+
+namespace WTF {
+class TextStream;
+}
 
 namespace WebCore {
 
@@ -48,6 +50,7 @@ enum class ScrollSnapState {
 };
 
 class ScrollSnapAnimatorState {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     const Vector<LayoutUnit>& snapOffsetsForAxis(ScrollEventAxis axis) const
     {
@@ -111,8 +114,8 @@ private:
     std::unique_ptr<ScrollingMomentumCalculator> m_momentumCalculator;
 };
 
+WTF::TextStream& operator<<(WTF::TextStream&, const ScrollSnapAnimatorState&);
+
 } // namespace WebCore
 
 #endif // ENABLE(CSS_SCROLL_SNAP)
-
-#endif // ScrollSnapAnimatorState_h

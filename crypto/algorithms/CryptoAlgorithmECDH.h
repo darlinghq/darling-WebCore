@@ -27,9 +27,11 @@
 
 #include "CryptoAlgorithm.h"
 
-#if ENABLE(SUBTLE_CRYPTO)
+#if ENABLE(WEB_CRYPTO)
 
 namespace WebCore {
+
+class CryptoKeyEC;
 
 class CryptoAlgorithmECDH final : public CryptoAlgorithm {
 public:
@@ -37,19 +39,19 @@ public:
     static constexpr CryptoAlgorithmIdentifier s_identifier = CryptoAlgorithmIdentifier::ECDH;
     static Ref<CryptoAlgorithm> create();
 
+    // Operations can be performed directly.
+    WEBCORE_EXPORT static Optional<Vector<uint8_t>> platformDeriveBits(const CryptoKeyEC&, const CryptoKeyEC&);
+
 private:
     CryptoAlgorithmECDH() = default;
     CryptoAlgorithmIdentifier identifier() const final;
 
     void generateKey(const CryptoAlgorithmParameters&, bool extractable, CryptoKeyUsageBitmap, KeyOrKeyPairCallback&&, ExceptionCallback&&, ScriptExecutionContext&) final;
-    void deriveBits(std::unique_ptr<CryptoAlgorithmParameters>&&, Ref<CryptoKey>&&, size_t length, VectorCallback&&, ExceptionCallback&&, ScriptExecutionContext&, WorkQueue&) final;
-    void importKey(SubtleCrypto::KeyFormat, KeyData&&, const std::unique_ptr<CryptoAlgorithmParameters>&&, bool extractable, CryptoKeyUsageBitmap, KeyCallback&&, ExceptionCallback&&) final;
-    void exportKey(SubtleCrypto::KeyFormat, Ref<CryptoKey>&&, KeyDataCallback&&, ExceptionCallback&&) final;
-
-    using Callback = Function<void(std::optional<Vector<uint8_t>>&&, size_t)>;
-    void platformDeriveBits(Ref<CryptoKey>&& baseKey, Ref<CryptoKey>&& publicKey, size_t length, Callback&&, ScriptExecutionContext&, WorkQueue&);
+    void deriveBits(const CryptoAlgorithmParameters&, Ref<CryptoKey>&&, size_t length, VectorCallback&&, ExceptionCallback&&, ScriptExecutionContext&, WorkQueue&) final;
+    void importKey(CryptoKeyFormat, KeyData&&, const CryptoAlgorithmParameters&, bool extractable, CryptoKeyUsageBitmap, KeyCallback&&, ExceptionCallback&&) final;
+    void exportKey(CryptoKeyFormat, Ref<CryptoKey>&&, KeyDataCallback&&, ExceptionCallback&&) final;
 };
 
 } // namespace WebCore
 
-#endif // ENABLE(SUBTLE_CRYPTO)
+#endif // ENABLE(WEB_CRYPTO)

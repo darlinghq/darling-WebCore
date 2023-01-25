@@ -23,109 +23,157 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef DisplayListRecorder_h
-#define DisplayListRecorder_h
+#pragma once
 
 #include "DisplayList.h"
-#include "GraphicsContext.h" // For InterpolationQuality.
+#include "DisplayListDrawGlyphsRecorder.h"
+#include "DisplayListItems.h"
+#include "GraphicsContextImpl.h"
 #include "Image.h" // For Image::TileRule.
 #include "TextFlags.h"
 #include <wtf/Noncopyable.h>
 
 namespace WebCore {
 
+enum class AlphaPremultiplication : uint8_t;
 class FloatPoint;
 class FloatRect;
 class GlyphBuffer;
 class FloatPoint;
 class Font;
 class Image;
+class ImageData;
 
 struct GraphicsContextState;
 struct ImagePaintingOptions;
 
 namespace DisplayList {
 
-class DrawingItem;
-
-class Recorder {
+class Recorder : public GraphicsContextImpl {
+    WTF_MAKE_FAST_ALLOCATED;
     WTF_MAKE_NONCOPYABLE(Recorder);
 public:
-    Recorder(GraphicsContext&, DisplayList&, const FloatRect& initialClip, const AffineTransform&);
-    ~Recorder();
+    class Delegate;
+    WEBCORE_EXPORT Recorder(GraphicsContext&, DisplayList&, const GraphicsContextState&, const FloatRect& initialClip, const AffineTransform&, Delegate* = nullptr, DrawGlyphsRecorder::DrawGlyphsDeconstruction = DrawGlyphsRecorder::DrawGlyphsDeconstruction::Deconstruct);
+    WEBCORE_EXPORT virtual ~Recorder();
 
-    void updateState(const GraphicsContextState&, GraphicsContextState::StateChangeFlags);
-    void clearShadow();
+    WEBCORE_EXPORT void putImageData(AlphaPremultiplication inputFormat, const ImageData&, const IntRect& srcRect, const IntPoint& destPoint, AlphaPremultiplication destFormat);
 
-    void setLineCap(LineCap);
-    void setLineDash(const DashArray&, float dashOffset);
-    void setLineJoin(LineJoin);
-    void setMiterLimit(float);
+    bool isEmpty() const { return m_displayList.isEmpty(); }
 
-    void fillRect(const FloatRect&);
-    void fillRect(const FloatRect&, const Color&);
-    void fillRect(const FloatRect&, Gradient&);
-    void fillRect(const FloatRect&, const Color&, CompositeOperator, BlendMode);
-    void fillRoundedRect(const FloatRoundedRect&, const Color&, BlendMode);
-    void fillRectWithRoundedHole(const FloatRect&, const FloatRoundedRect& roundedHoleRect, const Color&);
-    void fillPath(const Path&);
-    void fillEllipse(const FloatRect&);
-    void strokeRect(const FloatRect&, float lineWidth);
-    void strokePath(const Path&);
-    void strokeEllipse(const FloatRect&);
-    void clearRect(const FloatRect&);
+    class Delegate {
+    public:
+        virtual ~Delegate() { }
+        virtual void willAppendItemOfType(ItemType) { }
+        virtual void cacheNativeImage(NativeImage&) { }
+        virtual bool isCachedImageBuffer(const ImageBuffer&) const { return false; }
+        virtual void cacheFont(Font&) { }
+    };
 
-#if USE(CG)
-    void applyStrokePattern();
-    void applyFillPattern();
-#endif
-
-    void drawGlyphs(const Font&, const GlyphBuffer&, unsigned from, unsigned numGlyphs, const FloatPoint& anchorPoint, FontSmoothingMode);
-
-    void drawImage(Image&, const FloatRect& destination, const FloatRect& source, const ImagePaintingOptions&);
-    void drawTiledImage(Image&, const FloatRect& destination, const FloatPoint& source, const FloatSize& tileSize, const FloatSize& spacing, const ImagePaintingOptions&);
-    void drawTiledImage(Image&, const FloatRect& destination, const FloatRect& source, const FloatSize& tileScaleFactor, Image::TileRule hRule, Image::TileRule vRule, const ImagePaintingOptions&);
-#if USE(CG) || USE(CAIRO)
-    void drawNativeImage(const NativeImagePtr&, const FloatSize& selfSize, const FloatRect& destRect, const FloatRect& srcRect, CompositeOperator, BlendMode, ImageOrientation);
-#endif
-    void drawPattern(Image&, const FloatRect& destRect, const FloatRect& srcRect, const AffineTransform&, const FloatPoint& phase, const FloatSize& spacing, CompositeOperator, BlendMode = BlendModeNormal);
-
-    void drawRect(const FloatRect&, float borderThickness);
-    void drawLine(const FloatPoint&, const FloatPoint&);
-    void drawLinesForText(const FloatPoint&, const DashArray& widths, bool printing, bool doubleLines, float strokeThickness);
-    void drawLineForDocumentMarker(const FloatPoint&, float width, GraphicsContext::DocumentMarkerLineStyle);
-    void drawEllipse(const FloatRect&);
-    void drawPath(const Path&);
-
-    void drawFocusRing(const Path&, int width, int offset, const Color&);
-    void drawFocusRing(const Vector<FloatRect>&, int width, int offset, const Color&);
-
-    void save();
-    void restore();
-
-    void translate(float x, float y);
-    void rotate(float angleInRadians);
-    void scale(const FloatSize&);
-    void concatCTM(const AffineTransform&);
-
-    void beginTransparencyLayer(float opacity);
-    void endTransparencyLayer();
-
-    void clip(const FloatRect&);
-    void clipOut(const FloatRect&);
-    void clipOut(const Path&);
-    void clipPath(const Path&, WindRule);
-    
-    void applyDeviceScaleFactor(float);
-
-    size_t itemCount() const { return m_displayList.itemCount(); }
+    void flushContext(FlushIdentifier identifier) { append<FlushContext>(identifier); }
 
 private:
-    Item& appendItem(Ref<Item>&&);
-    void willAppendItem(const Item&);
+    friend class DrawGlyphsRecorder;
+    bool hasPlatformContext() const override { return false; }
+    bool canDrawImageBuffer(const ImageBuffer&) const override;
+    PlatformGraphicsContext* platformContext() const override { return nullptr; }
+
+    void updateState(const GraphicsContextState&, GraphicsContextState::StateChangeFlags) override;
+    void clearShadow() override;
+
+    void setLineCap(LineCap) override;
+    void setLineDash(const DashArray&, float dashOffset) override;
+    void setLineJoin(LineJoin) override;
+    void setMiterLimit(float) override;
+
+    void fillRect(const FloatRect&) override;
+    void fillRect(const FloatRect&, const Color&) override;
+    void fillRect(const FloatRect&, Gradient&) override;
+    void fillRect(const FloatRect&, const Color&, CompositeOperator, BlendMode) override;
+    void fillRoundedRect(const FloatRoundedRect&, const Color&, BlendMode) override;
+    void fillRectWithRoundedHole(const FloatRect&, const FloatRoundedRect& roundedHoleRect, const Color&) override;
+    void fillPath(const Path&) override;
+    void fillEllipse(const FloatRect&) override;
+    void strokeRect(const FloatRect&, float lineWidth) override;
+    void strokePath(const Path&) override;
+    void strokeEllipse(const FloatRect&) override;
+    void clearRect(const FloatRect&) override;
+
+#if USE(CG)
+    void applyStrokePattern() override;
+    void applyFillPattern() override;
+#endif
+
+    void drawGlyphs(const Font&, const GlyphBuffer&, unsigned from, unsigned numGlyphs, const FloatPoint& anchorPoint, FontSmoothingMode) override;
+
+    void appendDrawGraphsItemWithCachedFont(const Font&, const GlyphBufferGlyph*, const GlyphBufferAdvance*, unsigned count, const FloatPoint& localAnchor, FontSmoothingMode);
+
+    void drawImageBuffer(WebCore::ImageBuffer&, const FloatRect& destination, const FloatRect& source, const ImagePaintingOptions&) override;
+    void drawNativeImage(NativeImage&, const FloatSize& imageSize, const FloatRect& destRect, const FloatRect& srcRect, const ImagePaintingOptions&) override;
+    void drawPattern(NativeImage&, const FloatSize& imageSize, const FloatRect& destRect, const FloatRect& srcRect, const AffineTransform&, const FloatPoint& phase, const FloatSize& spacing, const ImagePaintingOptions&) override;
+
+    void drawRect(const FloatRect&, float borderThickness) override;
+    void drawLine(const FloatPoint&, const FloatPoint&) override;
+    void drawLinesForText(const FloatPoint&, float thickness, const DashArray& widths, bool printing, bool doubleLines) override;
+    void drawDotsForDocumentMarker(const FloatRect&, DocumentMarkerLineStyle) override;
+    void drawEllipse(const FloatRect&) override;
+    void drawPath(const Path&) override;
+
+    void drawFocusRing(const Path&, float width, float offset, const Color&) override;
+    void drawFocusRing(const Vector<FloatRect>&, float width, float offset, const Color&) override;
+
+    void save() override;
+    void restore() override;
+
+    void translate(float x, float y) override;
+    void rotate(float angleInRadians) override;
+    void scale(const FloatSize&) override;
+    void concatCTM(const AffineTransform&) override;
+    void setCTM(const AffineTransform&) override;
+    AffineTransform getCTM(GraphicsContext::IncludeDeviceScale) override;
+
+    void beginTransparencyLayer(float opacity) override;
+    void endTransparencyLayer() override;
+
+    void clip(const FloatRect&) override;
+    void clipOut(const FloatRect&) override;
+    void clipOut(const Path&) override;
+    void clipPath(const Path&, WindRule) override;
+    IntRect clipBounds() override;
+    void clipToImageBuffer(WebCore::ImageBuffer&, const FloatRect&) override;
+    void clipToDrawingCommands(const FloatRect& destination, ColorSpace, Function<void(GraphicsContext&)>&&) override;
+    void paintFrameForMedia(MediaPlayer&, const FloatRect& destination) override;
+    bool canPaintFrameForMedia(const MediaPlayer&) const override;
+
+    void applyDeviceScaleFactor(float) override;
+
+    FloatRect roundToDevicePixels(const FloatRect&, GraphicsContext::RoundingMode) override;
+
+    template<typename T, class... Args>
+    void append(Args&&... args)
+    {
+        willAppendItemOfType(T::itemType);
+        m_displayList.append<T>(std::forward<Args>(args)...);
+
+        if constexpr (T::isDrawingItem) {
+            if (LIKELY(!m_displayList.tracksDrawingItemExtents()))
+                return;
+
+            auto item = T(std::forward<Args>(args)...);
+            if (auto rect = item.localBounds(graphicsContext()))
+                m_displayList.addDrawingItemExtent(extentFromLocalBounds(*rect));
+            else if (auto rect = item.globalBounds())
+                m_displayList.addDrawingItemExtent(*rect);
+            else
+                m_displayList.addDrawingItemExtent(WTF::nullopt);
+        }
+    }
+
+    WEBCORE_EXPORT void willAppendItemOfType(ItemType);
+
+    void appendStateChangeItem(const GraphicsContextStateChange&, GraphicsContextState::StateChangeFlags);
 
     FloatRect extentFromLocalBounds(const FloatRect&) const;
-    void updateItemExtent(DrawingItem&) const;
     
     const AffineTransform& ctm() const;
     const FloatRect& clipBounds() const;
@@ -136,20 +184,18 @@ private:
         GraphicsContextStateChange stateChange;
         GraphicsContextState lastDrawingState;
         bool wasUsedForDrawing { false };
-        size_t saveItemIndex { 0 };
         
-        ContextState(const AffineTransform& transform, const FloatRect& clip)
+        ContextState(const GraphicsContextState& state, const AffineTransform& transform, const FloatRect& clip)
             : ctm(transform)
             , clipBounds(clip)
+            , lastDrawingState(state)
         {
         }
         
-        ContextState cloneForSave(size_t saveIndex) const
+        ContextState cloneForSave() const
         {
-            ContextState state(ctm, clipBounds);
+            ContextState state(lastDrawingState, ctm, clipBounds);
             state.stateChange = stateChange;
-            state.lastDrawingState = lastDrawingState;
-            state.saveItemIndex = saveIndex;
             return state;
         }
 
@@ -157,18 +203,20 @@ private:
         void rotate(float angleInRadians);
         void scale(const FloatSize&);
         void concatCTM(const AffineTransform&);
+        void setCTM(const AffineTransform&);
     };
     
     const ContextState& currentState() const;
     ContextState& currentState();
 
-    GraphicsContext& m_graphicsContext;
     DisplayList& m_displayList;
+    Delegate* m_delegate;
 
     Vector<ContextState, 32> m_stateStack;
+
+    DrawGlyphsRecorder m_drawGlyphsRecorder;
 };
 
 }
 }
 
-#endif // DisplayListRecorder_h

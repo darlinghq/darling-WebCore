@@ -35,6 +35,7 @@ StepRange::StepRange()
     , m_minimum(0)
     , m_step(1)
     , m_stepBase(0)
+    , m_stepDescription()
 {
 }
 
@@ -100,9 +101,9 @@ Decimal StepRange::parseStep(AnyStepHandling anyStepHandling, const StepDescript
 
     if (equalLettersIgnoringASCIICase(stepString, "any")) {
         switch (anyStepHandling) {
-        case RejectAny:
+        case AnyStepHandling::Reject:
             return Decimal::nan();
-        case AnyIsDefaultStep:
+        case AnyStepHandling::Default:
             return stepDescription.defaultValue();
         default:
             ASSERT_NOT_REACHED();

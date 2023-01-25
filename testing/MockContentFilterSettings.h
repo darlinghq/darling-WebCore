@@ -25,14 +25,12 @@
 
 #pragma once
 
-#include <wtf/NeverDestroyed.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
 class MockContentFilterSettings {
     friend class NeverDestroyed<MockContentFilterSettings>;
-
 public:
     enum class DecisionPoint {
         AfterWillSendRequest,
@@ -48,7 +46,7 @@ public:
         Block
     };
 
-    WTF_EXPORT_PRIVATE static MockContentFilterSettings& singleton();
+    WEBCORE_TESTSUPPORT_EXPORT static MockContentFilterSettings& singleton();
     static void reset();
     static const char* unblockURLHost() { return "mock-unblock"; }
 
@@ -57,7 +55,7 @@ public:
     void deref() { }
 
     bool enabled() const { return m_enabled; }
-    WTF_EXPORT_PRIVATE void setEnabled(bool);
+    WEBCORE_TESTSUPPORT_EXPORT void setEnabled(bool);
 
     const String& blockedString() const { return m_blockedString; }
     void setBlockedString(const String& blockedString) { m_blockedString = blockedString; }

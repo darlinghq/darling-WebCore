@@ -33,15 +33,12 @@ struct IntPointHash {
     static const bool safeToCompareToEmptyOrDeleted = true;
 };
 template<> struct HashTraits<WebCore::IntPoint> : GenericHashTraits<WebCore::IntPoint> {
-    static const bool needsDestruction = false;
     static WebCore::IntPoint emptyValue() { return WebCore::IntPoint(0, std::numeric_limits<int>::min()); }
     
     static void constructDeletedValue(WebCore::IntPoint& slot) { slot = WebCore::IntPoint(std::numeric_limits<int>::min(), 0); }
     static bool isDeletedValue(const WebCore::IntPoint& slot) { return slot == WebCore::IntPoint(std::numeric_limits<int>::min(), 0); }
 };
-template<> struct DefaultHash<WebCore::IntPoint> {
-    typedef IntPointHash Hash;
-};
+template<> struct DefaultHash<WebCore::IntPoint> : IntPointHash { };
 
 }
 

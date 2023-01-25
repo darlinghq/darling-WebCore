@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014 Apple Inc. All rights reserved.
+ * Copyright (C) 2014-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,7 +26,7 @@
 #ifndef OutOfBandTextTrackPrivateAVF_h
 #define OutOfBandTextTrackPrivateAVF_h
 
-#if ENABLE(VIDEO) && (USE(AVFOUNDATION) || PLATFORM(IOS)) && ENABLE(AVF_CAPTIONS)
+#if ENABLE(VIDEO) && (USE(AVFOUNDATION) || PLATFORM(IOS_FAMILY)) && ENABLE(AVF_CAPTIONS)
 
 #include "InbandTextTrackPrivateAVF.h"
 
@@ -50,7 +50,7 @@ public:
     
 protected:
     OutOfBandTextTrackPrivateAVF(AVFInbandTrackParent* player, AVMediaSelectionOption* selection)
-        : InbandTextTrackPrivateAVF(player, InbandTextTrackPrivate::Generic)
+        : InbandTextTrackPrivateAVF(player, InbandTextTrackPrivate::CueFormat::Generic)
         , m_mediaSelectionOption(selection)
     {
     }

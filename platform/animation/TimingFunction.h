@@ -2,7 +2,7 @@
  * Copyright (C) 2000 Lars Knoll (knoll@kde.org)
  *           (C) 2000 Antti Koivisto (koivisto@kde.org)
  *           (C) 2000 Dirk Mueller (mueller@kde.org)
- * Copyright (C) 2003, 2005, 2006, 2007, 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2003-2020 Apple Inc. All rights reserved.
  * Copyright (C) 2006 Graham Dennis (graham.dennis@gmail.com)
  *
  * This library is free software; you can redistribute it and/or
@@ -24,18 +24,23 @@
 
 #pragma once
 
+#include "CSSValue.h"
+#include "ExceptionOr.h"
+#include <wtf/EnumTraits.h>
 #include <wtf/Ref.h>
 #include <wtf/RefCounted.h>
 
-namespace WebCore {
-
+namespace WTF {
 class TextStream;
+}
+
+namespace WebCore {
 
 class TimingFunction : public RefCounted<TimingFunction> {
 public:
     virtual Ref<TimingFunction> clone() const = 0;
 
-    virtual ~TimingFunction() { }
+    virtual ~TimingFunction() = default;
 
     enum TimingFunctionType { LinearFunction, CubicBezierFunction, StepsFunction, SpringFunction };
     TimingFunctionType type() const { return m_type; }
@@ -47,6 +52,11 @@ public:
 
     virtual bool operator==(const TimingFunction&) const = 0;
     bool operator!=(const TimingFunction& other) const { return !(*this == other); }
+
+    static ExceptionOr<RefPtr<TimingFunction>> createFromCSSText(const String&);
+    static RefPtr<TimingFunction> createFromCSSValue(const CSSValue&);
+    double transformTime(double, double, bool before = false) const;
+    String cssText() const;
 
 protected:
     explicit TimingFunction(TimingFunctionType type)
@@ -67,7 +77,13 @@ public:
     
     bool operator==(const TimingFunction& other) const final
     {
-        return other.isLinearTimingFunction();
+        return is<LinearTimingFunction>(other);
+    }
+
+    static const LinearTimingFunction& sharedLinearTimingFunction()
+    {
+        static const LinearTimingFunction& function = create().leakRef();
+        return function;
     }
 
 private:
@@ -116,9 +132,9 @@ public:
 
     bool operator==(const TimingFunction& other) const final
     {
-        if (!other.isCubicBezierTimingFunction())
+        if (!is<CubicBezierTimingFunction>(other))
             return false;
-        auto& otherCubic = static_cast<const CubicBezierTimingFunction&>(other);
+        auto& otherCubic = downcast<CubicBezierTimingFunction>(other);
         if (m_timingFunctionPreset != otherCubic.m_timingFunctionPreset)
             return false;
         if (m_timingFunctionPreset != Custom)
@@ -153,6 +169,11 @@ public:
         return create(1.0 - m_x2, 1.0 - m_y2, 1.0 - m_x1, 1.0 - m_y1);
     }
 
+    bool isLinear() const
+    {
+        return (!m_x1 && !m_y1 && !m_x2 && !m_y2) || (m_x1 == 1.0 && m_y1 == 1.0 && m_x2 == 1.0 && m_y2 == 1.0) || (m_x1 == 0.0 && m_y1 == 0.0 && m_x2 == 1.0 && m_y2 == 1.0);
+    }
+
 private:
     explicit CubicBezierTimingFunction(TimingFunctionPreset preset = Ease, double x1 = 0.25, double y1 = 0.1, double x2 = 0.25, double y2 = 1.0)
         : TimingFunction(CubicBezierFunction)
@@ -178,44 +199,53 @@ private:
 
 class StepsTimingFunction final : public TimingFunction {
 public:
-    static Ref<StepsTimingFunction> create(int steps, bool stepAtStart)
+    enum class StepPosition {
+        JumpStart,
+        JumpEnd,
+        JumpNone,
+        JumpBoth,
+        Start,
+        End,
+    };
+
+    static Ref<StepsTimingFunction> create(int steps, Optional<StepPosition> stepPosition)
     {
-        return adoptRef(*new StepsTimingFunction(steps, stepAtStart));
+        return adoptRef(*new StepsTimingFunction(steps, stepPosition));
     }
     static Ref<StepsTimingFunction> create()
     {
-        return adoptRef(*new StepsTimingFunction(1, true));
+        return adoptRef(*new StepsTimingFunction(1, StepPosition::End));
     }
     
     bool operator==(const TimingFunction& other) const final
     {
-        if (!other.isStepsTimingFunction())
+        if (!is<StepsTimingFunction>(other))
             return false;
-        auto& otherSteps = static_cast<const StepsTimingFunction&>(other);
-        return m_steps == otherSteps.m_steps && m_stepAtStart == otherSteps.m_stepAtStart;
+        auto& otherSteps = downcast<StepsTimingFunction>(other);
+        return m_steps == otherSteps.m_steps && m_stepPosition == otherSteps.m_stepPosition;
     }
     
     int numberOfSteps() const { return m_steps; }
     void setNumberOfSteps(int steps) { m_steps = steps; }
 
-    bool stepAtStart() const { return m_stepAtStart; }
-    void setStepAtStart(bool stepAtStart) { m_stepAtStart = stepAtStart; }
+    Optional<StepPosition> stepPosition() const { return m_stepPosition; }
+    void setStepPosition(Optional<StepPosition> stepPosition) { m_stepPosition = stepPosition; }
 
 private:
-    StepsTimingFunction(int steps, bool stepAtStart)
+    StepsTimingFunction(int steps, Optional<StepPosition> stepPosition)
         : TimingFunction(StepsFunction)
         , m_steps(steps)
-        , m_stepAtStart(stepAtStart)
+        , m_stepPosition(stepPosition)
     {
     }
 
     Ref<TimingFunction> clone() const final
     {
-        return adoptRef(*new StepsTimingFunction(m_steps, m_stepAtStart));
+        return adoptRef(*new StepsTimingFunction(m_steps, m_stepPosition));
     }
     
     int m_steps;
-    bool m_stepAtStart;
+    Optional<StepPosition> m_stepPosition;
 };
 
 class SpringTimingFunction final : public TimingFunction {
@@ -234,9 +264,9 @@ public:
     
     bool operator==(const TimingFunction& other) const final
     {
-        if (!other.isSpringTimingFunction())
+        if (!is<SpringTimingFunction>(other))
             return false;
-        auto& otherSpring = static_cast<const SpringTimingFunction&>(other);
+        auto& otherSpring = downcast<SpringTimingFunction>(other);
         return m_mass == otherSpring.m_mass && m_stiffness == otherSpring.m_stiffness && m_damping == otherSpring.m_damping && m_initialVelocity == otherSpring.m_initialVelocity;
     }
 
@@ -274,6 +304,53 @@ private:
     double m_initialVelocity;
 };
 
-WEBCORE_EXPORT TextStream& operator<<(TextStream&, const TimingFunction&);
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, const TimingFunction&);
 
 } // namespace WebCore
+
+#define SPECIALIZE_TYPE_TRAITS_TIMINGFUNCTION(ToValueTypeName, predicate) \
+SPECIALIZE_TYPE_TRAITS_BEGIN(ToValueTypeName) \
+static bool isType(const WebCore::TimingFunction& function) { return function.predicate; } \
+SPECIALIZE_TYPE_TRAITS_END()
+
+SPECIALIZE_TYPE_TRAITS_TIMINGFUNCTION(WebCore::LinearTimingFunction, isLinearTimingFunction())
+SPECIALIZE_TYPE_TRAITS_TIMINGFUNCTION(WebCore::CubicBezierTimingFunction, isCubicBezierTimingFunction())
+SPECIALIZE_TYPE_TRAITS_TIMINGFUNCTION(WebCore::StepsTimingFunction, isStepsTimingFunction())
+SPECIALIZE_TYPE_TRAITS_TIMINGFUNCTION(WebCore::SpringTimingFunction, isSpringTimingFunction())
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::CubicBezierTimingFunction::TimingFunctionPreset> {
+    using values = EnumValues<
+        WebCore::CubicBezierTimingFunction::TimingFunctionPreset,
+        WebCore::CubicBezierTimingFunction::TimingFunctionPreset::Ease,
+        WebCore::CubicBezierTimingFunction::TimingFunctionPreset::EaseIn,
+        WebCore::CubicBezierTimingFunction::TimingFunctionPreset::EaseOut,
+        WebCore::CubicBezierTimingFunction::TimingFunctionPreset::EaseInOut,
+        WebCore::CubicBezierTimingFunction::TimingFunctionPreset::Custom
+    >;
+};
+
+template<> struct EnumTraits<WebCore::StepsTimingFunction::StepPosition> {
+    using values = EnumValues<
+        WebCore::StepsTimingFunction::StepPosition,
+        WebCore::StepsTimingFunction::StepPosition::JumpStart,
+        WebCore::StepsTimingFunction::StepPosition::JumpEnd,
+        WebCore::StepsTimingFunction::StepPosition::JumpNone,
+        WebCore::StepsTimingFunction::StepPosition::JumpBoth,
+        WebCore::StepsTimingFunction::StepPosition::Start,
+        WebCore::StepsTimingFunction::StepPosition::End
+    >;
+};
+
+template<> struct EnumTraits<WebCore::TimingFunction::TimingFunctionType> {
+    using values = EnumValues<
+        WebCore::TimingFunction::TimingFunctionType,
+        WebCore::TimingFunction::TimingFunctionType::LinearFunction,
+        WebCore::TimingFunction::TimingFunctionType::CubicBezierFunction,
+        WebCore::TimingFunction::TimingFunctionType::StepsFunction,
+        WebCore::TimingFunction::TimingFunctionType::SpringFunction
+    >;
+};
+
+} // namespace WTF

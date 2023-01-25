@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2012 Intel Inc. All rights reserved.
+ * Copyright (C) 2017 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,183 +27,291 @@
 #include "config.h"
 #include "PerformanceUserTiming.h"
 
-#if ENABLE(WEB_TIMING)
-
 #include "Document.h"
-#include "ExceptionCode.h"
-#include "Performance.h"
+#include "MessagePort.h"
+#include "PerformanceMarkOptions.h"
+#include "PerformanceMeasureOptions.h"
 #include "PerformanceTiming.h"
-#include <array>
-#include <wtf/MainThread.h>
+#include "SerializedScriptValue.h"
+#include <JavaScriptCore/JSCJSValueInlines.h>
 #include <wtf/NeverDestroyed.h>
-#include <wtf/dtoa/utils.h>
 
 namespace WebCore {
 
-namespace {
+using NavigationTimingFunction = unsigned long long (PerformanceTiming::*)() const;
+static const HashMap<String, NavigationTimingFunction>& restrictedMarkNamesToNavigationTimingFunctionMap()
+{
+    ASSERT(isMainThread());
 
-typedef unsigned long long (PerformanceTiming::*NavigationTimingFunction)() const;
+    static auto map = makeNeverDestroyed<HashMap<String, NavigationTimingFunction>>({
+        { "connectEnd"_s, &PerformanceTiming::connectEnd },
+        { "connectStart"_s, &PerformanceTiming::connectStart },
+        { "domComplete"_s, &PerformanceTiming::domComplete },
+        { "domContentLoadedEventEnd"_s, &PerformanceTiming::domContentLoadedEventEnd },
+        { "domContentLoadedEventStart"_s, &PerformanceTiming::domContentLoadedEventStart },
+        { "domInteractive"_s, &PerformanceTiming::domInteractive },
+        { "domLoading"_s, &PerformanceTiming::domLoading },
+        { "domainLookupEnd"_s, &PerformanceTiming::domainLookupEnd },
+        { "domainLookupStart"_s, &PerformanceTiming::domainLookupStart },
+        { "fetchStart"_s, &PerformanceTiming::fetchStart },
+        { "loadEventEnd"_s, &PerformanceTiming::loadEventEnd },
+        { "loadEventStart"_s, &PerformanceTiming::loadEventStart },
+        { "navigationStart"_s, &PerformanceTiming::navigationStart },
+        { "redirectEnd"_s, &PerformanceTiming::redirectEnd },
+        { "redirectStart"_s, &PerformanceTiming::redirectStart },
+        { "requestStart"_s, &PerformanceTiming::requestStart },
+        { "responseEnd"_s, &PerformanceTiming::responseEnd },
+        { "responseStart"_s, &PerformanceTiming::responseStart },
+        { "secureConnectionStart"_s, &PerformanceTiming::secureConnectionStart },
+        { "unloadEventEnd"_s, &PerformanceTiming::unloadEventEnd },
+        { "unloadEventStart"_s, &PerformanceTiming::unloadEventStart },
+    });
+    
+    return map;
+}
 
 static NavigationTimingFunction restrictedMarkFunction(const String& markName)
 {
     ASSERT(isMainThread());
-
-    using MapPair = std::pair<ASCIILiteral, NavigationTimingFunction>;
-    static const std::array<MapPair, 21> pairs = { {
-        MapPair { ASCIILiteral("navigationStart"), &PerformanceTiming::navigationStart },
-        MapPair { ASCIILiteral("unloadEventStart"), &PerformanceTiming::unloadEventStart },
-        MapPair { ASCIILiteral("unloadEventEnd"), &PerformanceTiming::unloadEventEnd },
-        MapPair { ASCIILiteral("redirectStart"), &PerformanceTiming::redirectStart },
-        MapPair { ASCIILiteral("redirectEnd"), &PerformanceTiming::redirectEnd },
-        MapPair { ASCIILiteral("fetchStart"), &PerformanceTiming::fetchStart },
-        MapPair { ASCIILiteral("domainLookupStart"), &PerformanceTiming::domainLookupStart },
-        MapPair { ASCIILiteral("domainLookupEnd"), &PerformanceTiming::domainLookupEnd },
-        MapPair { ASCIILiteral("connectStart"), &PerformanceTiming::connectStart },
-        MapPair { ASCIILiteral("connectEnd"), &PerformanceTiming::connectEnd },
-        MapPair { ASCIILiteral("secureConnectionStart"), &PerformanceTiming::secureConnectionStart },
-        MapPair { ASCIILiteral("requestStart"), &PerformanceTiming::requestStart },
-        MapPair { ASCIILiteral("responseStart"), &PerformanceTiming::responseStart },
-        MapPair { ASCIILiteral("responseEnd"), &PerformanceTiming::responseEnd },
-        MapPair { ASCIILiteral("domLoading"), &PerformanceTiming::domLoading },
-        MapPair { ASCIILiteral("domInteractive"), &PerformanceTiming::domInteractive },
-        MapPair { ASCIILiteral("domContentLoadedEventStart"), &PerformanceTiming::domContentLoadedEventStart },
-        MapPair { ASCIILiteral("domContentLoadedEventEnd"), &PerformanceTiming::domContentLoadedEventEnd },
-        MapPair { ASCIILiteral("domComplete"), &PerformanceTiming::domComplete },
-        MapPair { ASCIILiteral("loadEventStart"), &PerformanceTiming::loadEventStart },
-        MapPair { ASCIILiteral("loadEventEnd"), &PerformanceTiming::loadEventEnd },
-    } };
-
-    static NeverDestroyed<HashMap<String, NavigationTimingFunction>> map;
-    if (map.get().isEmpty()) {
-        for (auto& pair : pairs)
-            map.get().add(pair.first, pair.second);
-    }
-
-    return map.get().get(markName);
+    return restrictedMarkNamesToNavigationTimingFunctionMap().get(markName);
 }
 
-} // namespace anonymous
+static bool isRestrictedMarkNameNonMainThread(const String& markName)
+{
+    ASSERT(!isMainThread());
 
-UserTiming::UserTiming(Performance& performance)
+    bool isRestricted;
+    callOnMainThreadAndWait([&isRestricted, markName = markName.isolatedCopy()] {
+        isRestricted = restrictedMarkNamesToNavigationTimingFunctionMap().contains(markName);
+    });
+    return isRestricted;
+}
+
+bool PerformanceUserTiming::isRestrictedMarkName(const String& markName)
+{
+    ASSERT(isMainThread());
+    return restrictedMarkNamesToNavigationTimingFunctionMap().contains(markName);
+}
+
+PerformanceUserTiming::PerformanceUserTiming(Performance& performance)
     : m_performance(performance)
 {
 }
 
-static void clearPerformanceEntries(PerformanceEntryMap& performanceEntryMap, const String& name)
+static void clearPerformanceEntries(PerformanceEntryMap& map, const String& name)
 {
-    if (name.isNull()) {
-        performanceEntryMap.clear();
-        return;
-    }
-
-    performanceEntryMap.remove(name);
+    if (name.isNull())
+        map.clear();
+    else
+        map.remove(name);
 }
 
-ExceptionOr<Ref<PerformanceMark>> UserTiming::mark(const String& markName)
+static void addPerformanceEntry(PerformanceEntryMap& map, const String& name, PerformanceEntry& entry)
 {
-    if (is<Document>(m_performance.scriptExecutionContext())) {
-        if (restrictedMarkFunction(markName))
-            return Exception { SYNTAX_ERR };
-    }
-
-    auto& performanceEntryList = m_marksMap.ensure(markName, [] { return Vector<RefPtr<PerformanceEntry>>(); }).iterator->value;
-    auto entry = PerformanceMark::create(markName, m_performance.now());
-    performanceEntryList.append(entry.copyRef());
-    return WTFMove(entry);
+    auto& performanceEntryList = map.ensure(name, [] { return Vector<RefPtr<PerformanceEntry>>(); }).iterator->value;
+    performanceEntryList.append(&entry);
 }
 
-void UserTiming::clearMarks(const String& markName)
+ExceptionOr<Ref<PerformanceMark>> PerformanceUserTiming::mark(JSC::JSGlobalObject& globalObject, const String& markName, Optional<PerformanceMarkOptions>&& markOptions)
+{
+    auto mark = PerformanceMark::create(globalObject, *m_performance.scriptExecutionContext(), markName, WTFMove(markOptions));
+    if (mark.hasException())
+        return mark.releaseException();
+
+    addPerformanceEntry(m_marksMap, markName, mark.returnValue().get());
+    return mark.releaseReturnValue();
+}
+
+void PerformanceUserTiming::clearMarks(const String& markName)
 {
     clearPerformanceEntries(m_marksMap, markName);
 }
 
-ExceptionOr<double> UserTiming::findExistingMarkStartTime(const String& markName)
+ExceptionOr<double> PerformanceUserTiming::convertMarkToTimestamp(const Variant<String, double>& mark) const
 {
-    if (m_marksMap.contains(markName))
-        return m_marksMap.get(markName).last()->startTime();
-
-    PerformanceTiming* timing = m_performance.timing();
-    if (!timing)
-        return Exception { SYNTAX_ERR, makeString("No mark named '", markName, "' exists") };
-
-    if (auto function = restrictedMarkFunction(markName)) {
-        double value = static_cast<double>(((*timing).*(function))());
-        if (!value)
-            return Exception { INVALID_ACCESS_ERR };
-        return value - timing->navigationStart();
-    }
-
-    return Exception { SYNTAX_ERR };
+    return WTF::switchOn(mark, [&](auto& value) {
+        return convertMarkToTimestamp(value);
+    });
 }
 
-ExceptionOr<Ref<PerformanceMeasure>> UserTiming::measure(const String& measureName, const String& startMark, const String& endMark)
+ExceptionOr<double> PerformanceUserTiming::convertMarkToTimestamp(const String& mark) const
 {
-    double startTime = 0.0;
-    double endTime = 0.0;
-
-    if (startMark.isNull())
-        endTime = m_performance.now();
-    else if (endMark.isNull()) {
-        endTime = m_performance.now();
-        auto startMarkResult = findExistingMarkStartTime(startMark);
-        if (startMarkResult.hasException())
-            return startMarkResult.releaseException();
-        startTime = startMarkResult.releaseReturnValue();
+    if (!is<Document>(m_performance.scriptExecutionContext())) {
+        if (isRestrictedMarkNameNonMainThread(mark))
+            return Exception { TypeError };
     } else {
-        auto endMarkResult = findExistingMarkStartTime(endMark);
-        if (endMarkResult.hasException())
-            return endMarkResult.releaseException();
-        auto startMarkResult = findExistingMarkStartTime(startMark);
-        if (startMarkResult.hasException())
-            return startMarkResult.releaseException();
-        startTime = startMarkResult.releaseReturnValue();
-        endTime = endMarkResult.releaseReturnValue();
+        if (auto function = restrictedMarkFunction(mark)) {
+            if (function == &PerformanceTiming::navigationStart)
+                return 0.0;
+
+            // PerformanceTiming should always be non-null for the Document ScriptExecutionContext.
+            ASSERT(m_performance.timing());
+            auto timing = m_performance.timing();
+            auto startTime = timing->navigationStart();
+            auto endTime = ((*timing).*(function))();
+            if (!endTime)
+                return Exception { InvalidAccessError };
+            return endTime - startTime;
+        }
     }
 
-    auto& performanceEntryList = m_measuresMap.ensure(measureName, [] { return Vector<RefPtr<PerformanceEntry>>(); }).iterator->value;
-    auto entry = PerformanceMeasure::create(measureName, startTime, endTime);
-    performanceEntryList.append(entry.copyRef());
-    return WTFMove(entry);
+    auto iterator = m_marksMap.find(mark);
+    if (iterator != m_marksMap.end())
+        return iterator->value.last()->startTime();
+
+    return Exception { SyntaxError, makeString("No mark named '", mark, "' exists") };
 }
 
-void UserTiming::clearMeasures(const String& measureName)
+ExceptionOr<double> PerformanceUserTiming::convertMarkToTimestamp(double mark) const
+{
+    if (mark < 0)
+        return Exception { TypeError };
+    return mark;
+}
+
+ExceptionOr<Ref<PerformanceMeasure>> PerformanceUserTiming::measure(const String& measureName, const String& startMark, const String& endMark)
+{
+    double endTime;
+    if (!endMark.isNull()) {
+        auto end = convertMarkToTimestamp(endMark);
+        if (end.hasException())
+            return end.releaseException();
+        endTime = end.returnValue();
+    } else
+        endTime = m_performance.now();
+
+    double startTime;
+    if (!startMark.isNull()) {
+        auto start = convertMarkToTimestamp(startMark);
+        if (start.hasException())
+            return start.releaseException();
+        startTime = start.returnValue();
+    } else
+        startTime = 0.0;
+        
+    auto measure = PerformanceMeasure::create(measureName, startTime, endTime, SerializedScriptValue::nullValue());
+    if (measure.hasException())
+        return measure.releaseException();
+
+    addPerformanceEntry(m_measuresMap, measureName, measure.returnValue().get());
+    return measure.releaseReturnValue();
+}
+
+ExceptionOr<Ref<PerformanceMeasure>> PerformanceUserTiming::measure(JSC::JSGlobalObject& globalObject, const String& measureName, const PerformanceMeasureOptions& measureOptions)
+{
+    double endTime;
+    if (measureOptions.end) {
+        auto end = convertMarkToTimestamp(*measureOptions.end);
+        if (end.hasException())
+            return end.releaseException();
+        endTime = end.returnValue();
+    } else if (measureOptions.start && measureOptions.duration) {
+        auto start = convertMarkToTimestamp(*measureOptions.start);
+        if (start.hasException())
+            return start.releaseException();
+        auto duration = convertMarkToTimestamp(*measureOptions.duration);
+        if (duration.hasException())
+            return duration.releaseException();
+        endTime = start.returnValue() + duration.returnValue();
+    } else
+        endTime = m_performance.now();
+
+    double startTime;
+    if (measureOptions.start) {
+        auto start = convertMarkToTimestamp(*measureOptions.start);
+        if (start.hasException())
+            return start.releaseException();
+        startTime = start.returnValue();
+    } else if (measureOptions.duration && measureOptions.end) {
+        auto duration = convertMarkToTimestamp(*measureOptions.duration);
+        if (duration.hasException())
+            return duration.releaseException();
+        auto end = convertMarkToTimestamp(*measureOptions.end);
+        if (end.hasException())
+            return end.releaseException();
+        startTime = end.returnValue() - duration.returnValue();
+    } else
+        startTime = 0;
+
+
+    JSC::JSValue detail = measureOptions.detail;
+    if (detail.isUndefined())
+        detail = JSC::jsNull();
+
+    Vector<RefPtr<MessagePort>> ignoredMessagePorts;
+    auto serializedDetail = SerializedScriptValue::create(globalObject, detail, { }, ignoredMessagePorts);
+    if (serializedDetail.hasException())
+        return serializedDetail.releaseException();
+
+    auto measure = PerformanceMeasure::create(measureName, startTime, endTime, serializedDetail.releaseReturnValue());
+    if (measure.hasException())
+        return measure.releaseException();
+
+    addPerformanceEntry(m_measuresMap, measureName, measure.returnValue().get());
+    return measure.releaseReturnValue();
+}
+
+static bool isNonEmptyDictionary(const PerformanceMeasureOptions& measureOptions)
+{
+    return !measureOptions.detail.isUndefined() || measureOptions.start || measureOptions.duration || measureOptions.end;
+}
+
+ExceptionOr<Ref<PerformanceMeasure>> PerformanceUserTiming::measure(JSC::JSGlobalObject& globalObject, const String& measureName, Optional<StartOrMeasureOptions>&& startOrMeasureOptions, const String& endMark)
+{
+    if (startOrMeasureOptions) {
+        return WTF::switchOn(*startOrMeasureOptions,
+            [&] (const PerformanceMeasureOptions& measureOptions) -> ExceptionOr<Ref<PerformanceMeasure>> {
+                if (isNonEmptyDictionary(measureOptions)) {
+                    if (!endMark.isNull())
+                        return Exception { TypeError };
+                    if (!measureOptions.start && !measureOptions.end)
+                        return Exception { TypeError };
+                    if (measureOptions.start && measureOptions.duration && measureOptions.end)
+                        return Exception { TypeError };
+                }
+
+                return measure(globalObject, measureName, measureOptions);
+            },
+            [&] (const String& startMark) {
+                return measure(measureName, startMark, endMark);
+            }
+        );
+    }
+
+    return measure(measureName, { }, endMark);
+}
+
+void PerformanceUserTiming::clearMeasures(const String& measureName)
 {
     clearPerformanceEntries(m_measuresMap, measureName);
 }
 
-static Vector<RefPtr<PerformanceEntry>> convertToEntrySequence(const PerformanceEntryMap& performanceEntryMap)
+static Vector<RefPtr<PerformanceEntry>> convertToEntrySequence(const PerformanceEntryMap& map)
 {
     Vector<RefPtr<PerformanceEntry>> entries;
-    for (auto& entry : performanceEntryMap.values())
+    for (auto& entry : map.values())
         entries.appendVector(entry);
     return entries;
 }
 
-static Vector<RefPtr<PerformanceEntry>> getEntrySequenceByName(const PerformanceEntryMap& performanceEntryMap, const String& name)
-{
-    return performanceEntryMap.get(name);
-}
-
-Vector<RefPtr<PerformanceEntry>> UserTiming::getMarks() const
+Vector<RefPtr<PerformanceEntry>> PerformanceUserTiming::getMarks() const
 {
     return convertToEntrySequence(m_marksMap);
 }
 
-Vector<RefPtr<PerformanceEntry>> UserTiming::getMarks(const String& name) const
+Vector<RefPtr<PerformanceEntry>> PerformanceUserTiming::getMarks(const String& name) const
 {
-    return getEntrySequenceByName(m_marksMap, name);
+    return m_marksMap.get(name);
 }
 
-Vector<RefPtr<PerformanceEntry>> UserTiming::getMeasures() const
+Vector<RefPtr<PerformanceEntry>> PerformanceUserTiming::getMeasures() const
 {
     return convertToEntrySequence(m_measuresMap);
 }
 
-Vector<RefPtr<PerformanceEntry>> UserTiming::getMeasures(const String& name) const
+Vector<RefPtr<PerformanceEntry>> PerformanceUserTiming::getMeasures(const String& name) const
 {
-    return getEntrySequenceByName(m_measuresMap, name);
+    return m_measuresMap.get(name);
 }
 
 } // namespace WebCore
-
-#endif // ENABLE(WEB_TIMING)

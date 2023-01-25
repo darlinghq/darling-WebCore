@@ -29,7 +29,6 @@
 
 #include "ContentExtensionsDebugging.h"
 #include "DFANode.h"
-#include "PlatformExportMacros.h"
 #include <wtf/Vector.h>
 
 namespace WebCore {
@@ -40,7 +39,6 @@ namespace ContentExtensions {
 struct WEBCORE_EXPORT DFA {
     static DFA empty();
 
-    void shrinkToFit();
     void minimize();
     unsigned graphSize() const;
     size_t memoryUsed() const;

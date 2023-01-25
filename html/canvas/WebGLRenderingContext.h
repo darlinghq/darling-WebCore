@@ -25,35 +25,39 @@
 
 #pragma once
 
+#if ENABLE(WEBGL)
+
 #include "WebGLRenderingContextBase.h"
+#include <memory>
 
 namespace WebCore {
 
 class WebGLRenderingContext final : public WebGLRenderingContextBase {
+    WTF_MAKE_ISO_ALLOCATED(WebGLRenderingContext);
 public:
-    WebGLRenderingContext(HTMLCanvasElement&, GraphicsContext3DAttributes);
-    WebGLRenderingContext(HTMLCanvasElement&, Ref<GraphicsContext3D>&&, GraphicsContext3DAttributes);
+    static std::unique_ptr<WebGLRenderingContext> create(CanvasBase&, GraphicsContextGLAttributes);
+    static std::unique_ptr<WebGLRenderingContext> create(CanvasBase&, Ref<GraphicsContextGL>&&, GraphicsContextGLAttributes);
 
     bool isWebGL1() const final { return true; }
 
     WebGLExtension* getExtension(const String&) final;
-    WebGLAny getParameter(GC3Denum pname) final;
-    std::optional<Vector<String>> getSupportedExtensions() final;
+    Optional<Vector<String>> getSupportedExtensions() final;
 
-    WebGLAny getFramebufferAttachmentParameter(GC3Denum target, GC3Denum attachment, GC3Denum pname) final;
-    void renderbufferStorage(GC3Denum target, GC3Denum internalformat, GC3Dsizei width, GC3Dsizei height) final;
-    bool validateFramebufferFuncParameters(const char* functionName, GC3Denum target, GC3Denum attachment) final;
-    void hint(GC3Denum target, GC3Denum mode) final;
-    void clear(GC3Dbitfield mask) final;
+    WebGLAny getFramebufferAttachmentParameter(GCGLenum target, GCGLenum attachment, GCGLenum pname) final;
 
-    GC3Dint getMaxDrawBuffers() final;
-    GC3Dint getMaxColorAttachments() final;
+    GCGLint getMaxDrawBuffers() final;
+    GCGLint getMaxColorAttachments() final;
     void initializeVertexArrayObjects() final;
-    bool validateIndexArrayConservative(GC3Denum type, unsigned& numElementsRequired) final;
-    bool validateBlendEquation(const char* functionName, GC3Denum mode) final;
-    bool validateCapability(const char* functionName, GC3Denum cap) final;
+    bool validateIndexArrayConservative(GCGLenum type, unsigned& numElementsRequired) final;
+    bool validateBlendEquation(const char* functionName, GCGLenum mode) final;
+
+private:
+    WebGLRenderingContext(CanvasBase&, GraphicsContextGLAttributes);
+    WebGLRenderingContext(CanvasBase&, Ref<GraphicsContextGL>&&, GraphicsContextGLAttributes);
 };
-    
+
 } // namespace WebCore
 
 SPECIALIZE_TYPE_TRAITS_CANVASRENDERINGCONTEXT(WebCore::WebGLRenderingContext, isWebGL1())
+
+#endif

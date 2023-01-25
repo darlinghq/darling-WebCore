@@ -33,49 +33,51 @@
 
 #include "FloatRect.h"
 #include "FrameView.h"
-#include "GtkVersioning.h"
+#include "GtkUtilities.h"
 #include "HostWindow.h"
 #include "NotImplemented.h"
 #include "Widget.h"
 
+#include <cmath>
 #include <gtk/gtk.h>
+#include <wtf/HashMap.h>
+#include <wtf/HashSet.h>
+#include <wtf/NeverDestroyed.h>
+#include <wtf/glib/GUniquePtr.h>
 
 namespace WebCore {
 
-static GtkWidget* getToplevel(GtkWidget* widget)
+#if !USE(GTK4)
+static GdkVisual* systemVisual()
 {
-    GtkWidget* toplevel = gtk_widget_get_toplevel(widget);
-    return gtk_widget_is_toplevel(toplevel) ? toplevel : 0;
+    if (auto* screen = gdk_screen_get_default())
+        return gdk_screen_get_system_visual(screen);
+
+    return nullptr;
+}
+#endif
+
+int screenDepth(Widget*)
+{
+#if !USE(GTK4)
+    if (auto* visual = systemVisual())
+        return gdk_visual_get_depth(visual);
+#endif
+
+    return 24;
 }
 
-static GdkVisual* getVisual(Widget* widget)
+int screenDepthPerComponent(Widget*)
 {
-    GtkWidget* container = widget ? GTK_WIDGET(widget->root()->hostWindow()->platformPageClient()) : 0;
-    if (!container) {
-        GdkScreen* screen = gdk_screen_get_default();
-        return screen ? gdk_screen_get_system_visual(screen) : 0;
+#if !USE(GTK4)
+    if (auto* visual = systemVisual()) {
+        int redDepth;
+        gdk_visual_get_red_pixel_details(visual, nullptr, nullptr, &redDepth);
+        return redDepth;
     }
+#endif
 
-    if (!gtk_widget_get_realized(container))
-        container = getToplevel(container);
-    return container ? gdk_window_get_visual(gtk_widget_get_window(container)) : 0;
-}
-
-int screenDepth(Widget* widget)
-{
-    GdkVisual* visual = getVisual(widget);
-    if (!visual)
-        return 24;
-    return gdk_visual_get_depth(visual);
-}
-
-int screenDepthPerComponent(Widget* widget)
-{
-    GdkVisual* visual = getVisual(widget);
-    if (!visual)
-        return 8;
-
-    return gdk_visual_get_bits_per_rgb(visual);
+    return 8;
 }
 
 bool screenIsMonochrome(Widget* widget)
@@ -88,51 +90,157 @@ bool screenHasInvertedColors()
     return false;
 }
 
-static GdkScreen* getScreen(GtkWidget* widget)
+double screenDPI()
 {
-    return gtk_widget_has_screen(widget) ? gtk_widget_get_screen(widget) : gdk_screen_get_default();
-}
+    static const double defaultDpi = 96;
+#if !USE(GTK4)
+    GdkScreen* screen = gdk_screen_get_default();
+    if (screen) {
+        double dpi = gdk_screen_get_resolution(screen);
+        if (dpi != -1)
+            return dpi;
+    }
+#endif
 
-FloatRect screenRect(Widget* widget)
-{
-    GtkWidget* container = widget ? GTK_WIDGET(widget->root()->hostWindow()->platformPageClient()) : 0;
-    if (container)
-        container = getToplevel(container);
+    static GtkSettings* gtkSettings = gtk_settings_get_default();
+    if (gtkSettings) {
+        int gtkXftDpi;
+        g_object_get(gtkSettings, "gtk-xft-dpi", &gtkXftDpi, nullptr);
+        return gtkXftDpi / 1024.0;
+    }
 
-    GdkScreen* screen = container ? getScreen(container) : gdk_screen_get_default();
-    if (!screen)
-        return FloatRect();
+    static double cachedDpi = 0;
+    if (cachedDpi)
+        return cachedDpi;
 
-    gint monitor = container ? gdk_screen_get_monitor_at_window(screen, gtk_widget_get_window(container)) : 0;
+    static const double millimetresPerInch = 25.4;
+
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display)
+        return defaultDpi;
+#if USE(GTK4)
+    GdkMonitor* monitor = GDK_MONITOR(g_list_model_get_item(gdk_display_get_monitors(display), 0));
+#else
+    GdkMonitor* monitor = gdk_display_get_monitor(display, 0);
+#endif
+    if (!monitor)
+        return defaultDpi;
 
     GdkRectangle geometry;
-    gdk_screen_get_monitor_geometry(screen, monitor, &geometry);
+    gdk_monitor_get_geometry(monitor, &geometry);
+    double diagonalInPixels = std::hypot(geometry.width, geometry.height);
+    double diagonalInInches = std::hypot(gdk_monitor_get_width_mm(monitor), gdk_monitor_get_height_mm(monitor)) / millimetresPerInch;
+    cachedDpi = diagonalInPixels / diagonalInInches;
+
+    return cachedDpi;
+}
+
+static WTF::HashMap<void*, Function<void()>>& screenDPIObserverHandlersMap()
+{
+    static WTF::NeverDestroyed<WTF::HashMap<void*, Function<void()>>> handlersMap;
+    return handlersMap;
+}
+
+static void gtkXftDPIChangedCallback()
+{
+    for (const auto& keyValuePair : screenDPIObserverHandlersMap())
+        keyValuePair.value();
+}
+
+void setScreenDPIObserverHandler(Function<void()>&& handler, void* context)
+{
+    static GtkSettings* gtkSettings = gtk_settings_get_default();
+    static unsigned long gtkXftDpiChangedHandlerID = 0;
+
+    if (!gtkSettings)
+        return;
+
+    if (handler)
+        screenDPIObserverHandlersMap().set(context, WTFMove(handler));
+    else
+        screenDPIObserverHandlersMap().remove(context);
+
+    if (!screenDPIObserverHandlersMap().isEmpty()) {
+        if (!gtkXftDpiChangedHandlerID)
+            gtkXftDpiChangedHandlerID = g_signal_connect(gtkSettings, "notify::gtk-xft-dpi", G_CALLBACK(gtkXftDPIChangedCallback), nullptr);
+    } else if (gtkXftDpiChangedHandlerID) {
+        g_signal_handler_disconnect(gtkSettings, gtkXftDpiChangedHandlerID);
+        gtkXftDpiChangedHandlerID = 0;
+    }
+}
+
+static GRefPtr<GdkMonitor> currentScreenMonitor()
+{
+    GdkDisplay* display = gdk_display_get_default();
+    if (!display)
+        return nullptr;
+
+#if USE(GTK4)
+    return adoptGRef(static_cast<GdkMonitor*>(g_list_model_get_item(gdk_display_get_monitors(display), 0)));
+#else
+    auto* rootWindow = gdk_get_default_root_window();
+    if (!rootWindow)
+        return nullptr;
+
+    return gdk_display_get_monitor_at_window(display, rootWindow);
+#endif
+}
+
+
+FloatRect screenRect(Widget*)
+{
+    GdkRectangle geometry;
+
+    auto monitor = currentScreenMonitor();
+    if (!monitor)
+        return { };
+
+    gdk_monitor_get_geometry(monitor.get(), &geometry);
 
     return FloatRect(geometry.x, geometry.y, geometry.width, geometry.height);
 }
 
-FloatRect screenAvailableRect(Widget* widget)
+FloatRect screenAvailableRect(Widget*)
 {
-    GtkWidget* container = widget ? GTK_WIDGET(widget->root()->hostWindow()->platformPageClient()) : 0;
-    if (container && !gtk_widget_get_realized(container))
-        return screenRect(widget);
-
-    GdkScreen* screen = container ? getScreen(container) : gdk_screen_get_default();
-    if (!screen)
-        return FloatRect();
-
-    gint monitor = container ? gdk_screen_get_monitor_at_window(screen, gtk_widget_get_window(container)) : 0;
+    auto monitor = currentScreenMonitor();
+    if (!monitor)
+        return { };
 
     GdkRectangle workArea;
-    gdk_screen_get_monitor_workarea(screen, monitor, &workArea);
+    monitorWorkArea(monitor.get(), &workArea);
 
     return FloatRect(workArea.x, workArea.y, workArea.width, workArea.height);
-
 }
 
 bool screenSupportsExtendedColor(Widget*)
 {
     return false;
 }
+
+#if ENABLE(TOUCH_EVENTS)
+bool screenHasTouchDevice()
+{
+    auto* display = gdk_display_get_default();
+    if (!display)
+        return true;
+
+    auto* seat = gdk_display_get_default_seat(display);
+    return seat ? gdk_seat_get_capabilities(seat) & GDK_SEAT_CAPABILITY_TOUCH : true;
+}
+
+bool screenIsTouchPrimaryInputDevice()
+{
+    auto* display = gdk_display_get_default();
+    if (!display)
+        return true;
+
+    auto* seat = gdk_display_get_default_seat(display);
+    if (!seat)
+        return true;
+
+    auto* device = gdk_seat_get_pointer(seat);
+    return device ? gdk_device_get_source(device) == GDK_SOURCE_TOUCHSCREEN : true;
+}
+#endif // ENABLE(TOUCH_EVENTS)
 
 } // namespace WebCore

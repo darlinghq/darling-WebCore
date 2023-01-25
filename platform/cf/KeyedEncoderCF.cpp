@@ -34,7 +34,7 @@ namespace WebCore {
 
 std::unique_ptr<KeyedEncoder> KeyedEncoder::encoder()
 {
-    return std::make_unique<KeyedEncoderCF>();
+    return makeUnique<KeyedEncoderCF>();
 }
 
 static RetainPtr<CFMutableDictionaryRef> createDictionary()
@@ -69,6 +69,12 @@ void KeyedEncoderCF::encodeBool(const String& key, bool value)
 void KeyedEncoderCF::encodeUInt32(const String& key, uint32_t value)
 {
     auto number = adoptCF(CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &value));
+    CFDictionarySetValue(m_dictionaryStack.last(), key.createCFString().get(), number.get());
+}
+    
+void KeyedEncoderCF::encodeUInt64(const String& key, uint64_t value)
+{
+    auto number = adoptCF(CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt64Type, &value));
     CFDictionarySetValue(m_dictionaryStack.last(), key.createCFString().get(), number.get());
 }
 

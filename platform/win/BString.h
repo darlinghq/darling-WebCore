@@ -40,20 +40,18 @@ typedef _Null_terminated_ wchar_t* BSTR;
 
 namespace WebCore {
 
-    class URL;
-
     class BString {
     public:
-        BString();
+        WEBCORE_EXPORT BString();
         BString(const wchar_t*);
         BString(const wchar_t*, size_t length);
         BString(const String&);
-        BString(const AtomicString&);
+        BString(const AtomString&);
         BString(const URL&);
 #if USE(CF)
         BString(CFStringRef);
 #endif
-        ~BString();
+        WEBCORE_EXPORT ~BString();
 
         void adoptBSTR(BSTR);
         void clear();

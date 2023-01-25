@@ -22,6 +22,8 @@
 
 #include "BidiContext.h"
 #include "InlineFlowBox.h"
+#include "RenderBox.h"
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
@@ -29,12 +31,13 @@ class EllipsisBox;
 class HitTestResult;
 class LogicalSelectionOffsetCaches;
 class RenderBlockFlow;
-class RenderRegion;
+class RenderFragmentContainer;
 
 struct BidiStatus;
 struct GapRects;
 
-class RootInlineBox : public InlineFlowBox {
+class RootInlineBox : public InlineFlowBox, public CanMakeWeakPtr<RootInlineBox> {
+    WTF_MAKE_ISO_ALLOCATED(RootInlineBox);
 public:
     explicit RootInlineBox(RenderBlockFlow&);
     virtual ~RootInlineBox();
@@ -51,8 +54,8 @@ public:
     LayoutUnit lineTop() const { return m_lineTop; }
     LayoutUnit lineBottom() const { return m_lineBottom; }
 
-    LayoutUnit lineTopWithLeading() const { return m_lineTopWithLeading; }
-    LayoutUnit lineBottomWithLeading() const { return m_lineBottomWithLeading; }
+    LayoutUnit lineBoxTop() const { return m_lineBoxTop; }
+    LayoutUnit lineBoxBottom() const { return m_lineBoxBottom; }
     
     LayoutUnit paginationStrut() const { return m_paginationStrut; }
     void setPaginationStrut(LayoutUnit strut) { m_paginationStrut = strut; }
@@ -63,31 +66,30 @@ public:
     LayoutUnit paginatedLineWidth() const { return m_paginatedLineWidth; }
     void setPaginatedLineWidth(LayoutUnit width) { m_paginatedLineWidth = width; }
 
-    // It should not be assumed the containingRegion() is always valid.
-    // It can also be nullptr if the flow has no region chain.
-    RenderRegion* containingRegion() const;
-    void setContainingRegion(RenderRegion&);
-    void clearContainingRegion();
+    // It should not be assumed the containingFragment() is always valid.
+    // It can also be nullptr if the flow has no fragment chain.
+    RenderFragmentContainer* containingFragment() const;
+    void setContainingFragment(RenderFragmentContainer&);
+    void clearContainingFragment();
 
-    LayoutUnit selectionTop() const;
+    enum class ForHitTesting : bool { No, Yes };
+    LayoutUnit selectionTop(ForHitTesting = ForHitTesting::No) const;
     LayoutUnit selectionBottom() const;
     LayoutUnit selectionHeight() const { return std::max<LayoutUnit>(0, selectionBottom() - selectionTop()); }
 
     LayoutUnit selectionTopAdjustedForPrecedingBlock() const;
     LayoutUnit selectionHeightAdjustedForPrecedingBlock() const { return std::max<LayoutUnit>(0, selectionBottom() - selectionTopAdjustedForPrecedingBlock()); }
 
-    int blockDirectionPointInLine() const;
-
     LayoutUnit alignBoxesInBlockDirection(LayoutUnit heightOfBlock, GlyphOverflowAndFallbackFontsMap&, VerticalPositionCache&);
-    void setLineTopBottomPositions(LayoutUnit top, LayoutUnit bottom, LayoutUnit topWithLeading, LayoutUnit bottomWithLeading)
+    void setLineTopBottomPositions(LayoutUnit top, LayoutUnit bottom, LayoutUnit lineBoxTop, LayoutUnit lineBoxBottom)
     { 
         m_lineTop = top; 
         m_lineBottom = bottom;
-        m_lineTopWithLeading = topWithLeading;
-        m_lineBottomWithLeading = bottomWithLeading;
+        m_lineBoxTop = lineBoxTop;
+        m_lineBoxBottom = lineBoxBottom;
     }
 
-    RenderObject* lineBreakObj() const { return m_lineBreakObj; }
+    RenderObject* lineBreakObj() const { return m_lineBreakObj.get(); }
     BidiStatus lineBreakBidiStatus() const;
     void setLineBreakInfo(RenderObject*, unsigned breakPos, const BidiStatus&);
 
@@ -101,7 +103,7 @@ public:
 
     bool lineCanAccommodateEllipsis(bool ltr, int blockEdge, int lineBoxEdge, int ellipsisWidth);
     // Return the truncatedWidth, the width of the truncated text + ellipsis.
-    float placeEllipsis(const AtomicString& ellipsisStr, bool ltr, float blockLeftEdge, float blockRightEdge, float ellipsisWidth, InlineBox* markupBox = nullptr);
+    float placeEllipsis(const AtomString& ellipsisStr, bool ltr, float blockLeftEdge, float blockRightEdge, float ellipsisWidth, InlineBox* markupBox = nullptr);
     // Return the position of the EllipsisBox or -1.
     float placeEllipsisBox(bool ltr, float blockLeftEdge, float blockRightEdge, float ellipsisWidth, float &truncatedWidth, bool& foundBox) final;
 
@@ -120,28 +122,21 @@ public:
     void paint(PaintInfo&, const LayoutPoint&, LayoutUnit lineTop, LayoutUnit lineBottom) override;
     bool nodeAtPoint(const HitTestRequest&, HitTestResult&, const HitTestLocation& locationInContainer, const LayoutPoint& accumulatedOffset, LayoutUnit lineTop, LayoutUnit lineBottom, HitTestAction) override;
 
-    using InlineBox::hasSelectedChildren;
-    using InlineBox::setHasSelectedChildren;
-
-    RenderObject::SelectionState selectionState() final;
+    RenderObject::HighlightState selectionState() final;
     InlineBox* firstSelectedBox();
     InlineBox* lastSelectedBox();
 
     GapRects lineSelectionGap(RenderBlock& rootBlock, const LayoutPoint& rootBlockPhysicalPosition, const LayoutSize& offsetFromRootBlock,
         LayoutUnit selTop, LayoutUnit selHeight, const LogicalSelectionOffsetCaches&, const PaintInfo*);
 
-    IntRect computeCaretRect(float logicalLeftPosition, unsigned caretWidth, LayoutUnit* extraWidthToEndOfLine) const;
-
-    InlineBox* closestLeafChildForPoint(const IntPoint&, bool onlyEditableLeaves);
-    InlineBox* closestLeafChildForLogicalLeftPosition(int, bool onlyEditableLeaves = false);
-
+    using CleanLineFloatList = Vector<WeakPtr<RenderBox>>;
     void appendFloat(RenderBox& floatingBox)
     {
         ASSERT(!isDirty());
         if (m_floats)
-            m_floats->append(&floatingBox);
+            m_floats->append(makeWeakPtr(floatingBox));
         else
-            m_floats = std::make_unique<Vector<RenderBox*>>(1, &floatingBox);
+            m_floats = makeUnique<CleanLineFloatList>(1, makeWeakPtr(floatingBox));
     }
 
     void removeFloat(RenderBox& floatingBox)
@@ -151,7 +146,7 @@ public:
         m_floats->remove(m_floats->find(&floatingBox));
     }
 
-    Vector<RenderBox*>* floatsPtr() { ASSERT(!isDirty()); return m_floats.get(); }
+    CleanLineFloatList* floatsPtr() { ASSERT(!isDirty()); return m_floats.get(); }
 
     void extractLineBoxFromRenderObject() final;
     void attachLineBoxToRenderObject() final;
@@ -186,12 +181,10 @@ public:
         return InlineFlowBox::logicalBottomLayoutOverflow(lineBottom());
     }
 
-    Node* getLogicalStartBoxWithNode(InlineBox*&) const;
-    Node* getLogicalEndBoxWithNode(InlineBox*&) const;
-
     virtual bool isTrailingFloatsRootInlineBox() const { return false; }
 
 #if ENABLE(TREE_DEBUGGING)
+    void outputLineBox(WTF::TextStream&, bool mark, int depth) const final;
     const char* boxName() const final;
 #endif
 private:
@@ -203,30 +196,29 @@ private:
     bool includeInitialLetterForBox(InlineBox&) const;
     bool includeMarginForBox(InlineBox&) const;
 
-    LayoutUnit lineSnapAdjustment(LayoutUnit delta = 0) const;
+    LayoutUnit lineSnapAdjustment(LayoutUnit delta = 0_lu) const;
 
     LayoutUnit beforeAnnotationsAdjustment() const;
 
-    // This folds into the padding at the end of InlineFlowBox on 64-bit.
-    unsigned m_lineBreakPos;
-
     // Where this line ended.  The exact object and the position within that object are stored so that
     // we can create an InlineIterator beginning just after the end of this line.
-    RenderObject* m_lineBreakObj;
+    WeakPtr<RenderObject> m_lineBreakObj;
     RefPtr<BidiContext> m_lineBreakContext;
 
     LayoutUnit m_lineTop;
     LayoutUnit m_lineBottom;
 
-    LayoutUnit m_lineTopWithLeading;
-    LayoutUnit m_lineBottomWithLeading;
+    LayoutUnit m_lineBoxTop;
+    LayoutUnit m_lineBoxBottom;
 
     LayoutUnit m_paginationStrut;
     LayoutUnit m_paginatedLineWidth;
 
     // Floats hanging off the line are pushed into this vector during layout. It is only
     // good for as long as the line has not been marked dirty.
-    std::unique_ptr<Vector<RenderBox*>> m_floats;
+    std::unique_ptr<CleanLineFloatList> m_floats;
+
+    unsigned m_lineBreakPos { 0 };
 };
 
 inline RootInlineBox* RootInlineBox::nextRootBox() const

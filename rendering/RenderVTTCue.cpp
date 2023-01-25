@@ -26,21 +26,26 @@
 
 #include "config.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 #include "RenderVTTCue.h"
 
 #include "RenderInline.h"
+#include "RenderLayoutState.h"
 #include "RenderView.h"
 #include "TextTrackCueGeneric.h"
 #include "VTTCue.h"
+#include <wtf/IsoMallocInlines.h>
 #include <wtf/StackStats.h>
 
 namespace WebCore {
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(RenderVTTCue);
+
 RenderVTTCue::RenderVTTCue(VTTCueBox& element, RenderStyle&& style)
     : RenderBlockFlow(element, WTFMove(style))
-    , m_cue(element.getCue())
+    , m_cue(downcast<VTTCue>(element.getCue()))
 {
+    ASSERT(m_cue);
 }
 
 void RenderVTTCue::layout()
@@ -55,17 +60,15 @@ void RenderVTTCue::layout()
     if (!m_cue->regionId().isEmpty())
         return;
 
-    LayoutStateMaintainer statePusher(view(), *this, locationOffset(), hasTransform() || hasReflection() || style().isFlippedBlocksWritingMode());
-    
+    LayoutStateMaintainer statePusher(*this, locationOffset(), hasTransform() || hasReflection() || style().isFlippedBlocksWritingMode());
+
     if (m_cue->cueType()== TextTrackCue::WebVTT) {
-        if (toVTTCue(m_cue)->snapToLines())
+        if (m_cue->snapToLines())
             repositionCueSnapToLinesSet();
         else
             repositionCueSnapToLinesNotSet();
     } else
         repositionGenericCue();
-
-    statePusher.pop();
 }
 
 bool RenderVTTCue::initializeLayoutParameters(InlineFlowBox*& firstLineBox, LayoutUnit& step, LayoutUnit& position)
@@ -178,8 +181,8 @@ bool RenderVTTCue::shouldSwitchDirection(InlineFlowBox* firstLineBox, LayoutUnit
 {
     LayoutUnit top = y();
     LayoutUnit left = x();
-    LayoutUnit bottom = top + firstLineBox->height();
-    LayoutUnit right = left + firstLineBox->width();
+    LayoutUnit bottom { top + firstLineBox->height() };
+    LayoutUnit right { left + firstLineBox->width() };
 
     // 12. Horizontal: If step is negative and the top of the first line
     // box in boxes is now above the top of the video's rendering area,
@@ -348,9 +351,9 @@ void RenderVTTCue::repositionGenericCue()
     RenderElement& backdropElement = downcast<RenderElement>(firstChild);
     
     InlineFlowBox* firstLineBox = downcast<RenderInline>(*backdropElement.firstChild()).firstLineBox();
-    if (static_cast<TextTrackCueGeneric*>(m_cue)->useDefaultPosition() && firstLineBox) {
+    if (downcast<TextTrackCueGeneric>(*m_cue).useDefaultPosition() && firstLineBox) {
         LayoutUnit parentWidth = containingBlock()->logicalWidth();
-        LayoutUnit width = firstLineBox->width();
+        LayoutUnit width { firstLineBox->width() };
         LayoutUnit right = (parentWidth / 2) - (width / 2);
         setX(right);
     }

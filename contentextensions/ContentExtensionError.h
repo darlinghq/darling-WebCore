@@ -27,7 +27,6 @@
 
 #if ENABLE(CONTENT_EXTENSIONS)
 
-#include "PlatformExportMacros.h"
 #include <system_error>
 
 namespace WebCore {
@@ -58,7 +57,10 @@ enum class ContentExtensionError {
     JSONInvalidAction,
     JSONInvalidActionType,
     JSONInvalidCSSDisplayNoneActionType,
+    JSONInvalidNotification,
     JSONInvalidRegex,
+
+    ErrorWritingSerializedNFA,
 };
 
 extern const char* WebKitContentBlockerDomain;

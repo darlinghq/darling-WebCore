@@ -26,7 +26,6 @@
 #include "CSSParser.h"
 #include "CSSRuleList.h"
 #include "Document.h"
-#include "ExceptionCode.h"
 #include "HTMLLinkElement.h"
 #include "HTMLStyleElement.h"
 #include "MediaList.h"
@@ -57,7 +56,7 @@ private:
     CSSStyleSheet* m_styleSheet;
 };
 
-#if !ASSERT_DISABLED
+#if ASSERT_ENABLED
 static bool isAcceptableCSSStyleSheetParent(Node* parentNode)
 {
     // Only these nodes can be parents of StyleSheets, and they need to call clearOwnerNode() when moved out of document.
@@ -68,14 +67,14 @@ static bool isAcceptableCSSStyleSheetParent(Node* parentNode)
         || is<SVGStyleElement>(*parentNode)
         || parentNode->nodeType() == Node::PROCESSING_INSTRUCTION_NODE;
 }
-#endif
+#endif // ASSERT_ENABLED
 
 Ref<CSSStyleSheet> CSSStyleSheet::create(Ref<StyleSheetContents>&& sheet, CSSImportRule* ownerRule)
 {
     return adoptRef(*new CSSStyleSheet(WTFMove(sheet), ownerRule));
 }
 
-Ref<CSSStyleSheet> CSSStyleSheet::create(Ref<StyleSheetContents>&& sheet, Node& ownerNode, const std::optional<bool>& isCleanOrigin)
+Ref<CSSStyleSheet> CSSStyleSheet::create(Ref<StyleSheetContents>&& sheet, Node& ownerNode, const Optional<bool>& isCleanOrigin)
 {
     return adoptRef(*new CSSStyleSheet(WTFMove(sheet), ownerNode, TextPosition(), false, isCleanOrigin));
 }
@@ -97,7 +96,7 @@ CSSStyleSheet::CSSStyleSheet(Ref<StyleSheetContents>&& contents, CSSImportRule* 
     m_contents->registerClient(this);
 }
 
-CSSStyleSheet::CSSStyleSheet(Ref<StyleSheetContents>&& contents, Node& ownerNode, const TextPosition& startPosition, bool isInlineStylesheet, const std::optional<bool>& isOriginClean)
+CSSStyleSheet::CSSStyleSheet(Ref<StyleSheetContents>&& contents, Node& ownerNode, const TextPosition& startPosition, bool isInlineStylesheet, const Optional<bool>& isOriginClean)
     : m_contents(WTFMove(contents))
     , m_isInlineStylesheet(isInlineStylesheet)
     , m_isDisabled(false)
@@ -229,12 +228,12 @@ CSSRule* CSSStyleSheet::item(unsigned index)
 {
     unsigned ruleCount = length();
     if (index >= ruleCount)
-        return 0;
+        return nullptr;
 
-    if (m_childRuleCSSOMWrappers.isEmpty())
+    ASSERT(m_childRuleCSSOMWrappers.isEmpty() || m_childRuleCSSOMWrappers.size() == ruleCount);
+    if (m_childRuleCSSOMWrappers.size() < ruleCount)
         m_childRuleCSSOMWrappers.grow(ruleCount);
-    ASSERT(m_childRuleCSSOMWrappers.size() == ruleCount);
-    
+
     RefPtr<CSSRule>& cssRule = m_childRuleCSSOMWrappers[index];
     if (!cssRule)
         cssRule = m_contents->ruleAt(index)->createCSSOMWrapper(this);
@@ -255,12 +254,20 @@ bool CSSStyleSheet::canAccessRules() const
     return document->securityOrigin().canRequest(baseURL);
 }
 
+ExceptionOr<Ref<CSSRuleList>> CSSStyleSheet::rulesForBindings()
+{
+    auto rules = this->rules();
+    if (!rules)
+        return Exception { SecurityError, "Not allowed to access cross-origin stylesheet"_s };
+    return rules.releaseNonNull();
+}
+
 RefPtr<CSSRuleList> CSSStyleSheet::rules()
 {
     if (!canAccessRules())
         return nullptr;
     // IE behavior.
-    RefPtr<StaticCSSRuleList> ruleList = StaticCSSRuleList::create();
+    auto ruleList = StaticCSSRuleList::create();
     unsigned ruleCount = length();
     for (unsigned i = 0; i < ruleCount; ++i)
         ruleList->rules().append(item(i));
@@ -272,17 +279,17 @@ ExceptionOr<unsigned> CSSStyleSheet::insertRule(const String& ruleString, unsign
     ASSERT(m_childRuleCSSOMWrappers.isEmpty() || m_childRuleCSSOMWrappers.size() == m_contents->ruleCount());
 
     if (index > length())
-        return Exception { INDEX_SIZE_ERR };
+        return Exception { IndexSizeError };
     RefPtr<StyleRuleBase> rule = CSSParser::parseRule(m_contents.get().parserContext(), m_contents.ptr(), ruleString);
 
     if (!rule)
-        return Exception { SYNTAX_ERR };
+        return Exception { SyntaxError };
 
     RuleMutationScope mutationScope(this, RuleInsertion, is<StyleRuleKeyframes>(*rule) ? downcast<StyleRuleKeyframes>(rule.get()) : nullptr);
 
     bool success = m_contents.get().wrapperInsertRule(rule.releaseNonNull(), index);
     if (!success)
-        return Exception { HIERARCHY_REQUEST_ERR };
+        return Exception { HierarchyRequestError };
     if (!m_childRuleCSSOMWrappers.isEmpty())
         m_childRuleCSSOMWrappers.insert(index, RefPtr<CSSRule>());
 
@@ -294,7 +301,7 @@ ExceptionOr<void> CSSStyleSheet::deleteRule(unsigned index)
     ASSERT(m_childRuleCSSOMWrappers.isEmpty() || m_childRuleCSSOMWrappers.size() == m_contents->ruleCount());
 
     if (index >= length())
-        return Exception { INDEX_SIZE_ERR };
+        return Exception { IndexSizeError };
     RuleMutationScope mutationScope(this);
 
     m_contents->wrapperDeleteRule(index);
@@ -308,7 +315,7 @@ ExceptionOr<void> CSSStyleSheet::deleteRule(unsigned index)
     return { };
 }
 
-ExceptionOr<int> CSSStyleSheet::addRule(const String& selector, const String& style, std::optional<unsigned> index)
+ExceptionOr<int> CSSStyleSheet::addRule(const String& selector, const String& style, Optional<unsigned> index)
 {
     StringBuilder text;
     text.append(selector);
@@ -317,7 +324,7 @@ ExceptionOr<int> CSSStyleSheet::addRule(const String& selector, const String& st
     if (!style.isEmpty())
         text.append(' ');
     text.append('}');
-    auto insertRuleResult = insertRule(text.toString(), index.value_or(length()));
+    auto insertRuleResult = insertRule(text.toString(), index.valueOr(length()));
     if (insertRuleResult.hasException())
         return insertRuleResult.releaseException();
     
@@ -325,12 +332,20 @@ ExceptionOr<int> CSSStyleSheet::addRule(const String& selector, const String& st
     return -1;
 }
 
+ExceptionOr<Ref<CSSRuleList>> CSSStyleSheet::cssRulesForBindings()
+{
+    auto cssRules = this->cssRules();
+    if (!cssRules)
+        return Exception { SecurityError, "Not allowed to access cross-origin stylesheet"_s };
+    return cssRules.releaseNonNull();
+}
+
 RefPtr<CSSRuleList> CSSStyleSheet::cssRules()
 {
     if (!canAccessRules())
         return nullptr;
     if (!m_ruleListCSSOMWrapper)
-        m_ruleListCSSOMWrapper = std::make_unique<StyleSheetCSSRuleList>(this);
+        m_ruleListCSSOMWrapper = makeUnique<StyleSheetCSSRuleList>(this);
     return m_ruleListCSSOMWrapper.get();
 }
 

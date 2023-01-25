@@ -28,29 +28,28 @@
 
 #if USE(CG)
 
-#include "ImageIOSPI.h"
 #include "ImageOrientation.h"
+#include "ImageResolution.h"
 #include "ImageSourceCG.h"
 #include "IntPoint.h"
 #include "IntSize.h"
 #include "Logging.h"
+#include "MIMETypeRegistry.h"
 #include "SharedBuffer.h"
-#include <wtf/NeverDestroyed.h>
 #include "UTIRegistry.h"
-
-#if !PLATFORM(IOS)
-#include <ApplicationServices/ApplicationServices.h>
-#else
-#include "CoreGraphicsSPI.h"
+#include <pal/spi/cg/ImageIOSPI.h>
 #include <ImageIO/ImageIO.h>
-#endif
+#include <pal/spi/cg/CoreGraphicsSPI.h>
 
 namespace WebCore {
 
-const CFStringRef WebCoreCGImagePropertyAPNGUnclampedDelayTime = CFSTR("UnclampedDelayTime");
-const CFStringRef WebCoreCGImagePropertyAPNGDelayTime = CFSTR("DelayTime");
-const CFStringRef WebCoreCGImagePropertyAPNGLoopCount = CFSTR("LoopCount");
+const CFStringRef WebCoreCGImagePropertyHEICSDictionary = CFSTR("{HEICS}");
+const CFStringRef WebCoreCGImagePropertyHEICSFrameInfoArray = CFSTR("FrameInfo");
 
+const CFStringRef WebCoreCGImagePropertyUnclampedDelayTime = CFSTR("UnclampedDelayTime");
+const CFStringRef WebCoreCGImagePropertyDelayTime = CFSTR("DelayTime");
+const CFStringRef WebCoreCGImagePropertyLoopCount = CFSTR("LoopCount");
+    
 #if PLATFORM(WIN)
 const CFStringRef kCGImageSourceShouldPreferRGB32 = CFSTR("kCGImageSourceShouldPreferRGB32");
 const CFStringRef kCGImageSourceSkipMetadata = CFSTR("kCGImageSourceSkipMetadata");
@@ -66,6 +65,13 @@ static RetainPtr<CFMutableDictionaryRef> createImageSourceOptions()
     CFDictionarySetValue(options.get(), kCGImageSourceSkipMetadata, kCFBooleanTrue);
     return options;
 }
+
+static RetainPtr<CFMutableDictionaryRef> createImageSourceMetadataOptions()
+{
+    auto options = createImageSourceOptions();
+    CFDictionarySetValue(options.get(), kCGImageSourceSkipMetadata, kCFBooleanFalse);
+    return options;
+}
     
 static RetainPtr<CFMutableDictionaryRef> createImageSourceAsyncOptions()
 {
@@ -77,10 +83,9 @@ static RetainPtr<CFMutableDictionaryRef> createImageSourceAsyncOptions()
 
 static RetainPtr<CFMutableDictionaryRef> appendImageSourceOption(RetainPtr<CFMutableDictionaryRef>&& options, SubsamplingLevel subsamplingLevel)
 {
-    RetainPtr<CFNumberRef> subsampleNumber;
     subsamplingLevel = std::min(SubsamplingLevel::Last, std::max(SubsamplingLevel::First, subsamplingLevel));
     int subsampleInt = 1 << static_cast<int>(subsamplingLevel); // [0..3] => [1, 2, 4, 8]
-    subsampleNumber = adoptCF(CFNumberCreate(nullptr,  kCFNumberIntType,  &subsampleInt));
+    auto subsampleNumber = adoptCF(CFNumberCreate(nullptr,  kCFNumberIntType,  &subsampleInt));
     CFDictionarySetValue(options.get(), kCGImageSourceSubsampleFactor, subsampleNumber.get());
     return WTFMove(options);
 }
@@ -104,28 +109,122 @@ static RetainPtr<CFMutableDictionaryRef> appendImageSourceOptions(RetainPtr<CFMu
     
 static RetainPtr<CFDictionaryRef> imageSourceOptions(SubsamplingLevel subsamplingLevel = SubsamplingLevel::Default)
 {
-    static NeverDestroyed<RetainPtr<CFMutableDictionaryRef>> options = createImageSourceOptions();
+    static const auto options = createImageSourceOptions().leakRef();
     if (subsamplingLevel == SubsamplingLevel::Default)
-        return options.get();
-    return appendImageSourceOption(adoptCF(CFDictionaryCreateMutableCopy(nullptr, 0, options.get().get())), subsamplingLevel);
+        return options;
+    return appendImageSourceOption(adoptCF(CFDictionaryCreateMutableCopy(nullptr, 0, options)), subsamplingLevel);
 }
 
 static RetainPtr<CFDictionaryRef> imageSourceAsyncOptions(SubsamplingLevel subsamplingLevel, const IntSize& sizeForDrawing)
 {
-    static NeverDestroyed<RetainPtr<CFMutableDictionaryRef>> options = createImageSourceAsyncOptions();
-    return appendImageSourceOptions(adoptCF(CFDictionaryCreateMutableCopy(nullptr, 0, options.get().get())), subsamplingLevel, sizeForDrawing);
+    static const auto options = createImageSourceAsyncOptions().leakRef();
+    return appendImageSourceOptions(adoptCF(CFDictionaryCreateMutableCopy(nullptr, 0, options)), subsamplingLevel, sizeForDrawing);
 }
-    
+
+static CFDictionaryRef animationPropertiesFromProperties(CFDictionaryRef properties)
+{
+    if (!properties)
+        return nullptr;
+
+    if (auto animationProperties = (CFDictionaryRef)CFDictionaryGetValue(properties, kCGImagePropertyGIFDictionary))
+        return animationProperties;
+#if HAVE(WEBP)
+    if (auto animationProperties = (CFDictionaryRef)CFDictionaryGetValue(properties, kCGImagePropertyWebPDictionary))
+        return animationProperties;
+#endif
+    if (auto animationProperties = (CFDictionaryRef)CFDictionaryGetValue(properties, kCGImagePropertyPNGDictionary))
+        return animationProperties;
+
+    return (CFDictionaryRef)CFDictionaryGetValue(properties, WebCoreCGImagePropertyHEICSDictionary);
+}
+
+static CFDictionaryRef animationHEICSPropertiesFromProperties(CFDictionaryRef properties, size_t index)
+{
+    if (!properties)
+        return nullptr;
+
+    // For HEICS images, ImageIO does not create a properties dictionary for each HEICS frame. Instead it maintains
+    // all frames' information in the image properties dictionary. Here is how ImageIO structures the properties
+    // dictionary for HEICS image:
+    //  "{HEICS}" =  {
+    //      FrameInfo = ( { DelayTime = "0.1"; }, { DelayTime = "0.1"; }, ... );
+    //      LoopCount = 0;
+    //      ...
+    //  };
+    CFDictionaryRef heicsProperties = (CFDictionaryRef)CFDictionaryGetValue(properties, WebCoreCGImagePropertyHEICSDictionary);
+    if (!heicsProperties)
+        return nullptr;
+
+    CFArrayRef frameInfoArray = (CFArrayRef)CFDictionaryGetValue(heicsProperties, WebCoreCGImagePropertyHEICSFrameInfoArray);
+    if (!frameInfoArray)
+        return nullptr;
+
+    return (CFDictionaryRef)CFArrayGetValueAtIndex(frameInfoArray, index);
+}
+
 static ImageOrientation orientationFromProperties(CFDictionaryRef imageProperties)
 {
     ASSERT(imageProperties);
     CFNumberRef orientationProperty = (CFNumberRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyOrientation);
     if (!orientationProperty)
-        return ImageOrientation();
+        return ImageOrientation::None;
     
     int exifValue;
     CFNumberGetValue(orientationProperty, kCFNumberIntType, &exifValue);
     return ImageOrientation::fromEXIFValue(exifValue);
+}
+
+static bool mayHaveDensityCorrectedSize(CFDictionaryRef imageProperties)
+{
+    ASSERT(imageProperties);
+    auto resolutionXProperty = (CFNumberRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyDPIWidth);
+    auto resolutionYProperty = (CFNumberRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyDPIHeight);
+    if (!resolutionXProperty || !resolutionYProperty)
+        return false;
+
+    float resolutionX, resolutionY;
+    return CFNumberGetValue(resolutionXProperty, kCFNumberFloat32Type, &resolutionX)
+        && CFNumberGetValue(resolutionYProperty, kCFNumberFloat32Type, &resolutionY)
+        && (resolutionX != ImageResolution::DefaultResolution || resolutionY != ImageResolution::DefaultResolution);
+}
+
+static Optional<IntSize> densityCorrectedSizeFromProperties(CFDictionaryRef imageProperties)
+{
+    ASSERT(imageProperties);
+    auto exifDictionary = (CFDictionaryRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyExifDictionary);
+    auto tiffDictionary = (CFDictionaryRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyTIFFDictionary);
+
+    if (!exifDictionary || !tiffDictionary)
+        return WTF::nullopt;
+
+    auto widthProperty = (CFNumberRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyPixelWidth);
+    auto heightProperty = (CFNumberRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyPixelHeight);
+    auto preferredWidthProperty = (CFNumberRef)CFDictionaryGetValue(exifDictionary, kCGImagePropertyExifPixelXDimension);
+    auto preferredHeightProperty = (CFNumberRef)CFDictionaryGetValue(exifDictionary, kCGImagePropertyExifPixelYDimension);
+    auto resolutionXProperty = (CFNumberRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyDPIWidth);
+    auto resolutionYProperty = (CFNumberRef)CFDictionaryGetValue(imageProperties, kCGImagePropertyDPIHeight);
+    auto resolutionUnitProperty = (CFNumberRef)CFDictionaryGetValue(tiffDictionary, kCGImagePropertyTIFFResolutionUnit);
+
+    if (!preferredWidthProperty || !preferredHeightProperty || !resolutionXProperty || !resolutionYProperty || !resolutionUnitProperty)
+        return WTF::nullopt;
+
+    int resolutionUnit;
+    float sourceWidth, sourceHeight, preferredWidth, preferredHeight, resolutionWidth, resolutionHeight;
+    if (!CFNumberGetValue(widthProperty, kCFNumberFloat32Type, &sourceWidth)
+        || !CFNumberGetValue(heightProperty, kCFNumberFloat32Type, &sourceHeight)
+        || !CFNumberGetValue(preferredWidthProperty, kCFNumberFloat32Type, &preferredWidth)
+        || !CFNumberGetValue(preferredHeightProperty, kCFNumberFloat32Type, &preferredHeight)
+        || !CFNumberGetValue(resolutionXProperty, kCFNumberFloat32Type, &resolutionWidth)
+        || !CFNumberGetValue(resolutionYProperty, kCFNumberFloat32Type, &resolutionHeight)
+        || !CFNumberGetValue(resolutionUnitProperty, kCFNumberIntType, &resolutionUnit)) {
+        return WTF::nullopt;
+    }
+
+    return ImageResolution::densityCorrectedSize(FloatSize(sourceWidth, sourceHeight), {
+        { preferredWidth, preferredHeight },
+        { resolutionWidth, resolutionHeight },
+        static_cast<ImageResolution::ResolutionUnit>(resolutionUnit)
+    });
 }
 
 #if !PLATFORM(COCOA)
@@ -149,7 +248,7 @@ void sharedBufferRelease(void* info)
 }
 #endif
 
-ImageDecoder::ImageDecoder(SharedBuffer& data, AlphaOption, GammaAndColorProfileOption)
+ImageDecoderCG::ImageDecoderCG(SharedBuffer& data, AlphaOption, GammaAndColorProfileOption)
 {
     RetainPtr<CFStringRef> utiHint;
     if (data.size() >= 32)
@@ -164,7 +263,7 @@ ImageDecoder::ImageDecoder(SharedBuffer& data, AlphaOption, GammaAndColorProfile
         m_nativeDecoder = adoptCF(CGImageSourceCreateIncremental(nullptr));
 }
 
-size_t ImageDecoder::bytesDecodedToDetermineProperties()
+size_t ImageDecoderCG::bytesDecodedToDetermineProperties() const
 {
     // Measured by tracing malloc/calloc calls on Mac OS 10.6.6, x86_64.
     // A non-zero value ensures cached images with no decoded frames still enter
@@ -175,123 +274,129 @@ size_t ImageDecoder::bytesDecodedToDetermineProperties()
     return 13088;
 }
     
-String ImageDecoder::uti() const
+String ImageDecoderCG::uti() const
 {
     return CGImageSourceGetType(m_nativeDecoder.get());
 }
 
-String ImageDecoder::filenameExtension() const
+String ImageDecoderCG::filenameExtension() const
 {
-    return WebCore::preferredExtensionForImageSourceType(uti());
+    return WebCore::preferredExtensionForImageType(uti());
 }
 
-EncodedDataStatus ImageDecoder::encodedDataStatus() const
+EncodedDataStatus ImageDecoderCG::encodedDataStatus() const
 {
+    if (m_encodedDataStatus == EncodedDataStatus::Error || m_encodedDataStatus == EncodedDataStatus::Complete)
+        return m_encodedDataStatus;
+
+    // The image source UTI can be changed while receiving more encoded data.
     String uti = this->uti();
     if (uti.isEmpty())
         return EncodedDataStatus::Unknown;
 
+    if (!isSupportedImageType(uti)) {
+        m_encodedDataStatus = EncodedDataStatus::Error;
+        return m_encodedDataStatus;
+    }
+
     switch (CGImageSourceGetStatus(m_nativeDecoder.get())) {
     case kCGImageStatusUnknownType:
-        return EncodedDataStatus::Error;
+        m_encodedDataStatus = EncodedDataStatus::Error;
+        break;
 
     case kCGImageStatusUnexpectedEOF:
     case kCGImageStatusInvalidData:
     case kCGImageStatusReadingHeader:
         // Ragnaros yells: TOO SOON! You have awakened me TOO SOON, Executus!
         if (!m_isAllDataReceived)
-            return EncodedDataStatus::Unknown;
-
-        return EncodedDataStatus::Error;
+            m_encodedDataStatus = EncodedDataStatus::Unknown;
+        else
+            m_encodedDataStatus = EncodedDataStatus::Error;
+        break;
 
     case kCGImageStatusIncomplete: {
-        if (!isAllowedImageUTI(uti))
-            return EncodedDataStatus::Error;
+        if (m_encodedDataStatus == EncodedDataStatus::SizeAvailable)
+            break;
 
-        RetainPtr<CFDictionaryRef> image0Properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), 0, imageSourceOptions().get()));
-        if (!image0Properties)
-            return EncodedDataStatus::TypeAvailable;
-        
-        if (!CFDictionaryContainsKey(image0Properties.get(), kCGImagePropertyPixelWidth) || !CFDictionaryContainsKey(image0Properties.get(), kCGImagePropertyPixelHeight))
-            return EncodedDataStatus::TypeAvailable;
-        
-        return EncodedDataStatus::SizeAvailable;
+        auto image0Properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), 0, imageSourceOptions().get()));
+        if (!image0Properties || !CFDictionaryContainsKey(image0Properties.get(), kCGImagePropertyPixelWidth) || !CFDictionaryContainsKey(image0Properties.get(), kCGImagePropertyPixelHeight)) {
+            m_encodedDataStatus = EncodedDataStatus::TypeAvailable;
+            break;
+        }
+
+        m_encodedDataStatus = EncodedDataStatus::SizeAvailable;
+        break;
     }
 
     case kCGImageStatusComplete:
-        if (!isAllowedImageUTI(uti))
-            return EncodedDataStatus::Error;
-
-        return EncodedDataStatus::Complete;
+        m_encodedDataStatus = EncodedDataStatus::Complete;
+        break;
     }
 
-    ASSERT_NOT_REACHED();
-    return EncodedDataStatus::Unknown;
+    return m_encodedDataStatus; 
 }
 
-size_t ImageDecoder::frameCount() const
+size_t ImageDecoderCG::frameCount() const
 {
     return CGImageSourceGetCount(m_nativeDecoder.get());
 }
 
-RepetitionCount ImageDecoder::repetitionCount() const
+RepetitionCount ImageDecoderCG::repetitionCount() const
 {
     RetainPtr<CFDictionaryRef> properties = adoptCF(CGImageSourceCopyProperties(m_nativeDecoder.get(), imageSourceOptions().get()));
-    if (!properties)
-        return RepetitionCountOnce;
-    
-    CFDictionaryRef gifProperties = (CFDictionaryRef)CFDictionaryGetValue(properties.get(), kCGImagePropertyGIFDictionary);
-    if (gifProperties) {
-        CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(gifProperties, kCGImagePropertyGIFLoopCount);
-        
-        // No property means loop once.
-        if (!num)
-            return RepetitionCountOnce;
-        
-        RepetitionCount loopCount;
-        CFNumberGetValue(num, kCFNumberIntType, &loopCount);
-        
-        // A property with value 0 means loop forever.
-        return loopCount ? loopCount : RepetitionCountInfinite;
-    }
-    
-    CFDictionaryRef pngProperties = (CFDictionaryRef)CFDictionaryGetValue(properties.get(), kCGImagePropertyPNGDictionary);
-    if (pngProperties) {
-        CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(pngProperties, WebCoreCGImagePropertyAPNGLoopCount);
-        if (!num)
-            return RepetitionCountOnce;
-        
-        RepetitionCount loopCount;
-        CFNumberGetValue(num, kCFNumberIntType, &loopCount);
-        return loopCount ? loopCount : RepetitionCountInfinite;
-    }
-    
+    CFDictionaryRef animationProperties = animationPropertiesFromProperties(properties.get());
+
     // Turns out we're not an animated image after all, so we don't animate.
-    return RepetitionCountNone;
+    if (!animationProperties)
+        return RepetitionCountNone;
+
+    CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(animationProperties, WebCoreCGImagePropertyLoopCount);
+
+    // No property means loop once.
+    if (!num)
+        return RepetitionCountOnce;
+
+    RepetitionCount loopCount;
+    CFNumberGetValue(num, kCFNumberIntType, &loopCount);
+
+    // A property with value 0 means loop forever.
+    if (!loopCount)
+        return RepetitionCountInfinite;
+
+#if HAVE(CGIMAGESOURCE_WITH_ACCURATE_LOOP_COUNT)
+    return loopCount;
+#else
+    if (!isGIFImageType(uti()))
+        return loopCount;
+
+    // For GIF and loopCount > 0, the specs is not clear about it. But it looks the meaning
+    // is: play once + loop loopCount which is equivalent to play loopCount + 1.
+    return loopCount + 1;
+#endif
 }
 
-std::optional<IntPoint> ImageDecoder::hotSpot() const
+Optional<IntPoint> ImageDecoderCG::hotSpot() const
 {
-    RetainPtr<CFDictionaryRef> properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), 0, imageSourceOptions().get()));
+    auto properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), 0, imageSourceOptions().get()));
     if (!properties)
-        return std::nullopt;
+        return WTF::nullopt;
     
     int x = -1, y = -1;
     CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(properties.get(), CFSTR("hotspotX"));
     if (!num || !CFNumberGetValue(num, kCFNumberIntType, &x))
-        return std::nullopt;
+        return WTF::nullopt;
     
     num = (CFNumberRef)CFDictionaryGetValue(properties.get(), CFSTR("hotspotY"));
     if (!num || !CFNumberGetValue(num, kCFNumberIntType, &y))
-        return std::nullopt;
+        return WTF::nullopt;
     
     if (x < 0 || y < 0)
-        return std::nullopt;
+        return WTF::nullopt;
     
     return IntPoint(x, y);
 }
 
-IntSize ImageDecoder::frameSizeAtIndex(size_t index, SubsamplingLevel subsamplingLevel) const
+IntSize ImageDecoderCG::frameSizeAtIndex(size_t index, SubsamplingLevel subsamplingLevel) const
 {
     RetainPtr<CFDictionaryRef> properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions(subsamplingLevel).get()));
     
@@ -311,7 +416,7 @@ IntSize ImageDecoder::frameSizeAtIndex(size_t index, SubsamplingLevel subsamplin
     return IntSize(width, height);
 }
 
-bool ImageDecoder::frameIsCompleteAtIndex(size_t index) const
+bool ImageDecoderCG::frameIsCompleteAtIndex(size_t index) const
 {
     ASSERT(frameCount());
     // CGImageSourceGetStatusAtIndex() changes the return status value from kCGImageStatusIncomplete
@@ -323,72 +428,60 @@ bool ImageDecoder::frameIsCompleteAtIndex(size_t index) const
     return CGImageSourceGetStatusAtIndex(m_nativeDecoder.get(), index) == kCGImageStatusComplete;
 }
 
-ImageOrientation ImageDecoder::frameOrientationAtIndex(size_t index) const
+ImageDecoder::FrameMetadata ImageDecoderCG::frameMetadataAtIndex(size_t index) const
 {
     RetainPtr<CFDictionaryRef> properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions().get()));
     if (!properties)
-        return ImageOrientation();
+        return { };
     
-    return orientationFromProperties(properties.get());
+    auto orientation = orientationFromProperties(properties.get());
+    if (!mayHaveDensityCorrectedSize(properties.get()))
+        return { orientation, WTF::nullopt };
+
+    auto propertiesWithMetadata = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, createImageSourceMetadataOptions().get()));
+    if (!propertiesWithMetadata)
+        return { orientation, WTF::nullopt };
+    
+    return { orientation, densityCorrectedSizeFromProperties(propertiesWithMetadata.get()) };
 }
 
-float ImageDecoder::frameDurationAtIndex(size_t index) const
+Seconds ImageDecoderCG::frameDurationAtIndex(size_t index) const
 {
-    float duration = 0;
-    RetainPtr<CFDictionaryRef> properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions().get()));
-    if (properties) {
-        CFDictionaryRef gifProperties = (CFDictionaryRef)CFDictionaryGetValue(properties.get(), kCGImagePropertyGIFDictionary);
-        if (gifProperties) {
-            if (CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(gifProperties, kCGImagePropertyGIFUnclampedDelayTime)) {
-                // Use the unclamped frame delay if it exists.
-                CFNumberGetValue(num, kCFNumberFloatType, &duration);
-            } else if (CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(gifProperties, kCGImagePropertyGIFDelayTime)) {
-                // Fall back to the clamped frame delay if the unclamped frame delay does not exist.
-                CFNumberGetValue(num, kCFNumberFloatType, &duration);
-            }
-        }
-        
-        CFDictionaryRef pngProperties = (CFDictionaryRef)CFDictionaryGetValue(properties.get(), kCGImagePropertyPNGDictionary);
-        if (pngProperties) {
-            if (CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(pngProperties, WebCoreCGImagePropertyAPNGUnclampedDelayTime))
-                CFNumberGetValue(num, kCFNumberFloatType, &duration);
-            else if (CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(pngProperties, WebCoreCGImagePropertyAPNGDelayTime))
-                CFNumberGetValue(num, kCFNumberFloatType, &duration);
-        }
+    RetainPtr<CFDictionaryRef> properties = nullptr;
+    RetainPtr<CFDictionaryRef> frameProperties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), index, imageSourceOptions().get()));
+    CFDictionaryRef animationProperties = animationPropertiesFromProperties(frameProperties.get());
+
+    if (frameProperties && !animationProperties) {
+        properties = adoptCF(CGImageSourceCopyProperties(m_nativeDecoder.get(), imageSourceOptions().get()));
+        animationProperties = animationHEICSPropertiesFromProperties(properties.get(), index);
     }
-    
+
+    // Use the unclamped frame delay if it exists. Otherwise use the clamped frame delay.
+    float value = 0;
+    if (animationProperties) {
+        if (CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(animationProperties, WebCoreCGImagePropertyUnclampedDelayTime))
+            CFNumberGetValue(num, kCFNumberFloatType, &value);
+        else if (CFNumberRef num = (CFNumberRef)CFDictionaryGetValue(animationProperties, WebCoreCGImagePropertyDelayTime))
+            CFNumberGetValue(num, kCFNumberFloatType, &value);
+    }
+
+    Seconds duration(value);
+
     // Many annoying ads specify a 0 duration to make an image flash as quickly as possible.
     // We follow Firefox's behavior and use a duration of 100 ms for any frames that specify
     // a duration of <= 10 ms. See <rdar://problem/7689300> and <http://webkit.org/b/36082>
     // for more information.
-    if (duration < 0.011f)
-        return 0.1f;
+    if (duration < 11_ms)
+        return 100_ms;
     return duration;
 }
 
-bool ImageDecoder::frameAllowSubsamplingAtIndex(size_t) const
+bool ImageDecoderCG::frameAllowSubsamplingAtIndex(size_t) const
 {
-    RetainPtr<CFDictionaryRef> properties = adoptCF(CGImageSourceCopyPropertiesAtIndex(m_nativeDecoder.get(), 0, imageSourceOptions().get()));
-    if (!properties)
-        return false;
-    
-    CFDictionaryRef jfifProperties = static_cast<CFDictionaryRef>(CFDictionaryGetValue(properties.get(), kCGImagePropertyJFIFDictionary));
-    if (jfifProperties) {
-        CFBooleanRef isProgCFBool = static_cast<CFBooleanRef>(CFDictionaryGetValue(jfifProperties, kCGImagePropertyJFIFIsProgressive));
-        if (isProgCFBool) {
-            bool isProgressive = CFBooleanGetValue(isProgCFBool);
-            // Workaround for <rdar://problem/5184655> - Hang rendering very large progressive JPEG. Decoding progressive
-            // images hangs for a very long time right now. Until this is fixed, don't sub-sample progressive images. This
-            // will cause them to fail our large image check and they won't be decoded.
-            // FIXME: Remove once underlying issue is fixed (<rdar://problem/5191418>)
-            return !isProgressive;
-        }
-    }
-    
     return true;
 }
 
-bool ImageDecoder::frameHasAlphaAtIndex(size_t index) const
+bool ImageDecoderCG::frameHasAlphaAtIndex(size_t index) const
 {
     if (!frameIsCompleteAtIndex(index))
         return true;
@@ -406,25 +499,26 @@ bool ImageDecoder::frameHasAlphaAtIndex(size_t index) const
     return true;
 }
 
-unsigned ImageDecoder::frameBytesAtIndex(size_t index, SubsamplingLevel subsamplingLevel) const
+unsigned ImageDecoderCG::frameBytesAtIndex(size_t index, SubsamplingLevel subsamplingLevel) const
 {
     IntSize frameSize = frameSizeAtIndex(index, subsamplingLevel);
     return (frameSize.area() * 4).unsafeGet();
 }
 
-NativeImagePtr ImageDecoder::createFrameImageAtIndex(size_t index, SubsamplingLevel subsamplingLevel, const DecodingOptions& decodingOptions) const
+PlatformImagePtr ImageDecoderCG::createFrameImageAtIndex(size_t index, SubsamplingLevel subsamplingLevel, const DecodingOptions& decodingOptions)
 {
     LOG(Images, "ImageDecoder %p createFrameImageAtIndex %lu", this, index);
     RetainPtr<CFDictionaryRef> options;
     RetainPtr<CGImageRef> image;
 
+    auto size = frameSizeAtIndex(index, SubsamplingLevel::Default);
+
     if (!decodingOptions.isSynchronous()) {
         // Don't consider the subsamplingLevel when comparing the image native size with sizeForDrawing.
-        IntSize size = frameSizeAtIndex(index, SubsamplingLevel::Default);
         
         if (decodingOptions.hasSizeForDrawing()) {
             // See which size is smaller: the image native size or the sizeForDrawing.
-            std::optional<IntSize> sizeForDrawing = decodingOptions.sizeForDrawing();
+            Optional<IntSize> sizeForDrawing = decodingOptions.sizeForDrawing();
             if (sizeForDrawing.value().unclampedArea() < size.unclampedArea())
                 size = sizeForDrawing.value();
         }
@@ -437,20 +531,15 @@ NativeImagePtr ImageDecoder::createFrameImageAtIndex(size_t index, SubsamplingLe
         image = adoptCF(CGImageSourceCreateImageAtIndex(m_nativeDecoder.get(), index, options.get()));
     }
     
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     // <rdar://problem/7371198> - CoreGraphics changed the default caching behaviour in iOS 4.0 to kCGImageCachingTransient
     // which caused a performance regression for us since the images had to be resampled/recreated every time we called
     // CGContextDrawImage. We now tell CG to cache the drawn images. See also <rdar://problem/14366755> -
     // CoreGraphics needs to un-deprecate kCGImageCachingTemporary since it's still not the default.
-#if COMPILER(CLANG)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#endif
+    ALLOW_DEPRECATED_DECLARATIONS_BEGIN
     CGImageSetCachingFlags(image.get(), kCGImageCachingTemporary);
-#if COMPILER(CLANG)
-#pragma clang diagnostic pop
-#endif
-#endif // PLATFORM(IOS)
+    ALLOW_DEPRECATED_DECLARATIONS_END
+#endif // PLATFORM(IOS_FAMILY)
     
     String uti = this->uti();
     if (uti.isEmpty() || uti != "public.xbitmap-image")
@@ -462,7 +551,7 @@ NativeImagePtr ImageDecoder::createFrameImageAtIndex(size_t index, SubsamplingLe
     return maskedImage ? maskedImage : image;
 }
 
-void ImageDecoder::setData(SharedBuffer& data, bool allDataReceived)
+void ImageDecoderCG::setData(SharedBuffer& data, bool allDataReceived)
 {
     m_isAllDataReceived = allDataReceived;
 
@@ -481,6 +570,11 @@ void ImageDecoder::setData(SharedBuffer& data, bool allDataReceived)
     RetainPtr<CGDataProviderRef> dataProvider = adoptCF(CGDataProviderCreateDirect(&data, data.size(), &providerCallbacks));
     CGImageSourceUpdateDataProvider(m_nativeDecoder.get(), dataProvider.get(), allDataReceived);
 #endif
+}
+
+bool ImageDecoderCG::canDecodeType(const String& mimeType)
+{
+    return MIMETypeRegistry::isSupportedImageMIMEType(mimeType);
 }
 
 }

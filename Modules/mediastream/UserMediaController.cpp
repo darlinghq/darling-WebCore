@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2012 Google Inc. All rights reserved.
+ * Copyright (C) 2013-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,6 +28,10 @@
 
 #if ENABLE(MEDIA_STREAM)
 
+#include "DOMWindow.h"
+#include "Document.h"
+#include "Frame.h"
+#include "HTMLIFrameElement.h"
 #include "UserMediaRequest.h"
 
 namespace WebCore {
@@ -48,7 +53,28 @@ UserMediaController::~UserMediaController()
 
 void provideUserMediaTo(Page* page, UserMediaClient* client)
 {
-    UserMediaController::provideTo(page, UserMediaController::supplementName(), std::make_unique<UserMediaController>(client));
+    UserMediaController::provideTo(page, UserMediaController::supplementName(), makeUnique<UserMediaController>(client));
+}
+
+void UserMediaController::logGetUserMediaDenial(Document& document)
+{
+    if (auto* window = document.domWindow())
+        window->printErrorMessage(makeString("Not allowed to call getUserMedia."));
+}
+
+void UserMediaController::logGetDisplayMediaDenial(Document& document)
+{
+    if (auto* window = document.domWindow())
+        window->printErrorMessage(makeString("Not allowed to call getDisplayMedia."));
+}
+
+void UserMediaController::logEnumerateDevicesDenial(Document& document)
+{
+    // We redo the check to print to the console log.
+    isFeaturePolicyAllowedByDocumentAndAllOwners(FeaturePolicy::Type::Camera, document, LogFeaturePolicyFailure::Yes);
+    isFeaturePolicyAllowedByDocumentAndAllOwners(FeaturePolicy::Type::Microphone, document, LogFeaturePolicyFailure::Yes);
+    if (auto* window = document.domWindow())
+        window->printErrorMessage(makeString("Not allowed to call enumerateDevices."));
 }
 
 } // namespace WebCore

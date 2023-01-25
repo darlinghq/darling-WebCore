@@ -33,6 +33,13 @@
 typedef void *EGLDisplay;
 #endif
 
+#if ENABLE(VIDEO) && USE(GSTREAMER_GL)
+#include "GRefPtrGStreamer.h"
+
+typedef struct _GstGLContext GstGLContext;
+typedef struct _GstGLDisplay GstGLDisplay;
+#endif // ENABLE(VIDEO) && USE(GSTREAMER_GL)
+
 namespace WebCore {
 
 class GLContext;
@@ -40,8 +47,8 @@ class GLContext;
 class PlatformDisplay {
     WTF_MAKE_NONCOPYABLE(PlatformDisplay); WTF_MAKE_FAST_ALLOCATED;
 public:
-    static PlatformDisplay& sharedDisplay();
-    static PlatformDisplay& sharedDisplayForCompositing();
+    WEBCORE_EXPORT static PlatformDisplay& sharedDisplay();
+    WEBCORE_EXPORT static PlatformDisplay& sharedDisplayForCompositing();
     virtual ~PlatformDisplay();
 
     enum class Type {
@@ -54,7 +61,7 @@ public:
 #if PLATFORM(WIN)
         Windows,
 #endif
-#if PLATFORM(WPE)
+#if USE(WPE_RENDERER)
         WPE,
 #endif
     };
@@ -62,18 +69,22 @@ public:
     virtual Type type() const = 0;
 
 #if USE(EGL) || USE(GLX)
-    GLContext* sharingGLContext();
+    WEBCORE_EXPORT GLContext* sharingGLContext();
 #endif
 
 #if USE(EGL)
     EGLDisplay eglDisplay() const;
     bool eglCheckVersion(int major, int minor) const;
-    static void shutDownEglDisplays();
+#endif
+
+#if ENABLE(VIDEO) && USE(GSTREAMER_GL)
+    GstGLDisplay* gstGLDisplay() const;
+    GstGLContext* gstGLContext() const;
 #endif
 
 protected:
     enum class NativeDisplayOwned { No, Yes };
-    explicit PlatformDisplay(NativeDisplayOwned = NativeDisplayOwned::No);
+    explicit PlatformDisplay(NativeDisplayOwned);
 
     static void setSharedDisplayForCompositing(PlatformDisplay&);
 
@@ -98,6 +109,13 @@ private:
     bool m_eglDisplayInitialized { false };
     int m_eglMajorVersion { 0 };
     int m_eglMinorVersion { 0 };
+#endif
+
+#if ENABLE(VIDEO) && USE(GSTREAMER_GL)
+    bool tryEnsureGstGLContext() const;
+
+    mutable GRefPtr<GstGLDisplay> m_gstGLDisplay;
+    mutable GRefPtr<GstGLContext> m_gstGLContext;
 #endif
 };
 

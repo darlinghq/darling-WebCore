@@ -31,12 +31,13 @@
 #include "WorkerGlobalScope.h"
 #include "WorkerInspectorController.h"
 #include "WorkerRunLoop.h"
-#include <inspector/InspectorAgentBase.h>
+#include "WorkerThread.h"
+#include <JavaScriptCore/InspectorAgentBase.h>
 #include <wtf/NeverDestroyed.h>
 
-using namespace Inspector;
 
 namespace WebCore {
+using namespace Inspector;
 
 HashSet<WorkerInspectorProxy*>& WorkerInspectorProxy::allWorkerInspectorProxies()
 {
@@ -61,17 +62,18 @@ WorkerThreadStartMode WorkerInspectorProxy::workerStartMode(ScriptExecutionConte
     return pauseOnStart ? WorkerThreadStartMode::WaitForInspector : WorkerThreadStartMode::Normal;
 }
 
-void WorkerInspectorProxy::workerStarted(ScriptExecutionContext* scriptExecutionContext, WorkerThread* thread, const URL& url)
+void WorkerInspectorProxy::workerStarted(ScriptExecutionContext* scriptExecutionContext, WorkerThread* thread, const URL& url, const String& name)
 {
     ASSERT(!m_workerThread);
 
     m_scriptExecutionContext = scriptExecutionContext;
     m_workerThread = thread;
     m_url = url;
+    m_name = name;
 
     allWorkerInspectorProxies().add(this);
 
-    InspectorInstrumentation::workerStarted(*m_scriptExecutionContext.get(), this, m_url);
+    InspectorInstrumentation::workerStarted(*this);
 }
 
 void WorkerInspectorProxy::workerTerminated()
@@ -79,7 +81,7 @@ void WorkerInspectorProxy::workerTerminated()
     if (!m_workerThread)
         return;
 
-    InspectorInstrumentation::workerTerminated(*m_scriptExecutionContext.get(), this);
+    InspectorInstrumentation::workerTerminated(*this);
 
     allWorkerInspectorProxies().remove(this);
 
@@ -90,22 +92,22 @@ void WorkerInspectorProxy::workerTerminated()
 
 void WorkerInspectorProxy::resumeWorkerIfPaused()
 {
-    m_workerThread->runLoop().postTaskForMode([] (ScriptExecutionContext& context) {
+    m_workerThread->runLoop().postDebuggerTask([] (ScriptExecutionContext& context) {
         downcast<WorkerGlobalScope>(context).thread().stopRunningDebuggerTasks();
-    }, WorkerRunLoop::debuggerMode());
+    });
 }
 
-void WorkerInspectorProxy::connectToWorkerInspectorController(PageChannel* channel)
+void WorkerInspectorProxy::connectToWorkerInspectorController(PageChannel& channel)
 {
     ASSERT(m_workerThread);
     if (!m_workerThread)
         return;
 
-    m_pageChannel = channel;
+    m_pageChannel = &channel;
 
-    m_workerThread->runLoop().postTaskForMode([] (ScriptExecutionContext& context) {
+    m_workerThread->runLoop().postDebuggerTask([] (ScriptExecutionContext& context) {
         downcast<WorkerGlobalScope>(context).inspectorController().connectFrontend();
-    }, WorkerRunLoop::debuggerMode());
+    });
 }
 
 void WorkerInspectorProxy::disconnectFromWorkerInspectorController()
@@ -116,13 +118,13 @@ void WorkerInspectorProxy::disconnectFromWorkerInspectorController()
 
     m_pageChannel = nullptr;
 
-    m_workerThread->runLoop().postTaskForMode([] (ScriptExecutionContext& context) {
+    m_workerThread->runLoop().postDebuggerTask([] (ScriptExecutionContext& context) {
         downcast<WorkerGlobalScope>(context).inspectorController().disconnectFrontend(DisconnectReason::InspectorDestroyed);
 
         // In case the worker is paused running debugger tasks, ensure we break out of
         // the pause since this will be the last debugger task we send to the worker.
         downcast<WorkerGlobalScope>(context).thread().stopRunningDebuggerTasks();
-    }, WorkerRunLoop::debuggerMode());
+    });
 }
 
 void WorkerInspectorProxy::sendMessageToWorkerInspectorController(const String& message)
@@ -131,9 +133,9 @@ void WorkerInspectorProxy::sendMessageToWorkerInspectorController(const String& 
     if (!m_workerThread)
         return;
 
-    m_workerThread->runLoop().postTaskForMode([message = message.isolatedCopy()] (ScriptExecutionContext& context) {
+    m_workerThread->runLoop().postDebuggerTask([message = message.isolatedCopy()] (ScriptExecutionContext& context) {
         downcast<WorkerGlobalScope>(context).inspectorController().dispatchMessageFromFrontend(message);
-    }, WorkerRunLoop::debuggerMode());
+    });
 }
 
 void WorkerInspectorProxy::sendMessageFromWorkerToFrontend(const String& message)
@@ -141,7 +143,7 @@ void WorkerInspectorProxy::sendMessageFromWorkerToFrontend(const String& message
     if (!m_pageChannel)
         return;
 
-    m_pageChannel->sendMessageFromWorkerToFrontend(this, message);
+    m_pageChannel->sendMessageFromWorkerToFrontend(*this, message);
 }
 
 } // namespace WebCore

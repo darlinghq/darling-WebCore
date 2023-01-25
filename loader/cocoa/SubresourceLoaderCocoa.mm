@@ -23,38 +23,24 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "SubresourceLoader.h"
+#import "config.h"
+#import "SubresourceLoader.h"
 
-#include "CFNetworkSPI.h"
-#include "CachedResource.h"
-#include "DiskCacheMonitorCocoa.h"
-#include "ResourceHandle.h"
-#include "ResourceLoader.h"
-#include "SharedBuffer.h"
+#import "CachedResource.h"
+#import "DiskCacheMonitorCocoa.h"
+#import "ResourceHandle.h"
+#import "ResourceLoader.h"
+#import "SharedBuffer.h"
+#import <pal/spi/cf/CFNetworkSPI.h>
 
 namespace WebCore {
 
-#if USE(CFURLCONNECTION)
-
-CFCachedURLResponseRef SubresourceLoader::willCacheResponse(ResourceHandle* handle, CFCachedURLResponseRef cachedResponse)
-{
-    DiskCacheMonitor::monitorFileBackingStoreCreation(request(), m_resource->sessionID(), cachedResponse);
-    if (!m_resource->shouldCacheResponse(CFCachedURLResponseGetWrappedResponse(cachedResponse)))
-        return nullptr;
-    return ResourceLoader::willCacheResponse(handle, cachedResponse);
-}
-
-#else
-
-NSCachedURLResponse* SubresourceLoader::willCacheResponse(ResourceHandle* handle, NSCachedURLResponse* response)
+void SubresourceLoader::willCacheResponseAsync(ResourceHandle* handle, NSCachedURLResponse* response, CompletionHandler<void(NSCachedURLResponse *)>&& completionHandler)
 {
     DiskCacheMonitor::monitorFileBackingStoreCreation(request(), m_resource->sessionID(), [response _CFCachedURLResponse]);
     if (!m_resource->shouldCacheResponse(response.response))
-        return nullptr;
-    return ResourceLoader::willCacheResponse(handle, response);
+        return completionHandler(nullptr);
+    ResourceLoader::willCacheResponseAsync(handle, response, WTFMove(completionHandler));
 }
-
-#endif
 
 }

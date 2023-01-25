@@ -32,7 +32,7 @@
 
 namespace WebCore {
 
-class WCEnumFormatEtc : public IEnumFORMATETC
+class WCEnumFormatEtc final : public IEnumFORMATETC
 {
 public:
     WCEnumFormatEtc(const Vector<FORMATETC>& formats);
@@ -256,7 +256,7 @@ STDMETHODIMP WCDataObject::SetData(FORMATETC* pformatetc, STGMEDIUM* pmedium, BO
     if (!pformatetc || !pmedium)
         return E_POINTER;
 
-    auto fetc = std::make_unique<FORMATETC>();
+    auto fetc = makeUniqueWithoutFastMallocCheck<FORMATETC>();
     std::unique_ptr<STGMEDIUM, StgMediumDeleter> pStgMed(new STGMEDIUM);
 
     ZeroMemory(fetc.get(), sizeof(FORMATETC));

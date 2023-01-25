@@ -20,84 +20,56 @@
 #include "config.h"
 #include "DOMMimeTypeArray.h"
 
-#include "DOMPlugin.h"
-#include "Frame.h"
-#include "Page.h"
-#include "PluginData.h"
-#include <wtf/text/AtomicString.h>
+#include "DOMMimeType.h"
+#include "Navigator.h"
+#include <wtf/IsoMallocInlines.h>
+#include <wtf/text/AtomString.h>
 
 namespace WebCore {
 
-DOMMimeTypeArray::DOMMimeTypeArray(Frame* frame)
-    : DOMWindowProperty(frame)
+WTF_MAKE_ISO_ALLOCATED_IMPL(DOMMimeTypeArray);
+
+Ref<DOMMimeTypeArray> DOMMimeTypeArray::create(Navigator& navigator, Vector<Ref<DOMMimeType>>&& types)
+{
+    return adoptRef(*new DOMMimeTypeArray(navigator, WTFMove(types)));
+}
+
+DOMMimeTypeArray::DOMMimeTypeArray(Navigator& navigator, Vector<Ref<DOMMimeType>>&& types)
+    : m_navigator(makeWeakPtr(navigator))
+    , m_types(WTFMove(types))
 {
 }
 
-DOMMimeTypeArray::~DOMMimeTypeArray()
-{
-}
+DOMMimeTypeArray::~DOMMimeTypeArray() = default;
 
 unsigned DOMMimeTypeArray::length() const
 {
-    PluginData* data = getPluginData();
-    if (!data)
-        return 0;
-
-    Vector<MimeClassInfo> mimes;
-    Vector<size_t> mimePluginIndices;
-    data->getWebVisibleMimesAndPluginIndices(mimes, mimePluginIndices);
-    return mimes.size();
+    return m_types.size();
 }
 
 RefPtr<DOMMimeType> DOMMimeTypeArray::item(unsigned index)
 {
-    PluginData* data = getPluginData();
-    if (!data)
+    if (index >= m_types.size())
         return nullptr;
-
-    Vector<MimeClassInfo> mimes;
-    Vector<size_t> mimePluginIndices;
-    data->getWebVisibleMimesAndPluginIndices(mimes, mimePluginIndices);
-
-    if (index >= mimes.size())
-        return nullptr;
-    return DOMMimeType::create(data, m_frame, index);
+    return m_types[index].ptr();
 }
 
-RefPtr<DOMMimeType> DOMMimeTypeArray::namedItem(const AtomicString& propertyName)
+RefPtr<DOMMimeType> DOMMimeTypeArray::namedItem(const AtomString& propertyName)
 {
-    PluginData* data = getPluginData();
-    if (!data)
-        return nullptr;
-
-    Vector<MimeClassInfo> mimes;
-    Vector<size_t> mimePluginIndices;
-    data->getWebVisibleMimesAndPluginIndices(mimes, mimePluginIndices);
-    for (unsigned i = 0; i < mimes.size(); ++i) {
-        if (mimes[i].type == propertyName)
-            return DOMMimeType::create(data, m_frame, i);
+    for (auto& type : m_types) {
+        if (type->type() == propertyName)
+            return type.ptr();
     }
     return nullptr;
 }
 
-Vector<AtomicString> DOMMimeTypeArray::supportedPropertyNames()
+Vector<AtomString> DOMMimeTypeArray::supportedPropertyNames()
 {
-    // FIXME: Should be implemented.
-    return Vector<AtomicString>();
-}
-
-PluginData* DOMMimeTypeArray::getPluginData() const
-{
-    if (!m_frame)
-        return nullptr;
-
-    Page* page = m_frame->page();
-    if (!page)
-        return nullptr;
-
-    PluginData* pluginData = &page->pluginData();
-
-    return pluginData;
+    Vector<AtomString> result;
+    result.reserveInitialCapacity(m_types.size());
+    for (auto& type : m_types)
+        result.uncheckedAppend(type->type());
+    return result;
 }
 
 } // namespace WebCore

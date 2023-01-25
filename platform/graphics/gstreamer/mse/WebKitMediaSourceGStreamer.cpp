@@ -29,27 +29,22 @@
 #if ENABLE(VIDEO) && ENABLE(MEDIA_SOURCE) && USE(GSTREAMER)
 
 #include "AudioTrackPrivateGStreamer.h"
-#include "GStreamerUtilities.h"
+#include "GStreamerCommon.h"
 #include "MediaDescription.h"
 #include "MediaPlayerPrivateGStreamerMSE.h"
 #include "MediaSample.h"
-#include "MediaSourceGStreamer.h"
+#include "MediaSourcePrivateGStreamer.h"
 #include "NotImplemented.h"
 #include "SourceBufferPrivateGStreamer.h"
 #include "TimeRanges.h"
 #include "VideoTrackPrivateGStreamer.h"
 #include "WebKitMediaSourceGStreamerPrivate.h"
 
-#include <gst/app/app.h>
-#include <gst/app/gstappsrc.h>
-#include <gst/gst.h>
-#include <gst/pbutils/missing-plugins.h>
 #include <gst/pbutils/pbutils.h>
 #include <gst/video/video.h>
 #include <wtf/Condition.h>
 #include <wtf/MainThread.h>
-#include <wtf/glib/GMutexLocker.h>
-#include <wtf/glib/GUniquePtr.h>
+#include <wtf/RefPtr.h>
 #include <wtf/text/CString.h>
 
 GST_DEBUG_CATEGORY_STATIC(webkit_media_src_debug);
@@ -87,6 +82,8 @@ GstAppSrcCallbacks disabledAppsrcCallbacks = {
 };
 
 static Stream* getStreamByAppsrc(WebKitMediaSrc*, GstElement*);
+static void seekNeedsDataMainThread(WebKitMediaSrc*);
+static void notifyReadyForMoreSamplesMainThread(WebKitMediaSrc*, Stream*);
 
 static void enabledAppsrcNeedData(GstAppSrc* appsrc, guint, gpointer userData)
 {
@@ -121,13 +118,11 @@ static void enabledAppsrcNeedData(GstAppSrc* appsrc, guint, gpointer userData)
         GST_DEBUG("All expected appsrcSeekData() and appsrcNeedData() calls performed. Running next action (%d)", static_cast<int>(appsrcSeekDataNextAction));
 
         switch (appsrcSeekDataNextAction) {
-        case MediaSourceSeekToTime: {
-            GstStructure* structure = gst_structure_new_empty("seek-needs-data");
-            GstMessage* message = gst_message_new_application(GST_OBJECT(appsrc), structure);
-            gst_bus_post(webKitMediaSrc->priv->bus.get(), message);
-            GST_TRACE("seek-needs-data message posted to the bus");
+        case MediaSourceSeekToTime:
+            webKitMediaSrc->priv->notifier->notify(WebKitMediaSrcMainThreadNotification::SeekNeedsData, [webKitMediaSrc] {
+                seekNeedsDataMainThread(webKitMediaSrc);
+            });
             break;
-        }
         case Nothing:
             break;
         }
@@ -139,12 +134,10 @@ static void enabledAppsrcNeedData(GstAppSrc* appsrc, guint, gpointer userData)
         // Search again for the Stream, just in case it was removed between the previous lock and this one.
         appsrcStream = getStreamByAppsrc(webKitMediaSrc, GST_ELEMENT(appsrc));
 
-        if (appsrcStream && appsrcStream->type != WebCore::Invalid) {
-            GstStructure* structure = gst_structure_new("ready-for-more-samples", "appsrc-stream", G_TYPE_POINTER, appsrcStream, nullptr);
-            GstMessage* message = gst_message_new_application(GST_OBJECT(appsrc), structure);
-            gst_bus_post(webKitMediaSrc->priv->bus.get(), message);
-            GST_TRACE("ready-for-more-samples message posted to the bus");
-        }
+        if (appsrcStream && appsrcStream->type != WebCore::Invalid)
+            webKitMediaSrc->priv->notifier->notify(WebKitMediaSrcMainThreadNotification::ReadyForMoreSamples, [webKitMediaSrc, appsrcStream] {
+                notifyReadyForMoreSamplesMainThread(webKitMediaSrc, appsrcStream);
+            });
 
         GST_OBJECT_UNLOCK(webKitMediaSrc);
     }
@@ -250,6 +243,13 @@ static void webkit_media_src_class_init(WebKitMediaSrcClass* klass)
     g_type_class_add_private(klass, sizeof(WebKitMediaSrcPrivate));
 }
 
+static GstFlowReturn webkitMediaSrcChain(GstPad* pad, GstObject* parent, GstBuffer* buffer)
+{
+    GRefPtr<WebKitMediaSrc> self = adoptGRef(WEBKIT_MEDIA_SRC(gst_object_get_parent(parent)));
+
+    return gst_flow_combiner_update_pad_flow(self->priv->flowCombiner.get(), pad, gst_proxy_pad_chain_default(pad, GST_OBJECT(self.get()), buffer));
+}
+
 static void webkit_media_src_init(WebKitMediaSrc* source)
 {
     source->priv = WEBKIT_MEDIA_SRC_GET_PRIVATE(source);
@@ -258,6 +258,8 @@ static void webkit_media_src_init(WebKitMediaSrc* source)
     source->priv->appsrcSeekDataCount = 0;
     source->priv->appsrcNeedDataCount = 0;
     source->priv->appsrcSeekDataNextAction = Nothing;
+    source->priv->flowCombiner = GUniquePtr<GstFlowCombiner>(gst_flow_combiner_new());
+    source->priv->notifier = WebCore::MainThreadNotifier<WebKitMediaSrcMainThreadNotification>::create();
 
     // No need to reset Stream.appsrcNeedDataFlag because there are no Streams at this point yet.
 }
@@ -269,13 +271,15 @@ void webKitMediaSrcFinalize(GObject* object)
     WebKitMediaSrc* source = WEBKIT_MEDIA_SRC(object);
     WebKitMediaSrcPrivate* priv = source->priv;
 
-    Deque<Stream*> oldStreams;
+    Vector<Stream*> oldStreams;
     source->priv->streams.swap(oldStreams);
 
     for (Stream* stream : oldStreams)
         webKitMediaSrcFreeStream(source, stream);
 
     priv->seekTime = MediaTime::invalidTime();
+
+    source->priv->notifier->invalidate();
 
     if (priv->mediaPlayerPrivate)
         webKitMediaSrcSetMediaPlayerPrivate(source, nullptr);
@@ -402,8 +406,8 @@ gboolean webKitMediaSrcQueryWithParent(GstPad* pad, GstObject* parent, GstQuery*
         switch (format) {
         case GST_FORMAT_TIME: {
             if (source->priv && source->priv->mediaPlayerPrivate) {
-                float duration = source->priv->mediaPlayerPrivate->durationMediaTime().toFloat();
-                if (duration > 0) {
+                MediaTime duration = source->priv->mediaPlayerPrivate->durationMediaTime();
+                if (duration > MediaTime::zeroTime()) {
                     gst_query_set_duration(query, format, WebCore::toGstClockTime(duration));
                     GST_DEBUG_OBJECT(source, "Answering: duration=%" GST_TIME_FORMAT, GST_TIME_ARGS(WebCore::toGstClockTime(duration)));
                     result = TRUE;
@@ -452,18 +456,13 @@ gboolean webKitMediaSrcQueryWithParent(GstPad* pad, GstObject* parent, GstQuery*
 
 void webKitMediaSrcUpdatePresentationSize(GstCaps* caps, Stream* stream)
 {
-    GstStructure* structure = gst_caps_get_structure(caps, 0);
-    const gchar* structureName = gst_structure_get_name(structure);
-    GstVideoInfo info;
-
     GST_OBJECT_LOCK(stream->parent);
-    if (g_str_has_prefix(structureName, "video/") && gst_video_info_from_caps(&info, caps)) {
-        float width, height;
-
-        // FIXME: Correct?.
-        width = info.width;
-        height = info.height * ((float) info.par_d / (float) info.par_n);
-        stream->presentationSize = WebCore::FloatSize(width, height);
+    if (WebCore::doCapsHaveType(caps, GST_VIDEO_CAPS_TYPE_PREFIX)) {
+        Optional<WebCore::FloatSize> size = WebCore::getVideoResolutionFromCaps(caps);
+        if (size.hasValue())
+            stream->presentationSize = size.value();
+        else
+            stream->presentationSize = WebCore::FloatSize();
     } else
         stream->presentationSize = WebCore::FloatSize();
 
@@ -480,21 +479,16 @@ void webKitMediaSrcLinkStreamToSrcPad(GstPad* sourcePad, Stream* stream)
     GUniquePtr<gchar> padName(g_strdup_printf("src_%u", padId));
     GstPad* ghostpad = WebCore::webkitGstGhostPadFromStaticTemplate(&srcTemplate, padName.get(), sourcePad);
 
+    auto proxypad = adoptGRef(GST_PAD(gst_proxy_pad_get_internal(GST_PROXY_PAD(ghostpad))));
+    gst_flow_combiner_add_pad(stream->parent->priv->flowCombiner.get(), proxypad.get());
+    gst_pad_set_chain_function(proxypad.get(), static_cast<GstPadChainFunction>(webkitMediaSrcChain));
     gst_pad_set_query_function(ghostpad, webKitMediaSrcQueryWithParent);
 
     gst_pad_set_active(ghostpad, TRUE);
     gst_element_add_pad(GST_ELEMENT(stream->parent), ghostpad);
-
-    if (stream->decodebinSinkPad) {
-        GST_DEBUG_OBJECT(stream->parent, "A decodebin was previously used for this source, trying to reuse it.");
-        // FIXME: error checking here. Not sure what to do if linking
-        // fails though, because decodebin is out of this source
-        // element's scope, in theory.
-        gst_pad_link(ghostpad, stream->decodebinSinkPad);
-    }
 }
 
-void webKitMediaSrcLinkParser(GstPad* sourcePad, GstCaps* caps, Stream* stream)
+void webKitMediaSrcLinkSourcePad(GstPad* sourcePad, GstCaps* caps, Stream* stream)
 {
     ASSERT(caps && stream->parent);
     if (!caps || !stream->parent) {
@@ -515,11 +509,27 @@ void webKitMediaSrcLinkParser(GstPad* sourcePad, GstCaps* caps, Stream* stream)
 
 void webKitMediaSrcFreeStream(WebKitMediaSrc* source, Stream* stream)
 {
-    if (stream->appsrc) {
+    if (GST_IS_APP_SRC(stream->appsrc)) {
         // Don't trigger callbacks from this appsrc to avoid using the stream anymore.
         gst_app_src_set_callbacks(GST_APP_SRC(stream->appsrc), &disabledAppsrcCallbacks, nullptr, nullptr);
         gst_app_src_end_of_stream(GST_APP_SRC(stream->appsrc));
     }
+
+    GST_OBJECT_LOCK(source);
+    switch (stream->type) {
+    case WebCore::Audio:
+        source->priv->numberOfAudioStreams--;
+        break;
+    case WebCore::Video:
+        source->priv->numberOfVideoStreams--;
+        break;
+    case WebCore::Text:
+        source->priv->numberOfTextStreams--;
+        break;
+    default:
+        break;
+    }
+    GST_OBJECT_UNLOCK(source);
 
     if (stream->type != WebCore::Invalid) {
         GST_DEBUG("Freeing track-related info on stream %p", stream);
@@ -625,7 +635,7 @@ gboolean webKitMediaSrcSetUri(GstURIHandler* handler, const gchar* uri, GError**
         return TRUE;
     }
 
-    WebCore::URL url(WebCore::URL(), uri);
+    URL url(URL(), uri);
 
     priv->location = GUniquePtr<gchar>(g_strdup(url.string().utf8().data()));
     GST_OBJECT_UNLOCK(source);
@@ -682,43 +692,12 @@ static void notifyReadyForMoreSamplesMainThread(WebKitMediaSrc* source, Stream* 
     GST_OBJECT_UNLOCK(source);
 }
 
-static void applicationMessageCallback(GstBus*, GstMessage* message, WebKitMediaSrc* source)
-{
-    ASSERT(WTF::isMainThread());
-    ASSERT(GST_MESSAGE_TYPE(message) == GST_MESSAGE_APPLICATION);
-
-    const GstStructure* structure = gst_message_get_structure(message);
-
-    if (gst_structure_has_name(structure, "seek-needs-data")) {
-        seekNeedsDataMainThread(source);
-        return;
-    }
-
-    if (gst_structure_has_name(structure, "ready-for-more-samples")) {
-        Stream* appsrcStream = nullptr;
-        gst_structure_get(structure, "appsrc-stream", G_TYPE_POINTER, &appsrcStream, nullptr);
-        ASSERT(appsrcStream);
-
-        notifyReadyForMoreSamplesMainThread(source, appsrcStream);
-        return;
-    }
-
-    ASSERT_NOT_REACHED();
-}
-
 void webKitMediaSrcSetMediaPlayerPrivate(WebKitMediaSrc* source, WebCore::MediaPlayerPrivateGStreamerMSE* mediaPlayerPrivate)
 {
     GST_OBJECT_LOCK(source);
-    if (source->priv->mediaPlayerPrivate && source->priv->mediaPlayerPrivate != mediaPlayerPrivate && source->priv->bus)
-        g_signal_handlers_disconnect_by_func(source->priv->bus.get(), gpointer(applicationMessageCallback), source);
 
     // Set to nullptr on MediaPlayerPrivateGStreamer destruction, never a dangling pointer.
     source->priv->mediaPlayerPrivate = mediaPlayerPrivate;
-    source->priv->bus = mediaPlayerPrivate ? adoptGRef(gst_pipeline_get_bus(GST_PIPELINE(mediaPlayerPrivate->pipeline()))) : nullptr;
-    if (source->priv->bus) {
-        // MediaPlayerPrivateGStreamer has called gst_bus_add_signal_watch() at this point, so we can subscribe.
-        g_signal_connect(source->priv->bus.get(), "message::application", G_CALLBACK(applicationMessageCallback), source);
-    }
     GST_OBJECT_UNLOCK(source);
 }
 
@@ -747,6 +726,55 @@ void webKitMediaSrcPrepareSeek(WebKitMediaSrc* source, const MediaTime& time)
 
     // The pending action will be performed in enabledAppsrcSeekData().
     source->priv->appsrcSeekDataNextAction = MediaSourceSeekToTime;
+    GST_OBJECT_UNLOCK(source);
+}
+
+GstPadProbeReturn initialSeekSegmentFixerProbe(GstPad *pad, GstPadProbeInfo *info, gpointer userData)
+{
+    GstEvent* event = GST_PAD_PROBE_INFO_EVENT(info);
+    if (GST_EVENT_TYPE(event) == GST_EVENT_SEGMENT) {
+        const GstSegment* originalSegment = nullptr;
+        const GstSegment* fixedSegment = static_cast<GstSegment*>(userData);
+        gst_event_parse_segment(event, &originalSegment);
+        GST_DEBUG("Segment at %s: %" GST_SEGMENT_FORMAT ", replaced by %" GST_SEGMENT_FORMAT, GST_ELEMENT_NAME(GST_PAD_PARENT(pad)), originalSegment, fixedSegment);
+        gst_event_replace(reinterpret_cast<GstEvent**>(&info->data), gst_event_new_segment(fixedSegment));
+        return GST_PAD_PROBE_REMOVE;
+    }
+    return GST_PAD_PROBE_OK;
+}
+
+void webKitMediaSrcPrepareInitialSeek(WebKitMediaSrc* source, double rate, const MediaTime& startTime, const MediaTime& endTime)
+{
+    GST_OBJECT_LOCK(source);
+    MediaTime seekTime = (rate >= 0) ? startTime : endTime;
+    source->priv->seekTime = seekTime;
+    source->priv->appsrcSeekDataCount = 0;
+    source->priv->appsrcNeedDataCount = 0;
+
+    for (Stream* stream : source->priv->streams) {
+        stream->appsrcNeedDataFlag = false;
+        // Don't allow samples away from the seekTime to be enqueued.
+        stream->lastEnqueuedTime = seekTime;
+    }
+
+    // The pending action will be performed in enabledAppsrcSeekData().
+    source->priv->appsrcSeekDataNextAction = MediaSourceSeekToTime;
+
+    GUniquePtr<GstSegment> segment(gst_segment_new());
+    segment->format = GST_FORMAT_TIME;
+    gst_segment_do_seek(segment.get(), rate, GST_FORMAT_TIME,
+        static_cast<GstSeekFlags>(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
+        GST_SEEK_TYPE_SET, WebCore::toGstUnsigned64Time(startTime),
+        GST_SEEK_TYPE_SET, WebCore::toGstUnsigned64Time(endTime), nullptr);
+
+    for (Stream* stream : source->priv->streams) {
+        // This probe will fix the segment autogenerated by appsrc.
+        GRefPtr<GstPad> pad = adoptGRef(gst_element_get_static_pad(stream->appsrc, "src"));
+        gst_pad_add_probe(pad.get(), GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
+            initialSeekSegmentFixerProbe, gst_segment_copy(segment.get()), reinterpret_cast<GDestroyNotify>(gst_segment_free));
+        stream->sourceBuffer->setReadyForMoreSamples(true);
+    }
+
     GST_OBJECT_UNLOCK(source);
 }
 

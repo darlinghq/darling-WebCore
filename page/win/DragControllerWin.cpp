@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007 Apple Inc.  All rights reserved.
+ * Copyright (C) 2007-2020 Apple Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,13 +42,15 @@ const int DragController::DragIconBottomInset = 3;
 
 const float DragController::DragImageAlpha = 0.75f;
 
-DragOperation DragController::dragOperation(const DragData& dragData)
+Optional<DragOperation> DragController::dragOperation(const DragData& dragData)
 {
-    //FIXME: to match the macos behaviour we should return DragOperationNone
-    //if we are a modal window, we are the drag source, or the window is an attached sheet
-    //If this can be determined from within WebCore operationForDrag can be pulled into 
-    //WebCore itself
-    return dragData.containsURL() && !m_didInitiateDrag ? DragOperationCopy : DragOperationNone;
+    // FIXME: To match the macOS behaviour we should return WTF::nullopt.
+    // If we are a modal window, we are the drag source, or the window is an attached sheet.
+    // If this can be determined from within WebCore operationForDrag can be pulled into
+    // WebCore itself.
+    if (dragData.containsURL() && !m_didInitiateDrag)
+        return DragOperation::Copy;
+    return WTF::nullopt;
 }
 
 bool DragController::isCopyKeyDown(const DragData&)
@@ -67,12 +69,6 @@ void DragController::cleanupAfterSystemDrag()
 {
 }
 
-#if ENABLE(ATTACHMENT_ELEMENT)
-void DragController::declareAndWriteAttachment(DataTransfer&, Element&, const URL&)
-{
-}
-#endif
-
 void DragController::declareAndWriteDragImage(DataTransfer& dataTransfer, Element& element, const URL& url, const String& label)
 {
     Pasteboard& pasteboard = dataTransfer.pasteboard();
@@ -84,7 +80,7 @@ void DragController::declareAndWriteDragImage(DataTransfer& dataTransfer, Elemen
     // Order is important here for Explorer's sake
     pasteboard.writeURLToWritableDataObject(url, label);
     pasteboard.writeImageToDataObject(element, url);
-    pasteboard.writeMarkup(createMarkup(element, IncludeNode, 0, ResolveAllURLs));
+    pasteboard.writeMarkup(serializeFragment(element, SerializedNodes::SubtreeIncludingNode, nullptr, ResolveURLs::Yes));
 }
 
 }

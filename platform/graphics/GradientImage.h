@@ -30,7 +30,7 @@
 namespace WebCore {
 
 class Gradient;
-class ImageBuffer;
+class Image;
 
 class GradientImage final : public GeneratedImage {
 public:
@@ -41,18 +41,23 @@ public:
 
     virtual ~GradientImage();
 
+    const Gradient& gradient() const { return m_gradient.get(); }
+
 private:
     GradientImage(Gradient&, const FloatSize&);
 
-    ImageDrawResult draw(GraphicsContext&, const FloatRect& dstRect, const FloatRect& srcRect, CompositeOperator, BlendMode, DecodingMode, ImageOrientationDescription) final;
-    void drawPattern(GraphicsContext&, const FloatRect& destRect, const FloatRect& srcRect, const AffineTransform& patternTransform, const FloatPoint& phase, const FloatSize& spacing, CompositeOperator, BlendMode) final;
+    ImageDrawResult draw(GraphicsContext&, const FloatRect& dstRect, const FloatRect& srcRect, const ImagePaintingOptions& = { }) final;
+    void drawPattern(GraphicsContext&, const FloatRect& destRect, const FloatRect& srcRect, const AffineTransform& patternTransform, const FloatPoint& phase, const FloatSize& spacing, const ImagePaintingOptions& = { }) final;
     bool isGradientImage() const final { return true; }
-    void dump(TextStream&) const final;
+    void dump(WTF::TextStream&) const final;
     
     Ref<Gradient> m_gradient;
-    std::unique_ptr<ImageBuffer> m_cachedImageBuffer;
+    RefPtr<Image> m_cachedImage;
     FloatSize m_cachedAdjustedSize;
     unsigned m_cachedGeneratorHash;
+    FloatSize m_cachedScaleFactor;
 };
 
 }
+
+SPECIALIZE_TYPE_TRAITS_IMAGE(GradientImage)

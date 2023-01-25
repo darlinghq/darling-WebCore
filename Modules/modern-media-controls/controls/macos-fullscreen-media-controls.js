@@ -51,7 +51,7 @@ class MacOSFullscreenMediaControls extends MediaControls
         this.volumeSlider.width = 60;
 
         this._leftContainer = new ButtonsContainer({
-            buttons: [this.volumeDownButton, this.volumeSlider, this.volumeUpButton],
+            children: this._volumeControlsForCurrentDirection(),
             cssClassName: "left",
             leftMargin: 12,
             rightMargin: 0,
@@ -59,7 +59,7 @@ class MacOSFullscreenMediaControls extends MediaControls
         });
 
         this._centerContainer = new ButtonsContainer({
-            buttons: [this.rewindButton, this.playPauseButton, this.forwardButton],
+            children: [this.rewindButton, this.playPauseButton, this.forwardButton],
             cssClassName: "center",
             leftMargin: 27,
             rightMargin: 27,
@@ -67,7 +67,7 @@ class MacOSFullscreenMediaControls extends MediaControls
         });
 
         this._rightContainer = new ButtonsContainer({
-            buttons: [this.airplayButton, this.pipButton, this.tracksButton, this.fullscreenButton],
+            children: [this.airplayButton, this.pipButton, this.tracksButton, this.fullscreenButton],
             cssClassName: "right",
             leftMargin: 12,
             rightMargin: 12
@@ -113,7 +113,7 @@ class MacOSFullscreenMediaControls extends MediaControls
         if (!this._rightContainer)
             return;
 
-        const numberOfEnabledButtons = this._rightContainer.buttons.filter(button => button.enabled).length;
+        const numberOfEnabledButtons = this._rightContainer.children.filter(button => button.enabled).length;
 
         let buttonMargin = ButtonMarginForFiveButtons;
         if (numberOfEnabledButtons === 4)
@@ -124,6 +124,7 @@ class MacOSFullscreenMediaControls extends MediaControls
         this._rightContainer.buttonMargin = buttonMargin;
 
         this._leftContainer.visible = this.muteButton.enabled;
+        this._leftContainer.children = this._volumeControlsForCurrentDirection();
 
         this._leftContainer.layout();
         this._centerContainer.layout();
@@ -142,6 +143,11 @@ class MacOSFullscreenMediaControls extends MediaControls
     }
 
     // Private
+
+    _volumeControlsForCurrentDirection()
+    {
+        return this.usesLTRUserInterfaceLayoutDirection ? [this.volumeDownButton, this.volumeSlider, this.volumeUpButton] : [this.volumeUpButton, this.volumeSlider, this.volumeDownButton];
+    }
 
     _handleMousedown(event)
     {

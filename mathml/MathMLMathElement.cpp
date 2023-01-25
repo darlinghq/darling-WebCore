@@ -32,8 +32,11 @@
 
 #include "MathMLNames.h"
 #include "RenderMathMLMath.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(MathMLMathElement);
 
 using namespace MathMLNames;
 
@@ -53,28 +56,12 @@ RenderPtr<RenderElement> MathMLMathElement::createElementRenderer(RenderStyle&& 
     return createRenderer<RenderMathMLMath>(*this, WTFMove(style));
 }
 
-std::optional<bool> MathMLMathElement::specifiedDisplayStyle()
+void MathMLMathElement::parseAttribute(const QualifiedName& name, const AtomString& value)
 {
-    if (cachedBooleanAttribute(displaystyleAttr, m_displayStyle) == BooleanValue::Default) {
-        // The default displaystyle value of the <math> depends on the display attribute, so we parse it here.
-        auto& value = attributeWithoutSynchronization(displayAttr);
-        if (value == "block")
-            m_displayStyle = BooleanValue::True;
-        else if (value == "inline")
-            m_displayStyle = BooleanValue::False;
-    }
-    return toOptionalBool(m_displayStyle.value());
-}
-
-void MathMLMathElement::parseAttribute(const QualifiedName& name, const AtomicString& value)
-{
-    bool displayStyleAttribute = (name == displaystyleAttr || name == displayAttr);
     bool mathVariantAttribute = name == mathvariantAttr;
-    if (displayStyleAttribute)
-        m_displayStyle = std::nullopt;
     if (mathVariantAttribute)
-        m_mathVariant = std::nullopt;
-    if ((displayStyleAttribute || mathVariantAttribute) && renderer())
+        m_mathVariant = WTF::nullopt;
+    if ((mathVariantAttribute) && renderer())
         MathMLStyle::resolveMathMLStyleTree(renderer());
 
     MathMLElement::parseAttribute(name, value);

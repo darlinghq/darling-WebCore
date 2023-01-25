@@ -28,6 +28,7 @@
 
 #include <gcrypt.h>
 #include <wtf/Assertions.h>
+#include <wtf/Optional.h>
 
 namespace PAL {
 namespace GCrypt {
@@ -43,11 +44,16 @@ using CipherOperation = gcry_error_t(gcry_cipher_hd_t, void*, size_t, const void
 
 static inline void logError(gcry_error_t error)
 {
+    // FIXME: Use a WebCrypto WTF log channel here once those are moved down to PAL.
+#if !LOG_DISABLED
     WTFLogAlways("libgcrypt error: source '%s', description '%s'",
         gcry_strsource(error), gcry_strerror(error));
+#else
+    UNUSED_PARAM(error);
+#endif
 }
 
-static inline std::optional<int> aesAlgorithmForKeySize(size_t keySize)
+static inline Optional<int> aesAlgorithmForKeySize(size_t keySize)
 {
     switch (keySize) {
     case 128:
@@ -57,7 +63,7 @@ static inline std::optional<int> aesAlgorithmForKeySize(size_t keySize)
     case 256:
         return GCRY_CIPHER_AES256;
     default:
-        return std::nullopt;
+        return WTF::nullopt;
     }
 }
 

@@ -23,9 +23,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef WebTiledBackingLayer_h
-#define WebTiledBackingLayer_h
-
 #import <QuartzCore/QuartzCore.h>
 
 namespace WebCore {
@@ -51,4 +48,3 @@ class TiledBacking;
 
 @end
 
-#endif // WebTiledBackingLayer_h

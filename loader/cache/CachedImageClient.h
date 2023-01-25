@@ -34,7 +34,7 @@ enum class VisibleInViewportState { Unknown, Yes, No };
 
 class CachedImageClient : public CachedResourceClient {
 public:
-    virtual ~CachedImageClient() { }
+    virtual ~CachedImageClient() = default;
     static CachedResourceClientType expectedType() { return ImageType; }
     CachedResourceClientType resourceClientType() const override { return expectedType(); }
 
@@ -48,6 +48,8 @@ public:
     virtual VisibleInViewportState imageFrameAvailable(CachedImage& image, ImageAnimatingState, const IntRect* changeRect) { imageChanged(&image, changeRect); return VisibleInViewportState::No; }
 
     virtual void didRemoveCachedImageClient(CachedImage&) { }
+
+    virtual void scheduleRenderingUpdateForImage(CachedImage&) { }
 };
 
 } // namespace WebCore

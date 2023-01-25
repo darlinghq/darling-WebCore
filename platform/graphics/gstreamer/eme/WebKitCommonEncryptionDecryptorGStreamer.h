@@ -24,8 +24,10 @@
 
 #if ENABLE(ENCRYPTED_MEDIA) && USE(GSTREAMER)
 
+#include <CDMProxy.h>
 #include <gst/base/gstbasetransform.h>
 #include <gst/gst.h>
+#include <wtf/RefPtr.h>
 
 G_BEGIN_DECLS
 
@@ -52,11 +54,9 @@ struct _WebKitMediaCommonEncryptionDecrypt {
 struct _WebKitMediaCommonEncryptionDecryptClass {
     GstBaseTransformClass parentClass;
 
-    const char* protectionSystemId;
-    gboolean (*handleKeyResponse)(WebKitMediaCommonEncryptionDecrypt*, GstEvent* event);
-    gboolean (*setupCipher)(WebKitMediaCommonEncryptionDecrypt*);
-    gboolean (*decrypt)(WebKitMediaCommonEncryptionDecrypt*, GstBuffer* ivBuffer, GstBuffer* buffer, unsigned subSamplesCount, GstBuffer* subSamplesBuffer);
-    void (*releaseCipher)(WebKitMediaCommonEncryptionDecrypt*);
+    const char* (*protectionSystemId)(WebKitMediaCommonEncryptionDecrypt*);
+    bool (*cdmProxyAttached)(WebKitMediaCommonEncryptionDecrypt*, const RefPtr<WebCore::CDMProxy>&);
+    bool (*decrypt)(WebKitMediaCommonEncryptionDecrypt*, GstBuffer* ivBuffer, GstBuffer* keyIDBuffer, GstBuffer* buffer, unsigned subsamplesCount, GstBuffer* subsamplesBuffer);
 };
 
 G_END_DECLS

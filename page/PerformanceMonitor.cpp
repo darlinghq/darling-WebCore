@@ -30,32 +30,32 @@
 #include "ChromeClient.h"
 #include "DiagnosticLoggingClient.h"
 #include "DiagnosticLoggingKeys.h"
+#include "Frame.h"
 #include "Logging.h"
-#include "MainFrame.h"
 #include "Page.h"
 #include "PerformanceLogging.h"
-#include "PublicSuffix.h"
+#include "RegistrableDomain.h"
 #include "Settings.h"
 
 namespace WebCore {
 
 #define RELEASE_LOG_IF_ALLOWED(channel, fmt, ...) RELEASE_LOG_IF(m_page.isAlwaysOnLoggingAllowed(), channel, "%p - PerformanceMonitor::" fmt, this, ##__VA_ARGS__)
 
-static const Seconds cpuUsageMeasurementDelay { 5_s };
-static const Seconds postLoadCPUUsageMeasurementDuration { 10_s };
-static const Seconds backgroundCPUUsageMeasurementDuration { 5_min };
-static const Seconds cpuUsageSamplingInterval { 10_min };
+static constexpr const Seconds cpuUsageMeasurementDelay { 5_s };
+static constexpr const Seconds postLoadCPUUsageMeasurementDuration { 10_s };
+static constexpr const Seconds backgroundCPUUsageMeasurementDuration { 5_min };
+static constexpr const Seconds cpuUsageSamplingInterval { 10_min };
 
-static const Seconds memoryUsageMeasurementDelay { 10_s };
+static constexpr const Seconds memoryUsageMeasurementDelay { 10_s };
 
-static const Seconds delayBeforeProcessMayBecomeInactive { 8_min };
+static constexpr const Seconds delayBeforeProcessMayBecomeInactive { 8_min };
 
-static const double postPageLoadCPUUsageDomainReportingThreshold { 20.0 }; // Reporting pages using over 20% CPU is roughly equivalent to reporting the 10% worst pages.
-#if !PLATFORM(IOS)
-static const uint64_t postPageLoadMemoryUsageDomainReportingThreshold { 2048 * MB };
+static constexpr const double postPageLoadCPUUsageDomainReportingThreshold { 20.0 }; // Reporting pages using over 20% CPU is roughly equivalent to reporting the 10% worst pages.
+#if !PLATFORM(IOS_FAMILY)
+static constexpr const uint64_t postPageLoadMemoryUsageDomainReportingThreshold { 2048 * MB };
 #endif
 
-static inline ActivityStateForCPUSampling activityStateForCPUSampling(ActivityState::Flags state)
+static inline ActivityStateForCPUSampling activityStateForCPUSampling(OptionSet<ActivityState::Flag> state)
 {
     if (!(state & ActivityState::IsVisible))
         return ActivityStateForCPUSampling::NonVisible;
@@ -75,7 +75,7 @@ PerformanceMonitor::PerformanceMonitor(Page& page)
 {
     ASSERT(!page.isUtilityPage());
 
-    if (Settings::isPerActivityStateCPUUsageMeasurementEnabled()) {
+    if (page.settings().isPerActivityStateCPUUsageMeasurementEnabled()) {
         m_perActivityStateCPUTime = CPUTime::get();
         m_perActivityStateCPUUsageTimer.startRepeating(cpuUsageSamplingInterval);
     }
@@ -83,7 +83,7 @@ PerformanceMonitor::PerformanceMonitor(Page& page)
 
 void PerformanceMonitor::didStartProvisionalLoad()
 {
-    m_postLoadCPUTime = std::nullopt;
+    m_postLoadCPUTime = WTF::nullopt;
     m_postPageLoadCPUUsageTimer.stop();
     m_postPageLoadMemoryUsageTimer.stop();
 }
@@ -91,31 +91,31 @@ void PerformanceMonitor::didStartProvisionalLoad()
 void PerformanceMonitor::didFinishLoad()
 {
     // Only do post-load CPU usage measurement if there is a single Page in the process in order to reduce noise.
-    if (Settings::isPostLoadCPUUsageMeasurementEnabled() && m_page.isOnlyNonUtilityPage()) {
-        m_postLoadCPUTime = std::nullopt;
+    if (m_page.settings().isPostLoadCPUUsageMeasurementEnabled() && m_page.isOnlyNonUtilityPage()) {
+        m_postLoadCPUTime = WTF::nullopt;
         m_postPageLoadCPUUsageTimer.startOneShot(cpuUsageMeasurementDelay);
     }
 
     // Likewise for post-load memory usage measurement.
-    if (Settings::isPostLoadMemoryUsageMeasurementEnabled() && m_page.isOnlyNonUtilityPage())
+    if (m_page.settings().isPostLoadMemoryUsageMeasurementEnabled() && m_page.isOnlyNonUtilityPage())
         m_postPageLoadMemoryUsageTimer.startOneShot(memoryUsageMeasurementDelay);
 }
 
-void PerformanceMonitor::activityStateChanged(ActivityState::Flags oldState, ActivityState::Flags newState)
+void PerformanceMonitor::activityStateChanged(OptionSet<ActivityState::Flag> oldState, OptionSet<ActivityState::Flag> newState)
 {
-    ActivityState::Flags changed = oldState ^ newState;
-    bool visibilityChanged = changed & ActivityState::IsVisible;
+    auto changed = oldState ^ newState;
+    bool visibilityChanged = changed.contains(ActivityState::IsVisible);
 
     // Measure CPU usage of pages when they are no longer visible.
-    if (Settings::isPostBackgroundingCPUUsageMeasurementEnabled() && visibilityChanged) {
-        m_postBackgroundingCPUTime = std::nullopt;
+    if (m_page.settings().isPostBackgroundingCPUUsageMeasurementEnabled() && visibilityChanged) {
+        m_postBackgroundingCPUTime = WTF::nullopt;
         if (newState & ActivityState::IsVisible)
             m_postBackgroundingCPUUsageTimer.stop();
         else if (m_page.isOnlyNonUtilityPage())
             m_postBackgroundingCPUUsageTimer.startOneShot(cpuUsageMeasurementDelay);
     }
 
-    if (Settings::isPerActivityStateCPUUsageMeasurementEnabled()) {
+    if (m_page.settings().isPerActivityStateCPUUsageMeasurementEnabled()) {
         // If visibility changed then report CPU usage right away because CPU usage is connected to visibility state.
         auto oldActivityStateForCPUSampling = activityStateForCPUSampling(oldState);
         if (oldActivityStateForCPUSampling != activityStateForCPUSampling(newState)) {
@@ -124,14 +124,14 @@ void PerformanceMonitor::activityStateChanged(ActivityState::Flags oldState, Act
         }
     }
 
-    if (Settings::isPostBackgroundingMemoryUsageMeasurementEnabled() && visibilityChanged) {
+    if (m_page.settings().isPostBackgroundingMemoryUsageMeasurementEnabled() && visibilityChanged) {
         if (newState & ActivityState::IsVisible)
             m_postBackgroundingMemoryUsageTimer.stop();
         else if (m_page.isOnlyNonUtilityPage())
             m_postBackgroundingMemoryUsageTimer.startOneShot(memoryUsageMeasurementDelay);
     }
 
-    if (newState & ActivityState::IsVisible && newState & ActivityState::WindowIsActive) {
+    if (newState.containsAll({ ActivityState::IsVisible, ActivityState::WindowIsActive })) {
         m_processMayBecomeInactive = false;
         m_processMayBecomeInactiveTimer.stop();
     } else if (!m_processMayBecomeInactive && !m_processMayBecomeInactiveTimer.isActive())
@@ -148,16 +148,16 @@ static void reportPageOverPostLoadResourceThreshold(Page& page, ReportingReason 
     if (!document)
         return;
 
-    String domain = topPrivatelyControlledDomain(document->url().host());
-    if (domain.isEmpty())
+    RegistrableDomain registrableDomain { document->url() };
+    if (registrableDomain.isEmpty())
         return;
 
     switch (reason) {
     case ReportingReason::HighCPUUsage:
-        page.diagnosticLoggingClient().logDiagnosticMessageWithEnhancedPrivacy(DiagnosticLoggingKeys::domainCausingEnergyDrainKey(), domain, ShouldSample::No);
+        page.diagnosticLoggingClient().logDiagnosticMessageWithEnhancedPrivacy(DiagnosticLoggingKeys::domainCausingEnergyDrainKey(), registrableDomain.string(), ShouldSample::No);
         break;
     case ReportingReason::HighMemoryUsage:
-        page.diagnosticLoggingClient().logDiagnosticMessageWithEnhancedPrivacy(DiagnosticLoggingKeys::domainCausingJetsamKey(), domain, ShouldSample::No);
+        page.diagnosticLoggingClient().logDiagnosticMessageWithEnhancedPrivacy(DiagnosticLoggingKeys::domainCausingJetsamKey(), registrableDomain.string(), ShouldSample::No);
         break;
     }
 #else
@@ -169,7 +169,7 @@ static void reportPageOverPostLoadResourceThreshold(Page& page, ReportingReason 
 void PerformanceMonitor::measurePostLoadCPUUsage()
 {
     if (!m_page.isOnlyNonUtilityPage()) {
-        m_postLoadCPUTime = std::nullopt;
+        m_postLoadCPUTime = WTF::nullopt;
         return;
     }
 
@@ -179,7 +179,7 @@ void PerformanceMonitor::measurePostLoadCPUUsage()
             m_postPageLoadCPUUsageTimer.startOneShot(postLoadCPUUsageMeasurementDuration);
         return;
     }
-    std::optional<CPUTime> cpuTime = CPUTime::get();
+    Optional<CPUTime> cpuTime = CPUTime::get();
     if (!cpuTime)
         return;
 
@@ -196,7 +196,7 @@ void PerformanceMonitor::measurePostLoadMemoryUsage()
     if (!m_page.isOnlyNonUtilityPage())
         return;
 
-    std::optional<uint64_t> memoryUsage = PerformanceLogging::physicalFootprint();
+    Optional<uint64_t> memoryUsage = PerformanceLogging::physicalFootprint();
     if (!memoryUsage)
         return;
 
@@ -204,7 +204,7 @@ void PerformanceMonitor::measurePostLoadMemoryUsage()
     m_page.diagnosticLoggingClient().logDiagnosticMessage(DiagnosticLoggingKeys::postPageLoadMemoryUsageKey(), DiagnosticLoggingKeys::memoryUsageToDiagnosticLoggingKey(memoryUsage.value()), ShouldSample::No);
 
     // On iOS, we report actual Jetsams instead.
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     if (memoryUsage.value() > postPageLoadMemoryUsageDomainReportingThreshold)
         reportPageOverPostLoadResourceThreshold(m_page, ReportingReason::HighMemoryUsage);
 #endif
@@ -215,7 +215,7 @@ void PerformanceMonitor::measurePostBackgroundingMemoryUsage()
     if (!m_page.isOnlyNonUtilityPage())
         return;
 
-    std::optional<uint64_t> memoryUsage = PerformanceLogging::physicalFootprint();
+    Optional<uint64_t> memoryUsage = PerformanceLogging::physicalFootprint();
     if (!memoryUsage)
         return;
 
@@ -226,7 +226,7 @@ void PerformanceMonitor::measurePostBackgroundingMemoryUsage()
 void PerformanceMonitor::measurePostBackgroundingCPUUsage()
 {
     if (!m_page.isOnlyNonUtilityPage()) {
-        m_postBackgroundingCPUTime = std::nullopt;
+        m_postBackgroundingCPUTime = WTF::nullopt;
         return;
     }
 
@@ -236,7 +236,7 @@ void PerformanceMonitor::measurePostBackgroundingCPUUsage()
             m_postBackgroundingCPUUsageTimer.startOneShot(backgroundCPUUsageMeasurementDuration);
         return;
     }
-    std::optional<CPUTime> cpuTime = CPUTime::get();
+    Optional<CPUTime> cpuTime = CPUTime::get();
     if (!cpuTime)
         return;
 
@@ -262,6 +262,8 @@ static inline const char* stringForCPUSamplingActivityState(ActivityStateForCPUS
     case ActivityStateForCPUSampling::VisibleAndActive:
         return "VisibleAndActive";
     }
+    RELEASE_ASSERT_NOT_REACHED();
+    return "";
 }
 
 #endif
@@ -269,7 +271,7 @@ static inline const char* stringForCPUSamplingActivityState(ActivityStateForCPUS
 void PerformanceMonitor::measureCPUUsageInActivityState(ActivityStateForCPUSampling activityState)
 {
     if (!m_page.isOnlyNonUtilityPage()) {
-        m_perActivityStateCPUTime = std::nullopt;
+        m_perActivityStateCPUTime = WTF::nullopt;
         return;
     }
 
@@ -278,9 +280,9 @@ void PerformanceMonitor::measureCPUUsageInActivityState(ActivityStateForCPUSampl
         return;
     }
 
-    std::optional<CPUTime> cpuTime = CPUTime::get();
+    Optional<CPUTime> cpuTime = CPUTime::get();
     if (!cpuTime) {
-        m_perActivityStateCPUTime = std::nullopt;
+        m_perActivityStateCPUTime = WTF::nullopt;
         return;
     }
 

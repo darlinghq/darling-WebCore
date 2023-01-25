@@ -31,7 +31,6 @@
 
 #include "AXObjectCache.h"
 #include "AccessibilityTableCell.h"
-#include "HTMLCollection.h"
 #include "HTMLElement.h"
 #include "HTMLNames.h"
 #include "RenderTable.h"
@@ -42,13 +41,9 @@ namespace WebCore {
     
 using namespace HTMLNames;
 
-AccessibilityTableColumn::AccessibilityTableColumn()
-{
-}
+AccessibilityTableColumn::AccessibilityTableColumn() = default;
 
-AccessibilityTableColumn::~AccessibilityTableColumn()
-{
-}    
+AccessibilityTableColumn::~AccessibilityTableColumn() = default;
 
 Ref<AccessibilityTableColumn> AccessibilityTableColumn::create()
 {
@@ -74,24 +69,21 @@ LayoutRect AccessibilityTableColumn::elementRect() const
     return columnRect;
 }
 
-AccessibilityObject* AccessibilityTableColumn::headerObject()
+AXCoreObject* AccessibilityTableColumn::columnHeader()
 {
-    if (!m_parent)
+    if (!m_parent || !is<AccessibilityTable>(*m_parent)
+        || !m_parent->isExposable())
         return nullptr;
-    
+
     RenderObject* renderer = m_parent->renderer();
     if (!renderer)
         return nullptr;
-    if (!is<AccessibilityTable>(*m_parent))
-        return nullptr;
 
     auto& parentTable = downcast<AccessibilityTable>(*m_parent);
-    if (!parentTable.isExposableThroughAccessibility())
-        return nullptr;
-    
+
     if (parentTable.isAriaTable()) {
         for (const auto& cell : children()) {
-            if (cell->ariaRoleAttribute() == ColumnHeaderRole)
+            if (cell->ariaRoleAttribute() == AccessibilityRole::ColumnHeader)
                 return cell.get();
         }
         
@@ -180,7 +172,7 @@ bool AccessibilityTableColumn::computeAccessibilityIsIgnored() const
     if (!m_parent)
         return true;
     
-#if PLATFORM(IOS) || PLATFORM(GTK)
+#if PLATFORM(IOS_FAMILY) || USE(ATK)
     return true;
 #endif
     
@@ -196,13 +188,13 @@ void AccessibilityTableColumn::addChildren()
         return;
 
     auto& parentTable = downcast<AccessibilityTable>(*m_parent);
-    if (!parentTable.isExposableThroughAccessibility())
+    if (!parentTable.isExposable())
         return;
     
     int numRows = parentTable.rowCount();
     
     for (int i = 0; i < numRows; ++i) {
-        AccessibilityTableCell* cell = parentTable.cellForColumnAndRow(m_columnIndex, i);
+        auto* cell = parentTable.cellForColumnAndRow(m_columnIndex, i);
         if (!cell)
             continue;
         

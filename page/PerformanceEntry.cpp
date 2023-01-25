@@ -31,45 +31,41 @@
 #include "config.h"
 #include "PerformanceEntry.h"
 
-#if ENABLE(WEB_TIMING)
-
 #include "RuntimeEnabledFeatures.h"
+#include <wtf/Optional.h>
 
 namespace WebCore {
 
-PerformanceEntry::PerformanceEntry(Type type, const String& name, const String& entryType, double startTime, double finishTime)
+DEFINE_ALLOCATOR_WITH_HEAP_IDENTIFIER(PerformanceEntry);
+
+PerformanceEntry::PerformanceEntry(const String& name, double startTime, double finishTime)
     : m_name(name)
-    , m_entryType(entryType)
     , m_startTime(startTime)
     , m_duration(finishTime - startTime)
-    , m_type(type)
 {
 }
 
-PerformanceEntry::~PerformanceEntry()
-{
-}
+PerformanceEntry::~PerformanceEntry() = default;
 
-std::optional<PerformanceEntry::Type> PerformanceEntry::parseEntryTypeString(const String& entryType)
+Optional<PerformanceEntry::Type> PerformanceEntry::parseEntryTypeString(const String& entryType)
 {
     if (entryType == "navigation")
-        return std::optional<Type>(Type::Navigation);
+        return Optional<Type>(Type::Navigation);
 
-    if (RuntimeEnabledFeatures::sharedFeatures().userTimingEnabled()) {
-        if (entryType == "mark")
-            return std::optional<Type>(Type::Mark);
-        if (entryType == "measure")
-            return std::optional<Type>(Type::Measure);
+    if (entryType == "mark")
+        return Optional<Type>(Type::Mark);
+    if (entryType == "measure")
+        return Optional<Type>(Type::Measure);
+
+    if (entryType == "resource")
+        return Optional<Type>(Type::Resource);
+
+    if (RuntimeEnabledFeatures::sharedFeatures().paintTimingEnabled()) {
+        if (entryType == "paint")
+            return Optional<Type>(Type::Paint);
     }
 
-    if (RuntimeEnabledFeatures::sharedFeatures().resourceTimingEnabled()) {
-        if (entryType == "resource")
-            return std::optional<Type>(Type::Resource);
-    }
-
-    return std::nullopt;
+    return WTF::nullopt;
 }
 
 } // namespace WebCore
-
-#endif // ENABLE(WEB_TIMING)

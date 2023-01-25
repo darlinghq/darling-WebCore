@@ -38,6 +38,7 @@ enum ImageSizeChangeType {
 };
 
 class RenderImage : public RenderReplaced {
+    WTF_MAKE_ISO_ALLOCATED(RenderImage);
 public:
     RenderImage(Element&, RenderStyle&&, StyleImage* = nullptr, const float = 1.0f);
     RenderImage(Document&, RenderStyle&&, StyleImage* = nullptr);
@@ -54,7 +55,7 @@ public:
     HTMLMapElement* imageMap() const;
     void areaElementFocusChanged(HTMLAreaElement*);
     
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     void collectSelectionRects(Vector<SelectionRect>&, unsigned, unsigned) override;
 #endif
 
@@ -65,13 +66,15 @@ public:
     const String& altText() const { return m_altText; }
     void setAltText(const String& altText) { m_altText = altText; }
 
-    inline void setImageDevicePixelRatio(float factor) { m_imageDevicePixelRatio = factor; }
+    void setImageDevicePixelRatio(float factor);
     float imageDevicePixelRatio() const { return m_imageDevicePixelRatio; }
 
     void setHasShadowControls(bool hasShadowControls) { m_hasShadowControls = hasShadowControls; }
     
     bool isShowingMissingOrImageError() const;
     bool isShowingAltText() const;
+
+    virtual bool shouldDisplayBrokenImageIcon() const;
 
     bool hasNonBitmapImage() const;
 
@@ -106,12 +109,13 @@ private:
     bool isRenderImage() const final { return true; }
 
     void paintReplaced(PaintInfo&, const LayoutPoint&) override;
+    void paintIncompleteImageOutline(PaintInfo&, LayoutPoint, LayoutUnit) const;
 
     bool computeBackgroundIsKnownToBeObscured(const LayoutPoint& paintOffset) final;
 
     LayoutUnit minimumReplacedHeight() const override;
 
-    void notifyFinished(CachedResource&) final;
+    void notifyFinished(CachedResource&, const NetworkLoadMetrics&) final;
     bool nodeAtPoint(const HitTestRequest&, HitTestResult&, const HitTestLocation& locationInContainer, const LayoutPoint& accumulatedOffset, HitTestAction) final;
 
     bool boxShadowShouldBeAppliedToBackground(const LayoutPoint& paintOffset, BackgroundBleedAvoidance, InlineFlowBox*) const final;
@@ -128,11 +132,15 @@ private:
     
     void layoutShadowControls(const LayoutSize& oldSize);
 
+    LayoutUnit computeReplacedLogicalWidth(ShouldComputePreferred = ComputeActual) const override;
+    LayoutUnit computeReplacedLogicalHeight(Optional<LayoutUnit> estimatedUsedWidth = WTF::nullopt) const override;
+
+    bool shouldCollapseToEmpty() const;
+
     // Text to display as long as the image isn't available.
     String m_altText;
     std::unique_ptr<RenderImageResource> m_imageResource;
     bool m_needsToSetSizeForAltText { false };
-    bool m_didIncrementVisuallyNonEmptyPixelCount { false };
     bool m_isGeneratedContent { false };
     bool m_hasShadowControls { false };
     float m_imageDevicePixelRatio { 1 };

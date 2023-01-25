@@ -156,7 +156,6 @@ using namespace WebCore;
 using namespace XPath;
 
 
-
 /* Enabling traces.  */
 #ifndef YYDEBUG
 # define YYDEBUG 0
@@ -1970,7 +1969,7 @@ yyreduce:
 #line 402 "WebCore/xml/XPathGrammar.y"
     {
         (yyvsp[(3) - (3)].locationPath)->setAbsolute();
-        (yyval.expression) = new Path(std::unique_ptr<Expression>((yyvsp[(1) - (3)].expression)), std::unique_ptr<LocationPath>((yyvsp[(3) - (3)].locationPath)));
+        (yyval.expression) = new XPath::Path(std::unique_ptr<Expression>((yyvsp[(1) - (3)].expression)), std::unique_ptr<LocationPath>((yyvsp[(3) - (3)].locationPath)));
     ;}
     break;
 
@@ -1979,7 +1978,7 @@ yyreduce:
     {
         (yyvsp[(3) - (3)].locationPath)->prependStep(std::unique_ptr<Step>((yyvsp[(2) - (3)].step)));
         (yyvsp[(3) - (3)].locationPath)->setAbsolute();
-        (yyval.expression) = new Path(std::unique_ptr<Expression>((yyvsp[(1) - (3)].expression)), std::unique_ptr<LocationPath>((yyvsp[(3) - (3)].locationPath)));
+        (yyval.expression) = new XPath::Path(std::unique_ptr<Expression>((yyvsp[(1) - (3)].expression)), std::unique_ptr<LocationPath>((yyvsp[(3) - (3)].locationPath)));
     ;}
     break;
 
@@ -2155,15 +2154,10 @@ yyerrorlab:
   /* Pacify compilers like GCC when the user code never invokes
      YYERROR and the label yyerrorlab therefore never appears in user
      code.  */
-#if COMPILER(CLANG)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunreachable-code"
-#endif
+  IGNORE_CLANG_WARNINGS_BEGIN("unreachable-code")
   if (/*CONSTCOND*/ 0)
      goto yyerrorlab;
-#if COMPILER(CLANG)
-#pragma clang diagnostic pop
-#endif
+  IGNORE_CLANG_WARNINGS_END
 
   /* Do not reclaim the symbols of the rule which action triggered
      this YYERROR.  */

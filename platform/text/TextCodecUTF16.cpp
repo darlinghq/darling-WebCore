@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2004, 2006, 2008, 2010 Apple Inc. All rights reserved.
+ * Copyright (C) 2004-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,10 +27,16 @@
 #include "TextCodecUTF16.h"
 
 #include <wtf/text/CString.h>
-#include <wtf/text/StringBuffer.h>
+#include <wtf/text/StringBuilder.h>
 #include <wtf/text/WTFString.h>
+#include <wtf/unicode/CharacterNames.h>
 
 namespace WebCore {
+
+inline TextCodecUTF16::TextCodecUTF16(bool littleEndian)
+    : m_littleEndian(littleEndian)
+{
+}
 
 void TextCodecUTF16::registerEncodingNames(EncodingNameRegistrar registrar)
 {
@@ -47,103 +53,114 @@ void TextCodecUTF16::registerEncodingNames(EncodingNameRegistrar registrar)
     registrar("unicodeFFFE", "UTF-16BE");
 }
 
-static std::unique_ptr<TextCodec> newStreamingTextDecoderUTF16LE(const TextEncoding&, const void*)
-{
-    return std::make_unique<TextCodecUTF16>(true);
-}
-
-static std::unique_ptr<TextCodec> newStreamingTextDecoderUTF16BE(const TextEncoding&, const void*)
-{
-    return std::make_unique<TextCodecUTF16>(false);
-}
-
 void TextCodecUTF16::registerCodecs(TextCodecRegistrar registrar)
 {
-    registrar("UTF-16LE", newStreamingTextDecoderUTF16LE, 0);
-    registrar("UTF-16BE", newStreamingTextDecoderUTF16BE, 0);
+    registrar("UTF-16LE", [] {
+        return makeUnique<TextCodecUTF16>(true);
+    });
+    registrar("UTF-16BE", [] {
+        return makeUnique<TextCodecUTF16>(false);
+    });
 }
 
-String TextCodecUTF16::decode(const char* bytes, size_t length, bool, bool, bool&)
+// https://encoding.spec.whatwg.org/#shared-utf-16-decoder
+String TextCodecUTF16::decode(const char* bytes, size_t length, bool flush, bool, bool& sawError)
 {
-    if (!length)
-        return String();
+    const auto* p = reinterpret_cast<const uint8_t*>(bytes);
+    const auto* const end = p + length;
+    const auto* const endMinusOneOrNull = end ? end - 1 : nullptr;
 
-    // FIXME: This should generate an error if there is an unpaired surrogate.
+    StringBuilder result;
+    result.reserveCapacity(length / 2);
 
-    const unsigned char* p = reinterpret_cast<const unsigned char*>(bytes);
-    size_t numBytes = length + m_haveBufferedByte;
-    size_t numChars = numBytes / 2;
+    auto processCodeUnit = [&] (UChar codeUnit) {
+        if (std::exchange(m_shouldStripByteOrderMark, false) && codeUnit == byteOrderMark)
+            return;
+        if (m_leadSurrogate) {
+            auto leadSurrogate = *std::exchange(m_leadSurrogate, WTF::nullopt);
+            if (U16_IS_TRAIL(codeUnit)) {
+                result.appendCharacter(U16_GET_SUPPLEMENTARY(leadSurrogate, codeUnit));
+                return;
+            }
+            sawError = true;
+            result.append(replacementCharacter);
+        }
+        if (U16_IS_LEAD(codeUnit)) {
+            m_leadSurrogate = codeUnit;
+            return;
+        }
+        if (U16_IS_TRAIL(codeUnit)) {
+            sawError = true;
+            result.append(replacementCharacter);
+            return;
+        }
+        result.append(codeUnit);
+    };
+    auto processBytesLE = [&] (uint8_t first, uint8_t second) {
+        processCodeUnit(first | (second << 8));
+    };
+    auto processBytesBE = [&] (uint8_t first, uint8_t second) {
+        processCodeUnit((first << 8) | second);
+    };
 
-    StringBuffer<UChar> buffer(numChars);
-    UChar* q = buffer.characters();
-
-    if (m_haveBufferedByte) {
-        UChar c;
+    if (m_leadByte && p < end) {
+        auto leadByte = *std::exchange(m_leadByte, WTF::nullopt);
         if (m_littleEndian)
-            c = m_bufferedByte | (p[0] << 8);
+            processBytesLE(leadByte, p[0]);
         else
-            c = (m_bufferedByte << 8) | p[0];
-        *q++ = c;
-        m_haveBufferedByte = false;
-        p += 1;
-        numChars -= 1;
+            processBytesBE(leadByte, p[0]);
+        p++;
     }
 
     if (m_littleEndian) {
-        for (size_t i = 0; i < numChars; ++i) {
-            UChar c = p[0] | (p[1] << 8);
+        while (p < endMinusOneOrNull) {
+            processBytesLE(p[0], p[1]);
             p += 2;
-            *q++ = c;
         }
     } else {
-        for (size_t i = 0; i < numChars; ++i) {
-            UChar c = (p[0] << 8) | p[1];
+        while (p < endMinusOneOrNull) {
+            processBytesBE(p[0], p[1]);
             p += 2;
-            *q++ = c;
         }
     }
 
-    if (numBytes & 1) {
-        ASSERT(!m_haveBufferedByte);
-        m_haveBufferedByte = true;
-        m_bufferedByte = p[0];
+    if (p && p == endMinusOneOrNull) {
+        ASSERT(!m_leadByte);
+        m_leadByte = p[0];
+    } else
+        ASSERT(!p || p == end);
+
+    if (flush) {
+        m_shouldStripByteOrderMark = false;
+        if (m_leadByte || m_leadSurrogate) {
+            m_leadByte = WTF::nullopt;
+            m_leadSurrogate = WTF::nullopt;
+            sawError = true;
+            result.append(replacementCharacter);
+        }
     }
 
-    buffer.shrink(q - buffer.characters());
-
-    return String::adopt(WTFMove(buffer));
+    return result.toString();
 }
 
-CString TextCodecUTF16::encode(const UChar* characters, size_t length, UnencodableHandling)
+Vector<uint8_t> TextCodecUTF16::encode(StringView string, UnencodableHandling) const
 {
-    // We need to be sure we can double the length without overflowing.
-    // Since the passed-in length is the length of an actual existing
-    // character buffer, each character is two bytes, and we know
-    // the buffer doesn't occupy the entire address space, we can
-    // assert here that doubling the length does not overflow size_t
-    // and there's no need for a runtime check.
-    ASSERT(length <= std::numeric_limits<size_t>::max() / 2);
+    Vector<uint8_t> result(WTF::checkedProduct<size_t>(string.length(), 2).unsafeGet());
+    auto* bytes = result.data();
 
-    char* bytes;
-    CString string = CString::newUninitialized(length * 2, bytes);
-
-    // FIXME: CString is not a reasonable data structure for encoded UTF-16, which will have
-    // null characters inside it. Perhaps the result of encode should not be a CString.
     if (m_littleEndian) {
-        for (size_t i = 0; i < length; ++i) {
-            UChar c = characters[i];
-            bytes[i * 2] = c;
-            bytes[i * 2 + 1] = c >> 8;
+        for (auto character : string.codeUnits()) {
+            *bytes++ = character;
+            *bytes++ = character >> 8;
         }
     } else {
-        for (size_t i = 0; i < length; ++i) {
-            UChar c = characters[i];
-            bytes[i * 2] = c >> 8;
-            bytes[i * 2 + 1] = c;
+        for (auto character : string.codeUnits()) {
+            *bytes++ = character >> 8;
+            *bytes++ = character;
         }
     }
 
-    return string;
+    return result;
 }
 
 } // namespace WebCore

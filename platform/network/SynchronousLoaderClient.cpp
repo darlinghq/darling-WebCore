@@ -29,23 +29,26 @@
 #include "AuthenticationChallenge.h"
 #include "ResourceHandle.h"
 #include "ResourceRequest.h"
+#include <wtf/CompletionHandler.h>
 
 namespace WebCore {
 
-SynchronousLoaderClient::~SynchronousLoaderClient()
-{
-}
+SynchronousLoaderClient::SynchronousLoaderClient()
+    : m_messageQueue(SynchronousLoaderMessageQueue::create()) { }
 
-ResourceRequest SynchronousLoaderClient::willSendRequest(ResourceHandle* handle, ResourceRequest&& request, ResourceResponse&&)
+SynchronousLoaderClient::~SynchronousLoaderClient() = default;
+
+void SynchronousLoaderClient::willSendRequestAsync(ResourceHandle* handle, ResourceRequest&& request, ResourceResponse&&, CompletionHandler<void(ResourceRequest&&)>&& completionHandler)
 {
     // FIXME: This needs to be fixed to follow the redirect correctly even for cross-domain requests.
-    if (protocolHostAndPortAreEqual(handle->firstRequest().url(), request.url()))
-        return WTFMove(request);
+    if (protocolHostAndPortAreEqual(handle->firstRequest().url(), request.url())) {
+        completionHandler(WTFMove(request));
+        return;
+    }
 
     ASSERT(m_error.isNull());
     m_error = platformBadResponseError();
-    m_isDone = true;
-    return { };
+    completionHandler({ });
 }
 
 bool SynchronousLoaderClient::shouldUseCredentialStorage(ResourceHandle*)
@@ -55,16 +58,17 @@ bool SynchronousLoaderClient::shouldUseCredentialStorage(ResourceHandle*)
 }
 
 #if USE(PROTECTION_SPACE_AUTH_CALLBACK)
-bool SynchronousLoaderClient::canAuthenticateAgainstProtectionSpace(ResourceHandle*, const ProtectionSpace&)
+void SynchronousLoaderClient::canAuthenticateAgainstProtectionSpaceAsync(ResourceHandle*, const ProtectionSpace&, CompletionHandler<void(bool)>&& completionHandler)
 {
     // FIXME: We should ask FrameLoaderClient. <http://webkit.org/b/65196>
-    return true;
+    completionHandler(true);
 }
 #endif
 
-void SynchronousLoaderClient::didReceiveResponse(ResourceHandle*, ResourceResponse&& response)
+void SynchronousLoaderClient::didReceiveResponseAsync(ResourceHandle*, ResourceResponse&& response, CompletionHandler<void()>&& completionHandler)
 {
     m_response = WTFMove(response);
+    completionHandler();
 }
 
 void SynchronousLoaderClient::didReceiveData(ResourceHandle*, const char* data, unsigned length, int /*encodedDataLength*/)
@@ -72,17 +76,30 @@ void SynchronousLoaderClient::didReceiveData(ResourceHandle*, const char* data, 
     m_data.append(data, length);
 }
 
-void SynchronousLoaderClient::didFinishLoading(ResourceHandle*)
+void SynchronousLoaderClient::didFinishLoading(ResourceHandle* handle)
 {
-    m_isDone = true;
+    m_messageQueue->kill();
+#if PLATFORM(COCOA)
+    if (handle)
+        handle->releaseDelegate();
+#else
+    UNUSED_PARAM(handle);
+#endif
 }
 
-void SynchronousLoaderClient::didFail(ResourceHandle*, const ResourceError& error)
+void SynchronousLoaderClient::didFail(ResourceHandle* handle, const ResourceError& error)
 {
     ASSERT(m_error.isNull());
 
     m_error = error;
-    m_isDone = true;
+    
+    m_messageQueue->kill();
+#if PLATFORM(COCOA)
+    if (handle)
+        handle->releaseDelegate();
+#else
+    UNUSED_PARAM(handle);
+#endif
 }
 
 }

@@ -33,6 +33,7 @@ class RenderSVGResourceContainer;
 class SVGSVGElement;
 
 class RenderSVGRoot final : public RenderReplaced {
+    WTF_MAKE_ISO_ALLOCATED(RenderSVGRoot);
 public:
     RenderSVGRoot(SVGSVGElement&, RenderStyle&&);
     virtual ~RenderSVGRoot();
@@ -45,6 +46,7 @@ public:
     void computeIntrinsicRatioInformation(FloatSize& intrinsicSize, double& intrinsicRatio) const override;
 
     bool isLayoutSizeChanged() const { return m_isLayoutSizeChanged; }
+    bool isInLayout() const { return m_inLayout; }
     void setNeedsBoundariesUpdate() override { m_needsBoundariesOrTransformUpdate = true; }
     bool needsBoundariesUpdate() override { return m_needsBoundariesOrTransformUpdate; }
     void setNeedsTransformUpdate() override { m_needsBoundariesOrTransformUpdate = true; }
@@ -61,9 +63,6 @@ public:
     // method during layout when they are invalidated by a filter.
     static void addResourceForClientInvalidation(RenderSVGResourceContainer*);
 
-    bool hasSVGShadow() const { return m_hasSVGShadow; }
-    void setHasSVGShadow(bool hasShadow) { m_hasSVGShadow = hasShadow; }
-
 private:
     void element() const = delete;
 
@@ -71,7 +70,7 @@ private:
     const char* renderName() const override { return "RenderSVGRoot"; }
 
     LayoutUnit computeReplacedLogicalWidth(ShouldComputePreferred  = ComputeActual) const override;
-    LayoutUnit computeReplacedLogicalHeight(std::optional<LayoutUnit> estimatedUsedWidth = std::nullopt) const override;
+    LayoutUnit computeReplacedLogicalHeight(Optional<LayoutUnit> estimatedUsedWidth = WTF::nullopt) const override;
     void layout() override;
     void paintReplaced(PaintInfo&, const LayoutPoint&) override;
 
@@ -81,8 +80,6 @@ private:
     void willBeRemovedFromTree() override;
 
     void styleDidChange(StyleDifference, const RenderStyle* oldStyle) override;
-    void addChild(RenderObject* child, RenderObject* beforeChild = 0) override;
-    void removeChild(RenderObject&) override;
 
     const AffineTransform& localToParentTransform() const override;
 
@@ -92,14 +89,13 @@ private:
     FloatRect objectBoundingBox() const override { return m_objectBoundingBox; }
     FloatRect strokeBoundingBox() const override { return m_strokeBoundingBox; }
     FloatRect repaintRectInLocalCoordinates() const override { return m_repaintBoundingBox; }
-    FloatRect repaintRectInLocalCoordinatesExcludingSVGShadow() const { return m_repaintBoundingBoxExcludingShadow; }
 
     bool nodeAtPoint(const HitTestRequest&, HitTestResult&, const HitTestLocation& locationInContainer, const LayoutPoint& accumulatedOffset, HitTestAction) override;
 
     LayoutRect clippedOverflowRectForRepaint(const RenderLayerModelObject* repaintContainer) const override;
-    FloatRect computeFloatRectForRepaint(const FloatRect&, const RenderLayerModelObject* repaintContainer, bool fixed) const override;
+    Optional<FloatRect> computeFloatVisibleRectInContainer(const FloatRect&, const RenderLayerModelObject* container, VisibleRectContext) const override;
 
-    void mapLocalToContainer(const RenderLayerModelObject* repaintContainer, TransformState&, MapCoordinatesFlags, bool* wasFixed) const override;
+    void mapLocalToContainer(const RenderLayerModelObject* ancestorContainer, TransformState&, MapCoordinatesFlags, bool* wasFixed) const override;
     const RenderObject* pushMappingToContainer(const RenderLayerModelObject* ancestorToStopAt, RenderGeometryMap&) const override;
 
     bool canBeSelectionLeaf() const override { return false; }
@@ -111,7 +107,8 @@ private:
 
     IntSize m_containerSize;
     FloatRect m_objectBoundingBox;
-    bool m_objectBoundingBoxValid;
+    bool m_objectBoundingBoxValid { false };
+    bool m_inLayout { false };
     FloatRect m_strokeBoundingBox;
     FloatRect m_repaintBoundingBox;
     FloatRect m_repaintBoundingBoxExcludingShadow;
@@ -120,7 +117,6 @@ private:
     HashSet<RenderSVGResourceContainer*> m_resourcesNeedingToInvalidateClients;
     bool m_isLayoutSizeChanged : 1;
     bool m_needsBoundariesOrTransformUpdate : 1;
-    bool m_hasSVGShadow : 1;
     bool m_hasBoxDecorations : 1;
 };
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Apple Inc.  All rights reserved.
+ * Copyright (C) 2017-2020 Apple Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,56 +28,88 @@
 
 #if USE(CG)
 
+#include "ImageSourceCG.h"
+#include "MIMETypeRegistry.h"
+
 #include <wtf/HashSet.h>
 #include <wtf/NeverDestroyed.h>
-
-#if !PLATFORM(IOS)
-#include <ApplicationServices/ApplicationServices.h>
-#else
 #include <ImageIO/ImageIO.h>
-#endif
-
-#if ENABLE(WEB_ARCHIVE) || ENABLE(MHTML)
-#include "ArchiveFactory.h"
-#endif
 
 namespace WebCore {
 
-HashSet<String>& allowedImageUTIs()
+const HashSet<String>& defaultSupportedImageTypes()
 {
-    // CG at least supports the following standard image types:
-    static NeverDestroyed<HashSet<String>> s_allowedImageUTIs = std::initializer_list<String> {
-        "com.compuserve.gif",
-        "com.microsoft.bmp",
-        "com.microsoft.cur",
-        "com.microsoft.ico",
-        "public.jpeg",
-        "public.jpeg-2000",
-        "public.mpo-image",
-        "public.png",
-        "public.tiff",
-    };
-
-#ifndef NDEBUG
-    // But make sure that all of them are really supported.
-    static bool checked = false;
-    if (!checked) {
-        RetainPtr<CFArrayRef> systemImageUTIs = adoptCF(CGImageSourceCopyTypeIdentifiers());
-        CFIndex count = CFArrayGetCount(systemImageUTIs.get());
-        for (auto& imageUTI : s_allowedImageUTIs.get()) {
-            RetainPtr<CFStringRef> string = imageUTI.createCFString();
-            ASSERT(CFArrayContainsValue(systemImageUTIs.get(), CFRangeMake(0, count), string.get()));
-        }
-        checked = true;
-    }
+    static const auto defaultSupportedImageTypes = makeNeverDestroyed([] {
+        HashSet<String> defaultSupportedImageTypes = {
+            "com.compuserve.gif"_s,
+            "com.microsoft.bmp"_s,
+            "com.microsoft.cur"_s,
+            "com.microsoft.ico"_s,
+            "public.jpeg"_s,
+            "public.png"_s,
+            "public.tiff"_s,
+#if !PLATFORM(WIN)
+            "public.jpeg-2000"_s,
+            "public.mpo-image"_s,
 #endif
+#if HAVE(WEBP)
+            "public.webp"_s,
+            "com.google.webp"_s,
+            "org.webmproject.webp"_s,
+#endif
+        };
 
-    return s_allowedImageUTIs.get();
+        auto systemSupportedCFImageTypes = adoptCF(CGImageSourceCopyTypeIdentifiers());
+        CFIndex count = CFArrayGetCount(systemSupportedCFImageTypes.get());
+
+        HashSet<String> systemSupportedImageTypes;
+        CFArrayApplyFunction(systemSupportedCFImageTypes.get(), CFRangeMake(0, count), [](const void *value, void *context) {
+            String imageType = static_cast<CFStringRef>(value);
+            static_cast<HashSet<String>*>(context)->add(imageType);
+        }, &systemSupportedImageTypes);
+
+        defaultSupportedImageTypes.removeIf([&systemSupportedImageTypes](const String& imageType) {
+            return !systemSupportedImageTypes.contains(imageType);
+        });
+
+        return defaultSupportedImageTypes;
+    }());
+
+    return defaultSupportedImageTypes;
 }
 
-bool isAllowedImageUTI(const String& imageUTI)
+HashSet<String>& additionalSupportedImageTypes()
 {
-    return !imageUTI.isEmpty() && allowedImageUTIs().contains(imageUTI);
+    static NeverDestroyed<HashSet<String>> additionalSupportedImageTypes;
+    return additionalSupportedImageTypes;
+}
+
+void setAdditionalSupportedImageTypes(const Vector<String>& imageTypes)
+{
+    MIMETypeRegistry::additionalSupportedImageMIMETypes().clear();
+    for (const auto& imageType : imageTypes) {
+        additionalSupportedImageTypes().add(imageType);
+        auto mimeType = MIMETypeForImageType(imageType);
+        if (!mimeType.isEmpty())
+            MIMETypeRegistry::additionalSupportedImageMIMETypes().add(mimeType);
+    }
+}
+
+void setAdditionalSupportedImageTypesForTesting(const String& imageTypes)
+{
+    setAdditionalSupportedImageTypes(imageTypes.split(';'));
+}
+
+bool isSupportedImageType(const String& imageType)
+{
+    if (imageType.isEmpty())
+        return false;
+    return defaultSupportedImageTypes().contains(imageType) || additionalSupportedImageTypes().contains(imageType);
+}
+
+bool isGIFImageType(StringView imageType)
+{
+    return imageType == "com.compuserve.gif";
 }
 
 }

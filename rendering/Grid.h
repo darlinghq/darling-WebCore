@@ -29,10 +29,11 @@
 #include "OrderIterator.h"
 #include <wtf/HashMap.h>
 #include <wtf/ListHashSet.h>
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
-typedef Vector<RenderBox*, 1> GridCell;
+typedef Vector<WeakPtr<RenderBox>, 1> GridCell;
 typedef Vector<Vector<GridCell>> GridAsMatrix;
 typedef ListHashSet<size_t> OrderedTrackIndexSet;
 
@@ -53,10 +54,6 @@ public:
     // this method will return false for a grid container with only out of flow children.
     bool hasGridItems() const { return !m_gridItemArea.isEmpty(); }
 
-    // FIXME: move this to SizingData once placeItemsOnGrid() takes it as argument.
-    bool hasAnyOrthogonalGridItem() const { return m_hasAnyOrthogonalGridItem; }
-    void setHasAnyOrthogonalGridItem(bool hasAnyOrthogonalGridItem) { m_hasAnyOrthogonalGridItem = hasAnyOrthogonalGridItem; }
-
     GridArea gridItemArea(const RenderBox& item) const;
     void setGridItemArea(const RenderBox& item, GridArea);
 
@@ -64,8 +61,8 @@ public:
 
     const GridCell& cell(unsigned row, unsigned column) const { return m_grid[row][column]; }
 
-    int smallestTrackStart(GridTrackSizingDirection) const;
-    void setSmallestTracksStart(int rowStart, int columnStart);
+    unsigned explicitGridStart(GridTrackSizingDirection) const;
+    void setExplicitGridStart(unsigned rowStart, unsigned columnStart);
 
     unsigned autoRepeatTracks(GridTrackSizingDirection) const;
     void setAutoRepeatTracks(unsigned autoRepeatRows, unsigned autoRepeatColumns);
@@ -89,19 +86,17 @@ private:
 
     OrderIterator m_orderIterator;
 
-    int m_smallestColumnStart { 0 };
-    int m_smallestRowStart { 0 };
+    unsigned m_explicitColumnStart { 0 };
+    unsigned m_explicitRowStart { 0 };
 
     unsigned m_autoRepeatColumns { 0 };
     unsigned m_autoRepeatRows { 0 };
 
-    bool m_hasAnyOrthogonalGridItem { false };
     bool m_needsItemsPlacement { true };
 
     GridAsMatrix m_grid;
 
     HashMap<const RenderBox*, GridArea> m_gridItemArea;
-    HashMap<const RenderBox*, size_t> m_gridItemsIndexesMap;
 
     std::unique_ptr<OrderedTrackIndexSet> m_autoRepeatEmptyColumns;
     std::unique_ptr<OrderedTrackIndexSet> m_autoRepeatEmptyRows;

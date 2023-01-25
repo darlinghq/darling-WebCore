@@ -26,10 +26,12 @@
 #include "NodeIterator.h"
 
 #include "Document.h"
-#include "ExceptionCode.h"
 #include "NodeTraversal.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(NodeIterator);
 
 inline NodeIterator::NodePointer::NodePointer(Node& node, bool isPointerBeforeNode)
     : node(&node)
@@ -74,7 +76,7 @@ inline NodeIterator::NodeIterator(Node& rootNode, unsigned whatToShow, RefPtr<No
     : NodeIteratorBase(rootNode, whatToShow, WTFMove(filter))
     , m_referenceNode(rootNode, true)
 {
-    root().document().attachNodeIterator(this);
+    root().document().attachNodeIterator(*this);
 }
 
 Ref<NodeIterator> NodeIterator::create(Node& rootNode, unsigned whatToShow, RefPtr<NodeFilter>&& filter)
@@ -84,7 +86,7 @@ Ref<NodeIterator> NodeIterator::create(Node& rootNode, unsigned whatToShow, RefP
 
 NodeIterator::~NodeIterator()
 {
-    root().document().detachNodeIterator(this);
+    root().document().detachNodeIterator(*this);
 }
 
 ExceptionOr<RefPtr<Node>> NodeIterator::nextNode()
@@ -98,13 +100,13 @@ ExceptionOr<RefPtr<Node>> NodeIterator::nextNode()
         // of the rejected node. Hence, FILTER_REJECT is the same as FILTER_SKIP.
         RefPtr<Node> provisionalResult = m_candidateNode.node;
 
-        auto callbackResult = acceptNode(*provisionalResult);
-        if (callbackResult.type() == CallbackResultType::ExceptionThrown)
-            return Exception { ExistingExceptionError };
+        auto filterResult = acceptNode(*provisionalResult);
+        if (filterResult.hasException()) {
+            m_candidateNode.clear();
+            return filterResult.releaseException();
+        }
 
-        ASSERT(callbackResult.type() == CallbackResultType::Success);
-
-        bool nodeWasAccepted = callbackResult.releaseReturnValue() == NodeFilter::FILTER_ACCEPT;
+        bool nodeWasAccepted = filterResult.returnValue() == NodeFilter::FILTER_ACCEPT;
         if (nodeWasAccepted) {
             m_referenceNode = m_candidateNode;
             result = WTFMove(provisionalResult);
@@ -113,7 +115,7 @@ ExceptionOr<RefPtr<Node>> NodeIterator::nextNode()
     }
 
     m_candidateNode.clear();
-    return WTFMove(result);
+    return result;
 }
 
 ExceptionOr<RefPtr<Node>> NodeIterator::previousNode()
@@ -127,13 +129,13 @@ ExceptionOr<RefPtr<Node>> NodeIterator::previousNode()
         // of the rejected node. Hence, FILTER_REJECT is the same as FILTER_SKIP.
         RefPtr<Node> provisionalResult = m_candidateNode.node;
 
-        auto callbackResult = acceptNode(*provisionalResult);
-        if (callbackResult.type() == CallbackResultType::ExceptionThrown)
-            return Exception { ExistingExceptionError };
+        auto filterResult = acceptNode(*provisionalResult);
+        if (filterResult.hasException()) {
+            m_candidateNode.clear();
+            return filterResult.releaseException();
+        }
 
-        ASSERT(callbackResult.type() == CallbackResultType::Success);
-
-        bool nodeWasAccepted = callbackResult.releaseReturnValue() == NodeFilter::FILTER_ACCEPT;
+        bool nodeWasAccepted = filterResult.returnValue() == NodeFilter::FILTER_ACCEPT;
         if (nodeWasAccepted) {
             m_referenceNode = m_candidateNode;
             result = WTFMove(provisionalResult);
@@ -142,7 +144,7 @@ ExceptionOr<RefPtr<Node>> NodeIterator::previousNode()
     }
 
     m_candidateNode.clear();
-    return WTFMove(result);
+    return result;
 }
 
 void NodeIterator::nodeWillBeRemoved(Node& removedNode)

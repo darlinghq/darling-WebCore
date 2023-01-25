@@ -50,12 +50,20 @@ bool LineWidth::fitsOnLine(bool ignoringTrailingSpace) const
 
 bool LineWidth::fitsOnLineIncludingExtraWidth(float extra) const
 {
-    return currentWidth() + extra <= m_availableWidth;
+    auto adjustedCurrentWidth = currentWidth() + extra;
+    return adjustedCurrentWidth < m_availableWidth || WTF::areEssentiallyEqual(adjustedCurrentWidth, m_availableWidth);
 }
 
 bool LineWidth::fitsOnLineExcludingTrailingWhitespace(float extra) const
 {
-    return currentWidth() - m_trailingWhitespaceWidth + extra <= m_availableWidth;
+    auto adjustedCurrentWidth = currentWidth() - m_trailingWhitespaceWidth + extra;
+    return adjustedCurrentWidth < m_availableWidth || WTF::areEssentiallyEqual(adjustedCurrentWidth, m_availableWidth);
+}
+
+bool LineWidth::fitsOnLineExcludingTrailingCollapsedWhitespace() const
+{
+    auto adjustedCurrentWidth = currentWidth() - m_trailingCollapsedWhitespaceWidth;
+    return adjustedCurrentWidth < m_availableWidth || WTF::areEssentiallyEqual(adjustedCurrentWidth, m_availableWidth);
 }
 
 void LineWidth::updateAvailableWidth(LayoutUnit replacedHeight)
@@ -76,7 +84,7 @@ static bool newFloatShrinksLine(const FloatingObject& newFloat, const RenderBloc
 
     // initial-letter float always shrinks the first line.
     const auto& style = newFloat.renderer().style();
-    if (isFirstLine && style.styleType() == FIRST_LETTER && !style.initialLetter().isEmpty())
+    if (isFirstLine && style.styleType() == PseudoId::FirstLetter && !style.initialLetter().isEmpty())
         return true;
     return false;
 }
@@ -182,7 +190,7 @@ void LineWidth::wrapNextToShapeOutside(bool isFirstLine)
 
         ++newLineTop;
     }
-    updateLineDimension(newLineTop, newLineWidth, newLineLeft, newLineRight);
+    updateLineDimension(newLineTop, LayoutUnit(newLineWidth), LayoutUnit(newLineLeft), LayoutUnit(newLineRight));
 }
 
 void LineWidth::fitBelowFloats(bool isFirstLine)
@@ -212,7 +220,7 @@ void LineWidth::fitBelowFloats(bool isFirstLine)
             break;
     }
 
-    updateLineDimension(lastFloatLogicalBottom, newLineWidth, newLineLeft, newLineRight);
+    updateLineDimension(lastFloatLogicalBottom, LayoutUnit(newLineWidth), LayoutUnit(newLineLeft), LayoutUnit(newLineRight));
 }
 
 void LineWidth::setTrailingWhitespaceWidth(float collapsedWhitespace, float borderPaddingMargin)
@@ -226,21 +234,16 @@ void LineWidth::computeAvailableWidthFromLeftAndRight()
     m_availableWidth = std::max<float>(0, m_right - m_left) + m_overhangWidth;
 }
 
-bool LineWidth::fitsOnLineExcludingTrailingCollapsedWhitespace() const
-{
-    return currentWidth() - m_trailingCollapsedWhitespaceWidth <= m_availableWidth;
-}
-
 IndentTextOrNot requiresIndent(bool isFirstLine, bool isAfterHardLineBreak, const RenderStyle& style)
 {
     IndentTextOrNot shouldIndentText = DoNotIndentText;
     if (isFirstLine)
         shouldIndentText = IndentText;
 #if ENABLE(CSS3_TEXT)
-    else if (isAfterHardLineBreak && style.textIndentLine() == TextIndentEachLine)
+    else if (isAfterHardLineBreak && style.textIndentLine() == TextIndentLine::EachLine)
         shouldIndentText = IndentText;
 
-    if (style.textIndentType() == TextIndentHanging)
+    if (style.textIndentType() == TextIndentType::Hanging)
         shouldIndentText = shouldIndentText == IndentText ? DoNotIndentText : IndentText;
 #else
     UNUSED_PARAM(isAfterHardLineBreak);

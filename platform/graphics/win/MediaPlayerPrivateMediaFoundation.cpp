@@ -34,43 +34,15 @@
 #include "HostWindow.h"
 #include "NotImplemented.h"
 #if USE(CAIRO)
+#include "CairoOperations.h"
 #include "PlatformContextCairo.h"
+#include <cairo.h>
 #endif
-#include <wtf/SoftLinking.h>
 
 #if USE(MEDIA_FOUNDATION)
 
 #include <wtf/MainThread.h>
 #include <wtf/NeverDestroyed.h>
-#include <wtf/text/win/WCharStringExtras.h>
-
-SOFT_LINK_LIBRARY(Mf);
-SOFT_LINK_OPTIONAL(Mf, MFCreateSourceResolver, HRESULT, STDAPICALLTYPE, (IMFSourceResolver**));
-SOFT_LINK_OPTIONAL(Mf, MFCreateMediaSession, HRESULT, STDAPICALLTYPE, (IMFAttributes*, IMFMediaSession**));
-SOFT_LINK_OPTIONAL(Mf, MFCreateTopology, HRESULT, STDAPICALLTYPE, (IMFTopology**));
-SOFT_LINK_OPTIONAL(Mf, MFCreateTopologyNode, HRESULT, STDAPICALLTYPE, (MF_TOPOLOGY_TYPE, IMFTopologyNode**));
-SOFT_LINK_OPTIONAL(Mf, MFGetService, HRESULT, STDAPICALLTYPE, (IUnknown*, REFGUID, REFIID, LPVOID*));
-SOFT_LINK_OPTIONAL(Mf, MFCreateAudioRendererActivate, HRESULT, STDAPICALLTYPE, (IMFActivate**));
-SOFT_LINK_OPTIONAL(Mf, MFCreateVideoRendererActivate, HRESULT, STDAPICALLTYPE, (HWND, IMFActivate**));
-SOFT_LINK_OPTIONAL(Mf, MFCreateSampleGrabberSinkActivate, HRESULT, STDAPICALLTYPE, (IMFMediaType*, IMFSampleGrabberSinkCallback*, IMFActivate**));
-SOFT_LINK_OPTIONAL(Mf, MFGetSupportedMimeTypes, HRESULT, STDAPICALLTYPE, (PROPVARIANT*));
-
-SOFT_LINK_LIBRARY(Mfplat);
-SOFT_LINK_OPTIONAL(Mfplat, MFStartup, HRESULT, STDAPICALLTYPE, (ULONG, DWORD));
-SOFT_LINK_OPTIONAL(Mfplat, MFShutdown, HRESULT, STDAPICALLTYPE, ());
-SOFT_LINK_OPTIONAL(Mfplat, MFCreateMemoryBuffer, HRESULT, STDAPICALLTYPE, (DWORD, IMFMediaBuffer**));
-SOFT_LINK_OPTIONAL(Mfplat, MFCreateSample, HRESULT, STDAPICALLTYPE, (IMFSample**));
-SOFT_LINK_OPTIONAL(Mfplat, MFCreateMediaType, HRESULT, STDAPICALLTYPE, (IMFMediaType**));
-SOFT_LINK_OPTIONAL(Mfplat, MFFrameRateToAverageTimePerFrame, HRESULT, STDAPICALLTYPE, (UINT32, UINT32, UINT64*));
-
-SOFT_LINK_LIBRARY(evr);
-SOFT_LINK_OPTIONAL(evr, MFCreateVideoSampleFromSurface, HRESULT, STDAPICALLTYPE, (IUnknown*, IMFSample**));
-
-SOFT_LINK_LIBRARY(Dxva2);
-SOFT_LINK_OPTIONAL(Dxva2, DXVA2CreateDirect3DDeviceManager9, HRESULT, STDAPICALLTYPE, (UINT*, IDirect3DDeviceManager9**));
-
-SOFT_LINK_LIBRARY(D3d9);
-SOFT_LINK_OPTIONAL(D3d9, Direct3DCreate9Ex, HRESULT, STDAPICALLTYPE, (UINT, IDirect3D9Ex**));
 
 // MFSamplePresenterSampleCounter
 // Data type: UINT32
@@ -86,42 +58,56 @@ static const double tenMegahertz = 10000000;
 namespace WebCore {
 
 MediaPlayerPrivateMediaFoundation::MediaPlayerPrivateMediaFoundation(MediaPlayer* player) 
-    : m_player(player)
+    : m_weakThis(makeWeakPtr(this))
+    , m_player(player)
     , m_visible(false)
     , m_loadingProgress(false)
     , m_paused(true)
     , m_hasAudio(false)
     , m_hasVideo(false)
-    , m_preparingToPlay(false)
-    , m_hwndVideo(nullptr)
     , m_volume(1.0)
-    , m_networkState(MediaPlayer::Empty)
-    , m_readyState(MediaPlayer::HaveNothing)
-    , m_weakPtrFactory(this)
+    , m_networkState(MediaPlayer::NetworkState::Empty)
+    , m_readyState(MediaPlayer::ReadyState::HaveNothing)
 {
     createSession();
-    createVideoWindow();
 }
 
 MediaPlayerPrivateMediaFoundation::~MediaPlayerPrivateMediaFoundation()
 {
     notifyDeleted();
-    destroyVideoWindow();
     endSession();
 }
 
+class MediaPlayerFactoryMediaFoundation final : public MediaPlayerFactory {
+private:
+    MediaPlayerEnums::MediaEngineIdentifier identifier() const final { return MediaPlayerEnums::MediaEngineIdentifier::MediaFoundation; };
+
+    std::unique_ptr<MediaPlayerPrivateInterface> createMediaEnginePlayer(MediaPlayer* player) const final
+    {
+        return makeUnique<MediaPlayerPrivateMediaFoundation>(player);
+    }
+
+    void getSupportedTypes(HashSet<String, ASCIICaseInsensitiveHash>& types) const final
+    {
+        return MediaPlayerPrivateMediaFoundation::getSupportedTypes(types);
+    }
+
+    MediaPlayer::SupportsType supportsTypeAndCodecs(const MediaEngineSupportParameters& parameters) const final
+    {
+        return MediaPlayerPrivateMediaFoundation::supportsType(parameters);
+    }
+};
+
 void MediaPlayerPrivateMediaFoundation::registerMediaEngine(MediaEngineRegistrar registrar)
 {
-    if (isAvailable()) {
-        registrar([](MediaPlayer* player) { return std::make_unique<MediaPlayerPrivateMediaFoundation>(player); },
-            getSupportedTypes, supportsType, 0, 0, 0, 0);
-    }
+    if (isAvailable())
+        registrar(makeUnique<MediaPlayerFactoryMediaFoundation>());
 }
 
 bool MediaPlayerPrivateMediaFoundation::isAvailable() 
 {
-    notImplemented();
-    return true;
+    static bool isMediaFoundationAvailable = LoadLibrary(L"mf.dll");
+    return isMediaFoundationAvailable;
 }
 
 static const HashSet<String, ASCIICaseInsensitiveHash>& mimeTypeCache()
@@ -133,18 +119,15 @@ static const HashSet<String, ASCIICaseInsensitiveHash>& mimeTypeCache()
 
     cachedTypes.get().add(String("video/mp4"));
 
-    if (!MFGetSupportedMimeTypesPtr())
-        return cachedTypes;
-
     PROPVARIANT propVarMimeTypeArray;
     PropVariantInit(&propVarMimeTypeArray);
 
-    HRESULT hr = MFGetSupportedMimeTypesPtr()(&propVarMimeTypeArray);
+    HRESULT hr = MFGetSupportedMimeTypes(&propVarMimeTypeArray);
 
     if (SUCCEEDED(hr)) {
         CALPWSTR mimeTypeArray = propVarMimeTypeArray.calpwstr;
         for (unsigned i = 0; i < mimeTypeArray.cElems; i++)
-            cachedTypes.get().add(nullTerminatedWCharToString(mimeTypeArray.pElems[i]));
+            cachedTypes.get().add(mimeTypeArray.pElems[i]);
     }
 
     PropVariantClear(&propVarMimeTypeArray);
@@ -160,12 +143,12 @@ void MediaPlayerPrivateMediaFoundation::getSupportedTypes(HashSet<String, ASCIIC
 MediaPlayer::SupportsType MediaPlayerPrivateMediaFoundation::supportsType(const MediaEngineSupportParameters& parameters)
 {
     if (parameters.type.isEmpty())
-        return MediaPlayer::IsNotSupported;
+        return MediaPlayer::SupportsType::IsNotSupported;
 
     if (mimeTypeCache().contains(parameters.type.containerType()))
-        return MediaPlayer::IsSupported;
+        return MediaPlayer::SupportsType::IsSupported;
 
-    return MediaPlayer::IsNotSupported;
+    return MediaPlayer::SupportsType::IsNotSupported;
 }
 
 void MediaPlayerPrivateMediaFoundation::load(const String& url)
@@ -177,9 +160,9 @@ void MediaPlayerPrivateMediaFoundation::load(const String& url)
 
     startCreateMediaSource(url);
 
-    m_networkState = MediaPlayer::Loading;
+    m_networkState = MediaPlayer::NetworkState::Loading;
     m_player->networkStateChanged();
-    m_readyState = MediaPlayer::HaveNothing;
+    m_readyState = MediaPlayer::ReadyState::HaveNothing;
     m_player->readyStateChanged();
 }
 
@@ -188,20 +171,9 @@ void MediaPlayerPrivateMediaFoundation::cancelLoad()
     notImplemented();
 }
 
-void MediaPlayerPrivateMediaFoundation::prepareToPlay()
-{
-    // We call startSession() to start buffering video data.
-    // When we have received enough data, we pause, so that we don't actually start the playback.
-    ASSERT(m_paused);
-    ASSERT(!m_preparingToPlay);
-    m_preparingToPlay = startSession();
-}
-
 void MediaPlayerPrivateMediaFoundation::play()
 {
     m_paused = !startSession();
-
-    m_preparingToPlay = false;
 }
 
 void MediaPlayerPrivateMediaFoundation::pause()
@@ -240,8 +212,7 @@ void MediaPlayerPrivateMediaFoundation::setVisible(bool visible)
 
 bool MediaPlayerPrivateMediaFoundation::seeking() const
 {
-    // We assume seeking is immediately complete.
-    return false;
+    return m_seeking;
 }
 
 void MediaPlayerPrivateMediaFoundation::seek(float time)
@@ -252,17 +223,18 @@ void MediaPlayerPrivateMediaFoundation::seek(float time)
     propVariant.hVal.QuadPart = static_cast<__int64>(time * tenMegahertz);
     
     HRESULT hr = m_mediaSession->Start(&GUID_NULL, &propVariant);
-    ASSERT(SUCCEEDED(hr));
+    ASSERT_UNUSED(hr, SUCCEEDED(hr));
     PropVariantClear(&propVariant);
 
-    m_player->timeChanged();
+    m_seeking = true;
+    m_sessionEnded = false;
 }
 
 void MediaPlayerPrivateMediaFoundation::setRate(float rate)
 {
     COMPtr<IMFRateControl> rateControl;
 
-    HRESULT hr = MFGetServicePtr()(m_mediaSession.get(), MF_RATE_CONTROL_SERVICE, IID_IMFRateControl, (void**)&rateControl);
+    HRESULT hr = MFGetService(m_mediaSession.get(), MF_RATE_CONTROL_SERVICE, IID_IMFRateControl, (void**)&rateControl);
 
     if (!SUCCEEDED(hr))
         return;
@@ -291,10 +263,28 @@ float MediaPlayerPrivateMediaFoundation::duration() const
 
 float MediaPlayerPrivateMediaFoundation::currentTime() const
 {
-    if (!m_presenter)
-        return 0.0f;
+    if (m_sessionEnded)
+        return duration();
+    if (!m_mediaSession)
+        return 0;
+    COMPtr<IMFClock> clock;
+    HRESULT hr = m_mediaSession->GetClock(&clock);
+    if (FAILED(hr))
+        return 0;
 
-    return m_presenter->currentTime();
+    LONGLONG clockTime;
+    MFTIME systemTime;
+    hr = clock->GetCorrelatedTime(0, &clockTime, &systemTime);
+    if (FAILED(hr))
+        return 0;
+
+    // clockTime is in 100 nanoseconds, we need to convert to seconds.
+    float currentTime = clockTime / tenMegahertz;
+
+    if (currentTime > m_maxTimeLoaded)
+        m_maxTimeLoaded = currentTime;
+
+    return currentTime;
 }
 
 bool MediaPlayerPrivateMediaFoundation::paused() const
@@ -304,16 +294,13 @@ bool MediaPlayerPrivateMediaFoundation::paused() const
 
 bool MediaPlayerPrivateMediaFoundation::setAllChannelVolumes(float volume)
 {
-    if (!MFGetServicePtr())
-        return false;
-
     COMPtr<IMFAudioStreamVolume> audioVolume;
-    if (!SUCCEEDED(MFGetServicePtr()(m_mediaSession.get(), MR_STREAM_VOLUME_SERVICE, __uuidof(IMFAudioStreamVolume), (void **)&audioVolume)))
+    if (!SUCCEEDED(MFGetService(m_mediaSession.get(), MR_STREAM_VOLUME_SERVICE, __uuidof(IMFAudioStreamVolume), (void **)&audioVolume)))
         return false;
 
     UINT32 channelsCount;
     HRESULT hr = audioVolume->GetChannelCount(&channelsCount);
-    ASSERT(SUCCEEDED(hr));
+    ASSERT_UNUSED(hr, SUCCEEDED(hr));
 
     Vector<float> volumes(channelsCount, volume);
     return SUCCEEDED(audioVolume->SetAllVolumes(channelsCount, volumes.data()));
@@ -323,11 +310,6 @@ void MediaPlayerPrivateMediaFoundation::setVolume(float volume)
 {
     if (setAllChannelVolumes(volume))
         m_volume = volume;
-}
-
-bool MediaPlayerPrivateMediaFoundation::supportsMuting() const
-{
-    return true;
 }
 
 void MediaPlayerPrivateMediaFoundation::setMuted(bool muted)
@@ -352,9 +334,9 @@ float MediaPlayerPrivateMediaFoundation::maxTimeSeekable() const
 
 std::unique_ptr<PlatformTimeRanges> MediaPlayerPrivateMediaFoundation::buffered() const
 { 
-    auto ranges = std::make_unique<PlatformTimeRanges>();
-    if (m_presenter && m_presenter->maxTimeLoaded() > 0)
-        ranges->add(MediaTime::zeroTime(), MediaTime::createWithDouble(m_presenter->maxTimeLoaded()));
+    auto ranges = makeUnique<PlatformTimeRanges>();
+    if (maxTimeLoaded() > 0)
+        ranges->add(MediaTime::zeroTime(), MediaTime::createWithDouble(maxTimeLoaded()));
     return ranges;
 }
 
@@ -366,46 +348,12 @@ bool MediaPlayerPrivateMediaFoundation::didLoadingProgress() const
 void MediaPlayerPrivateMediaFoundation::setSize(const IntSize& size)
 {
     m_size = size;
-
-    auto videoDisplay = this->videoDisplay();
-    if (!videoDisplay)
-        return;
-
-    IntPoint positionInWindow(m_lastPaintRect.location());
-
-    FrameView* view = nullptr;
-    float deviceScaleFactor = 1.0f;
-    if (m_player && m_player->cachedResourceLoader() && m_player->cachedResourceLoader()->document()) {
-        view = m_player->cachedResourceLoader()->document()->view();
-        deviceScaleFactor = m_player->cachedResourceLoader()->document()->deviceScaleFactor();
-    }
-
-    LayoutPoint scrollPosition;
-    if (view) {
-        scrollPosition = view->scrollPositionForFixedPosition();
-        positionInWindow = view->convertToContainingWindow(IntPoint(m_lastPaintRect.location()));
-    }
-
-    positionInWindow.move(-scrollPosition.x().toInt(), -scrollPosition.y().toInt());
-
-    int x = positionInWindow.x() * deviceScaleFactor;
-    int y = positionInWindow.y() * deviceScaleFactor;
-    int w = m_size.width() * deviceScaleFactor;
-    int h = m_size.height() * deviceScaleFactor;
-
-    if (m_hwndVideo)
-        ::MoveWindow(m_hwndVideo, x, y, w, h, FALSE);
-
-    RECT rc = { 0, 0, w, h };
-    videoDisplay->SetVideoPosition(nullptr, &rc);
 }
 
 void MediaPlayerPrivateMediaFoundation::paint(GraphicsContext& context, const FloatRect& rect)
 {
-    if (context.paintingDisabled() || !m_player->visible())
+    if (context.paintingDisabled() || !m_visible)
         return;
-
-    m_lastPaintRect = rect;
 
     if (m_presenter)
         m_presenter->paintCurrentFrame(context, rect);
@@ -413,19 +361,16 @@ void MediaPlayerPrivateMediaFoundation::paint(GraphicsContext& context, const Fl
 
 bool MediaPlayerPrivateMediaFoundation::createSession()
 {
-    if (!MFStartupPtr() || !MFCreateMediaSessionPtr())
+    if (FAILED(MFStartup(MF_VERSION, MFSTARTUP_FULL)))
         return false;
 
-    if (FAILED(MFStartupPtr()(MF_VERSION, MFSTARTUP_FULL)))
-        return false;
-
-    if (FAILED(MFCreateMediaSessionPtr()(nullptr, &m_mediaSession)))
+    if (FAILED(MFCreateMediaSession(nullptr, &m_mediaSession)))
         return false;
 
     // Get next event.
     AsyncCallback* callback = new AsyncCallback(this, true);
     HRESULT hr = m_mediaSession->BeginGetEvent(callback, nullptr);
-    ASSERT(SUCCEEDED(hr));
+    ASSERT_UNUSED(hr, SUCCEEDED(hr));
 
     return true;
 }
@@ -454,25 +399,19 @@ bool MediaPlayerPrivateMediaFoundation::endSession()
         m_mediaSession = nullptr;
     }
 
-    if (!MFShutdownPtr())
-        return false;
-
-    HRESULT hr = MFShutdownPtr()();
-    ASSERT(SUCCEEDED(hr));
+    HRESULT hr = MFShutdown();
+    ASSERT_UNUSED(hr, SUCCEEDED(hr));
 
     return true;
 }
 
 bool MediaPlayerPrivateMediaFoundation::startCreateMediaSource(const String& url)
 {
-    if (!MFCreateSourceResolverPtr())
-        return false;
-
-    if (FAILED(MFCreateSourceResolverPtr()(&m_sourceResolver)))
+    if (FAILED(MFCreateSourceResolver(&m_sourceResolver)))
         return false;
 
     COMPtr<IUnknown> cancelCookie;
-    Vector<wchar_t> urlSource = stringToNullTerminatedWChar(url);
+    Vector<wchar_t> urlSource = url.wideCharacters();
 
     AsyncCallback* callback = new AsyncCallback(this, false);
 
@@ -488,8 +427,18 @@ bool MediaPlayerPrivateMediaFoundation::endCreatedMediaSource(IMFAsyncResult* as
     COMPtr<IUnknown> source;
 
     HRESULT hr = m_sourceResolver->EndCreateObjectFromURL(asyncResult, &objectType, &source);
-    if (FAILED(hr))
+    if (FAILED(hr)) {
+        callOnMainThread([this, weakPtr = m_weakThis, hr] {
+            if (!weakPtr)
+                return;
+            if (hr == MF_E_UNSUPPORTED_BYTESTREAM_TYPE)
+                m_networkState = MediaPlayer::NetworkState::FormatError;
+            else
+                m_networkState = MediaPlayer::NetworkState::NetworkError;
+            m_player->networkStateChanged();
+        });
         return false;
+    }
 
     hr = source->QueryInterface(IID_PPV_ARGS(&m_mediaSource));
     if (FAILED(hr))
@@ -498,7 +447,7 @@ bool MediaPlayerPrivateMediaFoundation::endCreatedMediaSource(IMFAsyncResult* as
     hr = asyncResult->GetStatus();
     m_loadingProgress = SUCCEEDED(hr);
 
-    callOnMainThread([weakPtr = m_weakPtrFactory.createWeakPtr()] {
+    callOnMainThread([weakPtr = m_weakThis] {
         if (!weakPtr)
             return;
         weakPtr->onCreatedMediaSource();
@@ -525,9 +474,24 @@ bool MediaPlayerPrivateMediaFoundation::endGetEvent(IMFAsyncResult* asyncResult)
     if (FAILED(hr))
         return false;
 
+    HRESULT status;
+    hr = event->GetStatus(&status);
+    if (FAILED(hr))
+        return false;
+
+    if (status == MF_E_TOPO_CODEC_NOT_FOUND) {
+        callOnMainThread([this, weakPtr = m_weakThis] {
+            if (!weakPtr)
+                return;
+            m_networkState = MediaPlayer::NetworkState::FormatError;
+            m_player->networkStateChanged();
+        });
+        return false;
+    }
+
     switch (mediaEventType) {
     case MESessionTopologySet: {
-        callOnMainThread([weakPtr = m_weakPtrFactory.createWeakPtr()] {
+        callOnMainThread([weakPtr = m_weakThis] {
             if (!weakPtr)
                 return;
             weakPtr->onTopologySet();
@@ -535,8 +499,17 @@ bool MediaPlayerPrivateMediaFoundation::endGetEvent(IMFAsyncResult* asyncResult)
         break;
     }
 
+    case MESessionStarted: {
+        callOnMainThread([weakPtr = m_weakThis] {
+            if (!weakPtr)
+                return;
+            weakPtr->onSessionStarted();
+        });
+        break;
+    }
+
     case MEBufferingStarted: {
-        callOnMainThread([weakPtr = m_weakPtrFactory.createWeakPtr()] {
+        callOnMainThread([weakPtr = m_weakThis] {
             if (!weakPtr)
                 return;
             weakPtr->onBufferingStarted();
@@ -545,7 +518,7 @@ bool MediaPlayerPrivateMediaFoundation::endGetEvent(IMFAsyncResult* asyncResult)
     }
 
     case MEBufferingStopped: {
-        callOnMainThread([weakPtr = m_weakPtrFactory.createWeakPtr()] {
+        callOnMainThread([weakPtr = m_weakThis] {
             if (!weakPtr)
                 return;
             weakPtr->onBufferingStopped();
@@ -554,7 +527,7 @@ bool MediaPlayerPrivateMediaFoundation::endGetEvent(IMFAsyncResult* asyncResult)
     }
 
     case MESessionEnded: {
-        callOnMainThread([weakPtr = m_weakPtrFactory.createWeakPtr()] {
+        callOnMainThread([weakPtr = m_weakThis] {
             if (!weakPtr)
                 return;
             weakPtr->onSessionEnded();
@@ -565,11 +538,14 @@ bool MediaPlayerPrivateMediaFoundation::endGetEvent(IMFAsyncResult* asyncResult)
     case MEMediaSample:
         break;
 
-    case MEError: {
-        HRESULT status = S_OK;
-        event->GetStatus(&status);
-        break;
-    }
+    case MEError:
+        callOnMainThread([this, weakPtr = m_weakThis] {
+            if (!weakPtr)
+                return;
+            m_networkState = MediaPlayer::NetworkState::DecodeError;
+            m_player->networkStateChanged();
+        });
+        return false;
     }
 
     if (mediaEventType != MESessionClosed) {
@@ -587,11 +563,8 @@ bool MediaPlayerPrivateMediaFoundation::endGetEvent(IMFAsyncResult* asyncResult)
 
 bool MediaPlayerPrivateMediaFoundation::createTopologyFromSource()
 {
-    if (!MFCreateTopologyPtr())
-        return false;
-
     // Create a new topology.
-    if (FAILED(MFCreateTopologyPtr()(&m_topology)))
+    if (FAILED(MFCreateTopology(&m_topology)))
         return false;
 
     // Create the presentation descriptor for the media source.
@@ -648,64 +621,14 @@ bool MediaPlayerPrivateMediaFoundation::addBranchToPartialTopology(int stream)
     return true;
 }
 
-LRESULT CALLBACK MediaPlayerPrivateMediaFoundation::VideoViewWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+HWND MediaPlayerPrivateMediaFoundation::hostWindow()
 {
-    return DefWindowProc(hWnd, message, wParam, lParam);
-}
-
-LPCWSTR MediaPlayerPrivateMediaFoundation::registerVideoWindowClass()
-{
-    const LPCWSTR kVideoWindowClassName = L"WebVideoWindowClass";
-
-    static bool haveRegisteredWindowClass = false;
-    if (haveRegisteredWindowClass)
-        return kVideoWindowClassName;
-
-    haveRegisteredWindowClass = true;
-
-    WNDCLASSEX wcex;
-
-    wcex.cbSize = sizeof(WNDCLASSEX);
-
-    wcex.style = CS_DBLCLKS;
-    wcex.lpfnWndProc = VideoViewWndProc;
-    wcex.cbClsExtra = 0;
-    wcex.cbWndExtra = 0;
-    wcex.hInstance = nullptr;
-    wcex.hIcon = nullptr;
-    wcex.hCursor = ::LoadCursor(0, IDC_ARROW);
-    wcex.hbrBackground = nullptr;
-    wcex.lpszMenuName = nullptr;
-    wcex.lpszClassName = kVideoWindowClassName;
-    wcex.hIconSm = nullptr;
-
-    if (RegisterClassEx(&wcex))
-        return kVideoWindowClassName;
-
-    return nullptr;
-}
-
-void MediaPlayerPrivateMediaFoundation::createVideoWindow()
-{
-    HWND hWndParent = nullptr;
-    FrameView* view = nullptr;
-    if (!m_player || !m_player->cachedResourceLoader() || !m_player->cachedResourceLoader()->document())
-        return;
-    view = m_player->cachedResourceLoader()->document()->view();
-    if (!view || !view->hostWindow())
-        return;
-    hWndParent = view->hostWindow()->platformPageClient();
-
-    m_hwndVideo = CreateWindowEx(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, registerVideoWindowClass(), 0, WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
-        0, 0, 0, 0, hWndParent, 0, 0, 0);
-}
-
-void MediaPlayerPrivateMediaFoundation::destroyVideoWindow()
-{
-    if (m_hwndVideo) {
-        DestroyWindow(m_hwndVideo);
-        m_hwndVideo = nullptr;
+    if (m_player && m_player->cachedResourceLoader() && !m_player->cachedResourceLoader()->document()) {
+        auto* view = m_player->cachedResourceLoader()->document()->view();
+        if (view && view->hostWindow() && view->hostWindow()->platformPageClient())
+            return view->hostWindow()->platformPageClient();
     }
+    return GetDesktopWindow();
 }
 
 void MediaPlayerPrivateMediaFoundation::invalidateFrameView()
@@ -750,9 +673,6 @@ void MediaPlayerPrivateMediaFoundation::setNaturalSize(const FloatSize& size)
 
 bool MediaPlayerPrivateMediaFoundation::createOutputNode(COMPtr<IMFStreamDescriptor> sourceSD, COMPtr<IMFTopologyNode>& node)
 {
-    if (!MFCreateTopologyNodePtr() || !MFCreateAudioRendererActivatePtr() || !MFCreateVideoRendererActivatePtr())
-        return false;
-
     if (!sourceSD)
         return false;
 
@@ -771,23 +691,23 @@ bool MediaPlayerPrivateMediaFoundation::createOutputNode(COMPtr<IMFStreamDescrip
         return false;
 
     // Create a downstream node.
-    if (FAILED(MFCreateTopologyNodePtr()(MF_TOPOLOGY_OUTPUT_NODE, &node)))
+    if (FAILED(MFCreateTopologyNode(MF_TOPOLOGY_OUTPUT_NODE, &node)))
         return false;
 
     // Create an IMFActivate object for the renderer, based on the media type.
     COMPtr<IMFActivate> rendererActivate;
     if (MFMediaType_Audio == guidMajorType) {
         // Create the audio renderer.
-        if (FAILED(MFCreateAudioRendererActivatePtr()(&rendererActivate)))
+        if (FAILED(MFCreateAudioRendererActivate(&rendererActivate)))
             return false;
         m_hasAudio = true;
     } else if (MFMediaType_Video == guidMajorType) {
         // Create the video renderer.
-        if (FAILED(MFCreateVideoRendererActivatePtr()(nullptr, &rendererActivate)))
+        if (FAILED(MFCreateVideoRendererActivate(nullptr, &rendererActivate)))
             return false;
 
         m_presenter = new CustomVideoPresenter(this);
-        m_presenter->SetVideoWindow(m_hwndVideo);
+        m_presenter->SetVideoWindow(hostWindow());
         if (FAILED(rendererActivate->SetUnknown(MF_ACTIVATE_CUSTOM_VIDEO_PRESENTER_ACTIVATE, static_cast<IMFActivate*>(m_presenter.get()))))
             return false;
         m_hasVideo = true;
@@ -803,14 +723,11 @@ bool MediaPlayerPrivateMediaFoundation::createOutputNode(COMPtr<IMFStreamDescrip
 
 bool MediaPlayerPrivateMediaFoundation::createSourceStreamNode(COMPtr<IMFStreamDescriptor> sourceSD, COMPtr<IMFTopologyNode>& node)
 {
-    if (!MFCreateTopologyNodePtr())
-        return false;
-
     if (!m_mediaSource || !m_sourcePD || !sourceSD)
         return false;
 
     // Create the source-stream node.
-    HRESULT hr = MFCreateTopologyNodePtr()(MF_TOPOLOGY_SOURCESTREAM_NODE, &node);
+    HRESULT hr = MFCreateTopologyNode(MF_TOPOLOGY_SOURCESTREAM_NODE, &node);
     if (FAILED(hr))
         return false;
 
@@ -834,13 +751,10 @@ bool MediaPlayerPrivateMediaFoundation::createSourceStreamNode(COMPtr<IMFStreamD
 
 void MediaPlayerPrivateMediaFoundation::updateReadyState()
 {
-    if (!MFGetServicePtr())
-        return;
-
     COMPtr<IPropertyStore> prop;
 
     // Get the property store from the media session.
-    HRESULT hr = MFGetServicePtr()(m_mediaSession.get(), MFNETSOURCE_STATISTICS_SERVICE, IID_PPV_ARGS(&prop));
+    HRESULT hr = MFGetService(m_mediaSession.get(), MFNETSOURCE_STATISTICS_SERVICE, IID_PPV_ARGS(&prop));
 
     if (FAILED(hr))
         return;
@@ -861,15 +775,14 @@ void MediaPlayerPrivateMediaFoundation::updateReadyState()
 
     MediaPlayer::ReadyState oldReadyState = m_readyState;
     if (percentageOfPlaybackBufferFilled >= 100) {
-        m_readyState = MediaPlayer::HaveEnoughData;
-        if (m_preparingToPlay) {
+        m_readyState = MediaPlayer::ReadyState::HaveEnoughData;
+        if (m_paused) {
             pause();
-            m_preparingToPlay = false;
         }
     } else if (percentageOfPlaybackBufferFilled > 0)
-        m_readyState = MediaPlayer::HaveFutureData;
+        m_readyState = MediaPlayer::ReadyState::HaveFutureData;
     else
-        m_readyState = MediaPlayer::HaveCurrentData;
+        m_readyState = MediaPlayer::ReadyState::HaveCurrentData;
 
     if (m_readyState != oldReadyState)
         m_player->readyStateChanged();
@@ -880,10 +793,7 @@ COMPtr<IMFVideoDisplayControl> MediaPlayerPrivateMediaFoundation::videoDisplay()
     if (m_videoDisplay)
         return m_videoDisplay;
 
-    if (!MFGetServicePtr())
-        return nullptr;
-
-    MFGetServicePtr()(m_mediaSession.get(), MR_VIDEO_RENDER_SERVICE, IID_PPV_ARGS(&m_videoDisplay));
+    MFGetService(m_mediaSession.get(), MR_VIDEO_RENDER_SERVICE, IID_PPV_ARGS(&m_videoDisplay));
 
     return m_videoDisplay;
 }
@@ -895,20 +805,17 @@ void MediaPlayerPrivateMediaFoundation::onCreatedMediaSource()
 
     // Set the topology on the media session.
     HRESULT hr = m_mediaSession->SetTopology(0, m_topology.get());
-    ASSERT(SUCCEEDED(hr));
+    ASSERT_UNUSED(hr, SUCCEEDED(hr));
 }
 
 void MediaPlayerPrivateMediaFoundation::onTopologySet()
 {
     // This method is called on the main thread as a result of load() being called.
-
-    if (auto videoDisplay = this->videoDisplay()) {
-        RECT rc = { 0, 0, m_size.width(), m_size.height() };
-        videoDisplay->SetVideoPosition(nullptr, &rc);
-    }
-
     // It is expected that we start buffering data from the network now.
-    prepareToPlay();
+    // We call startSession() to start buffering video data.
+    // When we have received enough data, we pause if it is not
+    // playing, so that we don't actually start the playback.
+    startSession();
 }
 
 void MediaPlayerPrivateMediaFoundation::onBufferingStarted()
@@ -921,13 +828,35 @@ void MediaPlayerPrivateMediaFoundation::onBufferingStopped()
     updateReadyState();
 }
 
+void MediaPlayerPrivateMediaFoundation::onSessionStarted()
+{
+    m_sessionEnded = false;
+    if (m_seeking) {
+        m_seeking = false;
+        if (m_paused)
+            m_mediaSession->Pause();
+        m_player->timeChanged();
+        return;
+    }
+
+    if (auto videoDisplay = this->videoDisplay()) {
+        RECT rc = { 0, 0, m_size.width(), m_size.height() };
+        videoDisplay->SetVideoPosition(nullptr, &rc);
+    }
+
+    updateReadyState();
+}
+
 void MediaPlayerPrivateMediaFoundation::onSessionEnded()
 {
-    m_networkState = MediaPlayer::Loaded;
+    m_sessionEnded = true;
+    m_networkState = MediaPlayer::NetworkState::Loaded;
     m_player->networkStateChanged();
 
     m_paused = true;
     m_player->playbackStateChanged();
+
+    m_player->timeChanged();
 }
 
 MediaPlayerPrivateMediaFoundation::AsyncCallback::AsyncCallback(MediaPlayerPrivateMediaFoundation* mediaPlayer, bool event)
@@ -1012,7 +941,7 @@ MediaPlayerPrivateMediaFoundation::CustomVideoPresenter::CustomVideoPresenter(Me
     m_sourceRect.bottom = 1;
     m_sourceRect.right = 1;
 
-    m_presenterEngine = std::make_unique<Direct3DPresenter>();
+    m_presenterEngine = makeUnique<Direct3DPresenter>();
     if (!m_presenterEngine)
         return;
 
@@ -1481,27 +1410,6 @@ void MediaPlayerPrivateMediaFoundation::CustomVideoPresenter::paintCurrentFrame(
         m_presenterEngine->paintCurrentFrame(context, r);
 }
 
-float MediaPlayerPrivateMediaFoundation::CustomVideoPresenter::currentTime()
-{
-    if (!m_clock)
-        return 0.0f;
-
-    LONGLONG clockTime;
-    MFTIME systemTime;
-    HRESULT hr = m_clock->GetCorrelatedTime(0, &clockTime, &systemTime);
-
-    if (FAILED(hr))
-        return 0.0f;
-
-    // clockTime is in 100 nanoseconds, we need to convert to seconds.
-    float currentTime = clockTime / tenMegahertz;
-
-    if (currentTime > m_maxTimeLoaded)
-        m_maxTimeLoaded = currentTime;
-
-    return currentTime;
-}
-
 bool MediaPlayerPrivateMediaFoundation::CustomVideoPresenter::isActive() const
 {
     return ((m_renderState == RenderStateStarted) || (m_renderState == RenderStatePaused));
@@ -1708,7 +1616,7 @@ HRESULT MediaPlayerPrivateMediaFoundation::CustomVideoPresenter::processInputNot
     
     // Invalidate the video area
     if (m_mediaPlayer) {
-        callOnMainThread([weakPtr = m_mediaPlayer->m_weakPtrFactory.createWeakPtr()] {
+        callOnMainThread([weakPtr = m_mediaPlayer->m_weakThis] {
             if (weakPtr)
                 weakPtr->invalidateFrameView();
         });
@@ -1842,7 +1750,7 @@ HRESULT MediaPlayerPrivateMediaFoundation::CustomVideoPresenter::isMediaTypeSupp
 HRESULT MediaPlayerPrivateMediaFoundation::CustomVideoPresenter::createOptimalVideoType(IMFMediaType* proposedType, IMFMediaType** optimalType)
 {
     COMPtr<IMFMediaType> optimalVideoType;
-    HRESULT hr = MFCreateMediaTypePtr()(&optimalVideoType);
+    HRESULT hr = MFCreateMediaType(&optimalVideoType);
     if (FAILED(hr))
         return hr;
     hr = optimalVideoType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
@@ -2365,7 +2273,7 @@ enum ScheduleEvent {
 void MediaPlayerPrivateMediaFoundation::VideoScheduler::setFrameRate(const MFRatio& fps)
 {
     UINT64 avgTimePerFrame = 0;
-    MFFrameRateToAverageTimePerFramePtr()(fps.Numerator, fps.Denominator, &avgTimePerFrame);
+    MFFrameRateToAverageTimePerFrame(fps.Numerator, fps.Denominator, &avgTimePerFrame);
 
     m_frameDuration = (MFTIME)avgTimePerFrame;
 }
@@ -2688,9 +2596,7 @@ MediaPlayerPrivateMediaFoundation::Direct3DPresenter::Direct3DPresenter()
     createD3DDevice();
 }
 
-MediaPlayerPrivateMediaFoundation::Direct3DPresenter::~Direct3DPresenter()
-{
-}
+MediaPlayerPrivateMediaFoundation::Direct3DPresenter::~Direct3DPresenter() = default;
 
 HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::getService(REFGUID guidService, REFIID riid, void** ppv)
 {
@@ -2744,7 +2650,6 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::setVideoWindow(HWN
     {
         LockHolder locker(m_lock);
         m_hwnd = hwnd;
-        updateDestRect();
     }
 
     return createD3DDevice();
@@ -2758,7 +2663,6 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::setDestinationRect
     LockHolder locker(m_lock);
 
     m_destRect = rcDest;
-    updateDestRect();
 
     return S_OK;
 }
@@ -2788,8 +2692,6 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::createVideoSamples
         releaseResources();
         return hr;
     }
-
-    updateDestRect();
 
     static const int presenterBufferCount = 3;
 
@@ -2869,7 +2771,7 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::presentSample(IMFS
     if (sample) {
         COMPtr<IMFMediaBuffer> buffer;
         hr = sample->GetBufferByIndex(0, &buffer);
-        hr = MFGetServicePtr()(buffer.get(), MR_BUFFER_SERVICE, __uuidof(IDirect3DSurface9), (void**)&surface);
+        hr = MFGetService(buffer.get(), MR_BUFFER_SERVICE, __uuidof(IDirect3DSurface9), (void**)&surface);
     } else if (m_surfaceRepaint) {
         // Use the last surface.
         surface = m_surfaceRepaint;
@@ -2885,6 +2787,7 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::presentSample(IMFS
                 D3DSURFACE_DESC desc;
                 if (SUCCEEDED(surface->GetDesc(&desc)))
                     format = desc.Format;
+                m_memSurface.clear();
                 hr = m_device->CreateOffscreenPlainSurface(width, height, format, D3DPOOL_SYSTEMMEM, &m_memSurface, nullptr);
                 m_width = width;
                 m_height = height;
@@ -2896,13 +2799,6 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::presentSample(IMFS
                 hr = S_OK;
             }
         }
-
-        // Since we want to draw to the GraphicsContext provided in the paint method,
-        // and not draw directly to the window, we skip presenting the swap chain:
-
-        // COMPtr<IDirect3DSwapChain9> swapChain;
-        // hr = surface->GetContainer(__uuidof(IDirect3DSwapChain9), (LPVOID*)&swapChain));
-        // hr = presentSwapChain(swapChain, surface));
 
         // Keep the last surface for repaints.
         m_surfaceRepaint = surface;
@@ -2950,6 +2846,8 @@ void MediaPlayerPrivateMediaFoundation::Direct3DPresenter::paintCurrentFrame(Web
         case D3DFMT_X8R8G8B8:
             cairoFormat = CAIRO_FORMAT_RGB24;
             break;
+        default:
+            break;
         }
 
         ASSERT(cairoFormat != CAIRO_FORMAT_INVALID);
@@ -2960,8 +2858,9 @@ void MediaPlayerPrivateMediaFoundation::Direct3DPresenter::paintCurrentFrame(Web
 
         FloatRect srcRect(0, 0, width, height);
         if (image) {
-            WebCore::PlatformContextCairo* ctxt = context.platformContext();
-            ctxt->drawSurfaceToContext(image, destRect, srcRect, context);
+            ASSERT(context.hasPlatformContext());
+            auto& state = context.state();
+            Cairo::drawSurface(*context.platformContext(), image, destRect, srcRect, state.imageInterpolationQuality, state.alpha, Cairo::ShadowState(state));
             cairo_surface_destroy(image);
         }
 #else
@@ -2976,11 +2875,11 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::initializeD3D()
     ASSERT(!m_direct3D9);
     ASSERT(!m_deviceManager);
 
-    HRESULT hr = Direct3DCreate9ExPtr()(D3D_SDK_VERSION, &m_direct3D9);
+    HRESULT hr = Direct3DCreate9Ex(D3D_SDK_VERSION, &m_direct3D9);
     if (FAILED(hr))
         return hr;
 
-    return DXVA2CreateDirect3DDeviceManager9Ptr()(&m_deviceResetToken, &m_deviceManager);
+    return DXVA2CreateDirect3DDeviceManager9(&m_deviceResetToken, &m_deviceManager);
 }
 
 HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::createD3DDevice()
@@ -3063,15 +2962,7 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::createD3DSample(ID
     if (FAILED(hr))
         return hr;
 
-    return MFCreateVideoSampleFromSurfacePtr()(surface.get(), &videoSample);
-}
-
-HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::presentSwapChain(IDirect3DSwapChain9* swapChain, IDirect3DSurface9* surface)
-{
-    if (!m_hwnd)
-        return MF_E_INVALIDREQUEST;
-
-    return swapChain->Present(nullptr, &m_destRect, m_hwnd, nullptr, 0);
+    return MFCreateVideoSampleFromSurface(surface.get(), &videoSample);
 }
 
 HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::getSwapChainPresentParameters(IMFMediaType* type, D3DPRESENT_PARAMETERS* presentParams)
@@ -3110,25 +3001,6 @@ HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::getSwapChainPresen
 
     if (params.DeviceType != D3DDEVTYPE_HAL)
         presentParams->Flags |= D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
-
-    return S_OK;
-}
-
-HRESULT MediaPlayerPrivateMediaFoundation::Direct3DPresenter::updateDestRect()
-{
-    if (!m_hwnd)
-        return S_FALSE;
-
-    RECT rcView;
-    if (!GetClientRect(m_hwnd, &rcView))
-        return E_FAIL;
-
-    // Clip to the client area of the window.
-    if (m_destRect.right > rcView.right)
-        m_destRect.right = rcView.right;
-
-    if (m_destRect.bottom > rcView.bottom)
-        m_destRect.bottom = rcView.bottom;
 
     return S_OK;
 }

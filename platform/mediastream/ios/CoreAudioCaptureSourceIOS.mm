@@ -23,43 +23,30 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "CoreAudioCaptureSourceIOS.h"
+#import "config.h"
+#import "CoreAudioCaptureSourceIOS.h"
 
-#if ENABLE(MEDIA_STREAM) && PLATFORM(IOS)
+#if ENABLE(MEDIA_STREAM) && PLATFORM(IOS_FAMILY)
 
+#import "AVAudioSessionCaptureDeviceManager.h"
 #import "Logging.h"
 #import <AVFoundation/AVAudioSession.h>
 #import <wtf/MainThread.h>
-#import <wtf/SoftLinking.h>
 
-typedef AVAudioSession AVAudioSessionType;
-
-SOFT_LINK_FRAMEWORK(AVFoundation)
-SOFT_LINK_CLASS(AVFoundation, AVAudioSession)
-
-SOFT_LINK_POINTER(AVFoundation, AVAudioSessionInterruptionNotification, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVAudioSessionInterruptionTypeKey, NSString *)
-SOFT_LINK_POINTER(AVFoundation, AVAudioSessionMediaServicesWereResetNotification, NSString *)
-
-#define AVAudioSession getAVAudioSessionClass()
-#define AVAudioSessionInterruptionNotification getAVAudioSessionInterruptionNotification()
-#define AVAudioSessionInterruptionTypeKey getAVAudioSessionInterruptionTypeKey()
-#define AVAudioSessionMediaServicesWereResetNotification getAVAudioSessionMediaServicesWereResetNotification()
+#import <pal/cocoa/AVFoundationSoftLink.h>
 
 using namespace WebCore;
 
 @interface WebCoreAudioCaptureSourceIOSListener : NSObject {
-    CoreAudioCaptureSourceIOS* _callback;
+    CoreAudioCaptureSourceFactoryIOS* _callback;
 }
 
 - (void)invalidate;
-- (void)handleInterruption:(NSNotification*)notification;
 - (void)sessionMediaServicesWereReset:(NSNotification*)notification;
 @end
 
 @implementation WebCoreAudioCaptureSourceIOSListener
-- (id)initWithCallback:(CoreAudioCaptureSourceIOS*)callback
+- (id)initWithCallback:(CoreAudioCaptureSourceFactoryIOS*)callback
 {
     self = [super init];
     if (!self)
@@ -68,9 +55,8 @@ using namespace WebCore;
     _callback = callback;
 
     NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
-    AVAudioSessionType* session = [AVAudioSession sharedInstance];
+    AVAudioSession* session = [PAL::getAVAudioSessionClass() sharedInstance];
 
-    [center addObserver:self selector:@selector(handleInterruption:) name:AVAudioSessionInterruptionNotification object:session];
     [center addObserver:self selector:@selector(sessionMediaServicesWereReset:) name:AVAudioSessionMediaServicesWereResetNotification object:session];
 
     return self;
@@ -80,30 +66,6 @@ using namespace WebCore;
 {
     _callback = nullptr;
     [[NSNotificationCenter defaultCenter] removeObserver:self];
-}
-
-- (void)handleInterruption:(NSNotification*)notification
-{
-    ASSERT(_callback);
-    if (!_callback)
-        return;
-
-    if ([[notification.userInfo valueForKey:AVAudioSessionInterruptionTypeKey] intValue] == AVAudioSessionInterruptionTypeBegan) {
-        _callback->beginInterruption();
-        return;
-    }
-
-    if ([[notification.userInfo valueForKey:AVAudioSessionInterruptionTypeKey] intValue] == AVAudioSessionInterruptionTypeEnded) {
-        NSError *error = nil;
-        [[AVAudioSession sharedInstance] setActive:YES error:&error];
-
-#if !LOG_DISABLED
-        if (error)
-            LOG(Media, "-[WebCoreAudioCaptureSourceIOSListener handleInterruption] (%p) - error = %s", self, [[error localizedDescription] UTF8String]);
-#endif
-
-        _callback->endInterruption();
-    }
 }
 
 - (void)sessionMediaServicesWereReset:(NSNotification*)notification
@@ -122,18 +84,47 @@ using namespace WebCore;
 
 namespace WebCore {
 
-CoreAudioCaptureSourceIOS::CoreAudioCaptureSourceIOS(const String& deviceID, const String& label)
-    : CoreAudioCaptureSource(deviceID, label, 0)
-    , m_listener(adoptNS([[WebCoreAudioCaptureSourceIOSListener alloc] initWithCallback:this]))
+CoreAudioCaptureSourceFactoryIOS::CoreAudioCaptureSourceFactoryIOS()
+    : m_listener(adoptNS([[WebCoreAudioCaptureSourceIOSListener alloc] initWithCallback:this]))
 {
+    AudioSession::sharedSession().addInterruptionObserver(*this);
 }
 
-CoreAudioCaptureSourceIOS::~CoreAudioCaptureSourceIOS()
+CoreAudioCaptureSourceFactoryIOS::~CoreAudioCaptureSourceFactoryIOS()
 {
+    AudioSession::sharedSession().removeInterruptionObserver(*this);
     [m_listener invalidate];
     m_listener = nullptr;
 }
 
+CoreAudioCaptureSourceFactory& CoreAudioCaptureSourceFactory::singleton()
+{
+    static NeverDestroyed<CoreAudioCaptureSourceFactoryIOS> factory;
+    return factory.get();
 }
 
-#endif // ENABLE(MEDIA_STREAM) && PLATFORM(IOS)
+void CoreAudioCaptureSourceFactoryIOS::addExtensiveObserver(ExtensiveObserver& observer)
+{
+    m_observers.add(observer);
+    AVAudioSessionCaptureDeviceManager::singleton().enableAllDevicesQuery();
+}
+
+void CoreAudioCaptureSourceFactoryIOS::removeExtensiveObserver(ExtensiveObserver& observer)
+{
+    m_observers.remove(observer);
+    if (m_observers.computesEmpty())
+        AVAudioSessionCaptureDeviceManager::singleton().disableAllDevicesQuery();
+}
+
+CaptureSourceOrError CoreAudioCaptureSourceFactoryIOS::createAudioCaptureSource(const CaptureDevice& device, String&& hashSalt, const MediaConstraints* constraints)
+{
+    // We enable exhaustive query to be sure to start capture with the right device.
+    // FIXME: We should stop the auxiliary session after starting capture.
+    if (m_observers.computesEmpty())
+        AVAudioSessionCaptureDeviceManager::singleton().enableAllDevicesQuery();
+    return CoreAudioCaptureSource::create(String { device.persistentId() }, WTFMove(hashSalt), constraints);
+}
+
+}
+
+#endif // ENABLE(MEDIA_STREAM) && PLATFORM(IOS_FAMILY)

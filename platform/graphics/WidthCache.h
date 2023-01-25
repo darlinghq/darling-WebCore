@@ -106,7 +106,6 @@ private:
     struct SmallStringKeyHashTraits : WTF::SimpleClassHashTraits<SmallStringKey> {
         static const bool hasIsEmptyValueFunction = true;
         static bool isEmptyValue(const SmallStringKey& key) { return key.isHashTableEmptyValue(); }
-        static const bool needsDestruction = false;
         static const int minimumTableSize = 16;
     };
 
@@ -124,7 +123,7 @@ public:
         if (MemoryPressureHandler::singleton().isUnderMemoryPressure())
             return nullptr;
 
-        if (static_cast<unsigned>(text.length()) > SmallStringKey::capacity())
+        if (text.length() > SmallStringKey::capacity())
             return nullptr;
 
         if (m_countdown > 0) {
@@ -150,7 +149,7 @@ public:
         // If we allow tabs and a tab occurs inside a word, the width of the word varies based on its position on the line.
         if (run.allowTabs())
             return nullptr;
-        if (static_cast<unsigned>(run.length()) > SmallStringKey::capacity())
+        if (run.length() > SmallStringKey::capacity())
             return nullptr;
 
         if (m_countdown > 0) {
@@ -211,7 +210,7 @@ private:
     }
 
     typedef HashMap<SmallStringKey, float, SmallStringKeyHash, SmallStringKeyHashTraits> Map;
-    typedef HashMap<uint32_t, float, DefaultHash<uint32_t>::Hash, WTF::UnsignedWithZeroKeyHashTraits<uint32_t>> SingleCharMap;
+    typedef HashMap<uint32_t, float, DefaultHash<uint32_t>, WTF::UnsignedWithZeroKeyHashTraits<uint32_t>> SingleCharMap;
     static const int s_minInterval = -3; // A cache hit pays for about 3 cache misses.
     static const int s_maxInterval = 20; // Sampling at this interval has almost no overhead.
     static const int s_maxSize = 500000; // Just enough to guard against pathological growth.

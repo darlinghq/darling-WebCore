@@ -33,8 +33,13 @@
 #include "StyleProperties.h"
 #include "StyleSheetContents.h"
 #include "StyledElement.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(PropertySetCSSStyleDeclaration);
+WTF_MAKE_ISO_ALLOCATED_IMPL(StyleRuleCSSStyleDeclaration);
+WTF_MAKE_ISO_ALLOCATED_IMPL(InlineCSSStyleDeclaration);
 
 class StyleAttributeMutationScope {
     WTF_MAKE_NONCOPYABLE(StyleAttributeMutationScope);
@@ -99,8 +104,9 @@ public:
         PropertySetCSSStyleDeclaration* localCopyStyleDecl = s_currentDecl;
         s_currentDecl = nullptr;
         s_shouldNotifyInspector = false;
-        if (localCopyStyleDecl->parentElement())
-            InspectorInstrumentation::didInvalidateStyleAttr(localCopyStyleDecl->parentElement()->document(), *localCopyStyleDecl->parentElement());
+
+        if (auto* parentElement = localCopyStyleDecl->parentElement())
+            InspectorInstrumentation::didInvalidateStyleAttr(*parentElement);
     }
 
     void enqueueMutationRecord()
@@ -120,7 +126,7 @@ private:
     static bool s_shouldDeliver;
 
     std::unique_ptr<MutationObserverInterestGroup> m_mutationRecipients;
-    AtomicString m_oldValue;
+    AtomString m_oldValue;
     RefPtr<Element> m_customElement;
 };
 
@@ -199,12 +205,12 @@ String PropertySetCSSStyleDeclaration::getPropertyValue(const String& propertyNa
 String PropertySetCSSStyleDeclaration::getPropertyPriority(const String& propertyName)
 {
     if (isCustomPropertyName(propertyName))
-        return m_propertySet->customPropertyIsImportant(propertyName) ? ASCIILiteral("important") : emptyString();
+        return m_propertySet->customPropertyIsImportant(propertyName) ? "important"_s : emptyString();
 
     CSSPropertyID propertyID = cssPropertyID(propertyName);
     if (!propertyID)
         return String();
-    return m_propertySet->propertyIsImportant(propertyID) ? ASCIILiteral("important") : emptyString();
+    return m_propertySet->propertyIsImportant(propertyID) ? "important"_s : emptyString();
 }
 
 String PropertySetCSSStyleDeclaration::getPropertyShorthand(const String& propertyName)
@@ -226,7 +232,7 @@ bool PropertySetCSSStyleDeclaration::isPropertyImplicit(const String& propertyNa
 ExceptionOr<void> PropertySetCSSStyleDeclaration::setProperty(const String& propertyName, const String& value, const String& priority)
 {
     StyleAttributeMutationScope mutationScope(this);
-    
+
     CSSPropertyID propertyID = cssPropertyID(propertyName);
     if (isCustomPropertyName(propertyName))
         propertyID = CSSPropertyCustom;
@@ -241,15 +247,22 @@ ExceptionOr<void> PropertySetCSSStyleDeclaration::setProperty(const String& prop
         return { };
 
     bool changed;
-    if (propertyID == CSSPropertyCustom)
-        changed = m_propertySet->setCustomProperty(propertyName, value, important, cssParserContext());
-    else
+    if (UNLIKELY(propertyID == CSSPropertyCustom)) {
+        Document* document = nullptr;
+
+        if (parentElement())
+            document = &parentElement()->document();
+        else if (parentStyleSheet())
+            document = parentStyleSheet()->ownerDocument();
+
+        changed = m_propertySet->setCustomProperty(document, propertyName, value, important, cssParserContext());
+    } else
         changed = m_propertySet->setProperty(propertyID, value, important, cssParserContext());
 
     didMutate(changed ? PropertyChanged : NoChanges);
 
     if (changed) {
-        // CSS DOM requires raising SYNTAX_ERR of parsing failed, but this is too dangerous for compatibility,
+        // CSS DOM requires raising SyntaxError of parsing failed, but this is too dangerous for compatibility,
         // see <http://bugs.webkit.org/show_bug.cgi?id=7296>.
         mutationScope.enqueueMutationRecord();
     }
@@ -276,7 +289,7 @@ ExceptionOr<String> PropertySetCSSStyleDeclaration::removeProperty(const String&
 
     if (changed)
         mutationScope.enqueueMutationRecord();
-    return WTFMove(result);
+    return result;
 }
 
 RefPtr<CSSValue> PropertySetCSSStyleDeclaration::getPropertyCSSValueInternal(CSSPropertyID propertyID)
@@ -287,9 +300,14 @@ RefPtr<CSSValue> PropertySetCSSStyleDeclaration::getPropertyCSSValueInternal(CSS
 String PropertySetCSSStyleDeclaration::getPropertyValueInternal(CSSPropertyID propertyID)
 {
     String value = m_propertySet->getPropertyValue(propertyID);
+    CSSPropertyID relatedPropertyID = getRelatedPropertyId(propertyID);
+    String relatedValue = m_propertySet->getPropertyValue(relatedPropertyID);
+        
     if (!value.isEmpty())
         return value;
-
+    if (!relatedValue.isEmpty())
+        return relatedValue;
+    
     return String();
 }
 
@@ -308,7 +326,7 @@ ExceptionOr<bool> PropertySetCSSStyleDeclaration::setPropertyInternal(CSSPropert
     return changed;
 }
 
-DeprecatedCSSOMValue* PropertySetCSSStyleDeclaration::wrapForDeprecatedCSSOM(CSSValue* internalValue)
+RefPtr<DeprecatedCSSOMValue> PropertySetCSSStyleDeclaration::wrapForDeprecatedCSSOM(CSSValue* internalValue)
 {
     if (!internalValue)
         return nullptr;
@@ -316,12 +334,15 @@ DeprecatedCSSOMValue* PropertySetCSSStyleDeclaration::wrapForDeprecatedCSSOM(CSS
     // The map is here to maintain the object identity of the CSSValues over multiple invocations.
     // FIXME: It is likely that the identity is not important for web compatibility and this code should be removed.
     if (!m_cssomValueWrappers)
-        m_cssomValueWrappers = std::make_unique<HashMap<CSSValue*, RefPtr<DeprecatedCSSOMValue>>>();
+        m_cssomValueWrappers = makeUnique<HashMap<CSSValue*, WeakPtr<DeprecatedCSSOMValue>>>();
     
-    RefPtr<DeprecatedCSSOMValue>& clonedValue = m_cssomValueWrappers->add(internalValue, RefPtr<DeprecatedCSSOMValue>()).iterator->value;
-    if (!clonedValue)
-        clonedValue = internalValue->createDeprecatedCSSOMWrapper();
-    return clonedValue.get();
+    auto& clonedValue = m_cssomValueWrappers->add(internalValue, WeakPtr<DeprecatedCSSOMValue>()).iterator->value;
+    if (clonedValue)
+        return clonedValue.get();
+
+    RefPtr<DeprecatedCSSOMValue> wrapper = internalValue->createDeprecatedCSSOMWrapper(*this);
+    clonedValue = makeWeakPtr(wrapper.get());
+    return wrapper;
 }
 
 StyleSheetContents* PropertySetCSSStyleDeclaration::contextStyleSheet() const
@@ -396,7 +417,11 @@ CSSParserContext StyleRuleCSSStyleDeclaration::cssParserContext() const
     if (!styleSheet)
         return PropertySetCSSStyleDeclaration::cssParserContext();
 
-    return styleSheet->parserContext();
+    auto context = styleSheet->parserContext();
+    if (m_parentRule)
+        context.enclosingRuleType = static_cast<StyleRuleType>(m_parentRule->type());
+    
+    return context;
 }
 
 void StyleRuleCSSStyleDeclaration::reattach(MutableStyleProperties& propertySet)
@@ -404,6 +429,13 @@ void StyleRuleCSSStyleDeclaration::reattach(MutableStyleProperties& propertySet)
     m_propertySet->deref();
     m_propertySet = &propertySet;
     m_propertySet->ref();
+}
+
+bool InlineCSSStyleDeclaration::willMutate()
+{
+    if (m_parentElement)
+        InspectorInstrumentation::willInvalidateStyleAttr(*m_parentElement);
+    return true;
 }
 
 void InlineCSSStyleDeclaration::didMutate(MutationType type)

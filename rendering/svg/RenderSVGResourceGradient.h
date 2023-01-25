@@ -21,7 +21,6 @@
 
 #pragma once
 
-#include "Gradient.h"
 #include "ImageBuffer.h"
 #include "RenderSVGResourceContainer.h"
 #include "SVGGradientElement.h"
@@ -30,16 +29,10 @@
 
 namespace WebCore {
 
-struct GradientData {
-    WTF_MAKE_FAST_ALLOCATED;
-public:
-    RefPtr<Gradient> gradient;
-    AffineTransform userspaceTransform;
-};
-
 class GraphicsContext;
 
 class RenderSVGResourceGradient : public RenderSVGResourceContainer {
+    WTF_MAKE_ISO_ALLOCATED(RenderSVGResourceGradient);
 public:
     SVGGradientElement& gradientElement() const { return static_cast<SVGGradientElement&>(RenderSVGResourceContainer::element()); }
 
@@ -53,25 +46,29 @@ public:
 protected:
     RenderSVGResourceGradient(SVGGradientElement&, RenderStyle&&);
 
-    void element() const = delete;
-
-    void addStops(GradientData*, const Vector<Gradient::ColorStop>&) const;
-
-    virtual SVGUnitTypes::SVGUnitType gradientUnits() const = 0;
-    virtual void calculateGradientTransform(AffineTransform&) = 0;
-    virtual bool collectGradientAttributes() = 0;
-    virtual void buildGradient(GradientData*) const = 0;
-
-    GradientSpreadMethod platformSpreadMethodFromSVGType(SVGSpreadMethodType) const;
+    static void addStops(Gradient&, const Gradient::ColorStopVector&, const RenderStyle&);
+    static GradientSpreadMethod platformSpreadMethodFromSVGType(SVGSpreadMethodType);
 
 private:
-    bool m_shouldCollectGradientAttributes : 1;
-    HashMap<RenderObject*, std::unique_ptr<GradientData>> m_gradientMap;
+    void element() const = delete;
+
+    virtual SVGUnitTypes::SVGUnitType gradientUnits() const = 0;
+    virtual AffineTransform gradientTransform() const = 0;
+    virtual bool collectGradientAttributes() = 0;
+    virtual Ref<Gradient> buildGradient(const RenderStyle&) const = 0;
+
+    struct GradientData {
+        RefPtr<Gradient> gradient;
+        AffineTransform userspaceTransform;
+    };
+    HashMap<RenderObject*, GradientData> m_gradientMap;
 
 #if USE(CG)
-    GraphicsContext* m_savedContext;
-    std::unique_ptr<ImageBuffer> m_imageBuffer;
+    GraphicsContext* m_savedContext { nullptr };
+    RefPtr<ImageBuffer> m_imageBuffer;
 #endif
+
+    bool m_shouldCollectGradientAttributes { true };
 };
 
 } // namespace WebCore

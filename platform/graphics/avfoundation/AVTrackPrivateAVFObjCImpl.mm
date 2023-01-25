@@ -23,10 +23,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "AVTrackPrivateAVFObjCImpl.h"
+#import "config.h"
+#import "AVTrackPrivateAVFObjCImpl.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #import "MediaSelectionGroupAVFObjC.h"
 #import <AVFoundation/AVAssetTrack.h>
@@ -35,37 +35,13 @@
 #import <AVFoundation/AVPlayerItem.h>
 #import <AVFoundation/AVPlayerItemTrack.h>
 #import <objc/runtime.h>
-#import <wtf/SoftLinking.h>
+
+#import <pal/cocoa/AVFoundationSoftLink.h>
 
 @class AVMediaSelectionOption;
 @interface AVMediaSelectionOption (WebKitInternal)
 - (id)optionID;
 @end
-
-SOFT_LINK_FRAMEWORK_OPTIONAL(AVFoundation)
-
-SOFT_LINK_CLASS(AVFoundation, AVAssetTrack)
-SOFT_LINK_CLASS(AVFoundation, AVPlayerItem)
-SOFT_LINK_CLASS(AVFoundation, AVPlayerItemTrack)
-SOFT_LINK_CLASS(AVFoundation, AVMediaSelectionGroup)
-SOFT_LINK_CLASS(AVFoundation, AVMediaSelectionOption)
-SOFT_LINK_CLASS(AVFoundation, AVMetadataItem)
-
-SOFT_LINK_POINTER_OPTIONAL(AVFoundation, AVMediaCharacteristicIsMainProgramContent, NSString *)
-SOFT_LINK_POINTER_OPTIONAL(AVFoundation, AVMediaCharacteristicDescribesVideoForAccessibility, NSString *)
-SOFT_LINK_POINTER_OPTIONAL(AVFoundation, AVMediaCharacteristicIsAuxiliaryContent, NSString *)
-SOFT_LINK_POINTER_OPTIONAL(AVFoundation, AVMediaCharacteristicTranscribesSpokenDialogForAccessibility, NSString *)
-SOFT_LINK_POINTER_OPTIONAL(AVFoundation, AVMetadataCommonKeyTitle, NSString *)
-SOFT_LINK_POINTER_OPTIONAL(AVFoundation, AVMetadataKeySpaceCommon, NSString *)
-
-#define AVMetadataItem getAVMetadataItemClass()
-
-#define AVMediaCharacteristicIsMainProgramContent getAVMediaCharacteristicIsMainProgramContent()
-#define AVMediaCharacteristicDescribesVideoForAccessibility getAVMediaCharacteristicDescribesVideoForAccessibility()
-#define AVMediaCharacteristicIsAuxiliaryContent getAVMediaCharacteristicIsAuxiliaryContent()
-#define AVMediaCharacteristicTranscribesSpokenDialogForAccessibility getAVMediaCharacteristicTranscribesSpokenDialogForAccessibility()
-#define AVMetadataCommonKeyTitle getAVMetadataCommonKeyTitle()
-#define AVMetadataKeySpaceCommon getAVMetadataKeySpaceCommon()
 
 namespace WebCore {
 
@@ -177,17 +153,17 @@ int AVTrackPrivateAVFObjCImpl::index() const
     return 0;
 }
 
-AtomicString AVTrackPrivateAVFObjCImpl::id() const
+AtomString AVTrackPrivateAVFObjCImpl::id() const
 {
     if (m_assetTrack)
-        return String::format("%d", [m_assetTrack trackID]);
+        return AtomString::number([m_assetTrack trackID]);
     if (m_mediaSelectionOption)
         return [[m_mediaSelectionOption->avMediaSelectionOption() optionID] stringValue];
     ASSERT_NOT_REACHED();
     return emptyAtom();
 }
 
-AtomicString AVTrackPrivateAVFObjCImpl::label() const
+AtomString AVTrackPrivateAVFObjCImpl::label() const
 {
     NSArray *commonMetadata = nil;
     if (m_assetTrack)
@@ -197,18 +173,18 @@ AtomicString AVTrackPrivateAVFObjCImpl::label() const
     else
         ASSERT_NOT_REACHED();
 
-    NSArray *titles = [AVMetadataItem metadataItemsFromArray:commonMetadata withKey:AVMetadataCommonKeyTitle keySpace:AVMetadataKeySpaceCommon];
+    NSArray *titles = [PAL::getAVMetadataItemClass() metadataItemsFromArray:commonMetadata withKey:AVMetadataCommonKeyTitle keySpace:AVMetadataKeySpaceCommon];
     if (![titles count])
         return emptyAtom();
 
     // If possible, return a title in one of the user's preferred languages.
-    NSArray *titlesForPreferredLanguages = [AVMetadataItem metadataItemsFromArray:titles filteredAndSortedAccordingToPreferredLanguages:[NSLocale preferredLanguages]];
+    NSArray *titlesForPreferredLanguages = [PAL::getAVMetadataItemClass() metadataItemsFromArray:titles filteredAndSortedAccordingToPreferredLanguages:[NSLocale preferredLanguages]];
     if ([titlesForPreferredLanguages count])
         return [[titlesForPreferredLanguages objectAtIndex:0] stringValue];
     return [[titles objectAtIndex:0] stringValue];
 }
 
-AtomicString AVTrackPrivateAVFObjCImpl::language() const
+AtomString AVTrackPrivateAVFObjCImpl::language() const
 {
     if (m_assetTrack)
         return languageForAVAssetTrack(m_assetTrack.get());
@@ -265,4 +241,4 @@ int AVTrackPrivateAVFObjCImpl::trackID() const
 
 }
 
-#endif // ENABLE(VIDEO_TRACK)
+#endif // ENABLE(VIDEO)

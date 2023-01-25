@@ -49,13 +49,13 @@ private:
     bool isAccessibilityScrollbar() const override { return true; }
     LayoutRect elementRect() const override;
     
-    AccessibilityRole roleValue() const override { return ScrollBarRole; }
+    AccessibilityRole roleValue() const override { return AccessibilityRole::ScrollBar; }
     AccessibilityOrientation orientation() const override;
     Document* document() const override;
     bool isEnabled() const override;
     
     // Assumes float [0..1]
-    void setValue(float) override;
+    bool setValue(float) override;
     float valueForRange() const override;
 
     RefPtr<Scrollbar> m_scrollbar;

@@ -36,22 +36,22 @@
 namespace WebCore {
 
 class RadioInputType final : public BaseCheckableInputType {
+    template<typename DowncastedType> friend bool isInvalidInputType(const InputType&, const String&);
 public:
-    explicit RadioInputType(HTMLInputElement& element) : BaseCheckableInputType(element) { }
+    explicit RadioInputType(HTMLInputElement& element) : BaseCheckableInputType(Type::Radio, element) { }
 
 private:
-    const AtomicString& formControlType() const override;
-    bool valueMissing(const String&) const override;
-    String valueMissingText() const override;
-    void handleClickEvent(MouseEvent&) override;
-    void handleKeydownEvent(KeyboardEvent&) override;
-    void handleKeyupEvent(KeyboardEvent&) override;
-    bool isKeyboardFocusable(KeyboardEvent&) const override;
-    bool shouldSendChangeEventAfterCheckedChanged() override;
-    void willDispatchClick(InputElementClickState&) override;
-    void didDispatchClick(Event*, const InputElementClickState&) override;
-    bool isRadioButton() const override;
-    bool matchesIndeterminatePseudoClass() const override;
+    const AtomString& formControlType() const final;
+    bool valueMissing(const String&) const final;
+    String valueMissingText() const final;
+    void handleClickEvent(MouseEvent&) final;
+    ShouldCallBaseEventHandler handleKeydownEvent(KeyboardEvent&) final;
+    void handleKeyupEvent(KeyboardEvent&) final;
+    bool isKeyboardFocusable(KeyboardEvent*) const final;
+    bool shouldSendChangeEventAfterCheckedChanged() final;
+    void willDispatchClick(InputElementClickState&) final;
+    void didDispatchClick(Event&, const InputElementClickState&) final;
+    bool matchesIndeterminatePseudoClass() const final;
 };
 
 } // namespace WebCore

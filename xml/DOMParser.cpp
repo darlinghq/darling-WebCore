@@ -20,15 +20,18 @@
 #include "DOMParser.h"
 
 #include "DOMImplementation.h"
-#include "ExceptionCode.h"
 #include "SecurityOriginPolicy.h"
+#include "Settings.h"
 
 namespace WebCore {
 
 inline DOMParser::DOMParser(Document& contextDocument)
-    : m_contextDocument(contextDocument.createWeakPtr())
+    : m_contextDocument(makeWeakPtr(contextDocument))
+    , m_settings(contextDocument.settings())
 {
 }
+
+DOMParser::~DOMParser() = default;
 
 Ref<DOMParser> DOMParser::create(Document& contextDocument)
 {
@@ -39,7 +42,7 @@ ExceptionOr<Ref<Document>> DOMParser::parseFromString(const String& string, cons
 {
     if (contentType != "text/html" && contentType != "text/xml" && contentType != "application/xml" && contentType != "application/xhtml+xml" && contentType != "image/svg+xml")
         return Exception { TypeError };
-    auto document = DOMImplementation::createDocument(contentType, nullptr, URL { });
+    auto document = DOMImplementation::createDocument(contentType, nullptr, m_settings, URL { });
     if (m_contextDocument)
         document->setContextDocument(*m_contextDocument.get());
     document->setContent(string);
@@ -47,7 +50,7 @@ ExceptionOr<Ref<Document>> DOMParser::parseFromString(const String& string, cons
         document->setURL(m_contextDocument->url());
         document->setSecurityOriginPolicy(m_contextDocument->securityOriginPolicy());
     }
-    return WTFMove(document);
+    return document;
 }
 
 } // namespace WebCore

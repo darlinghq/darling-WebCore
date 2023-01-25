@@ -18,10 +18,13 @@
  * Boston, MA 02110-1301, USA.
  */
 
-interface HTMLFrameSetElement : HTMLElement {
-    [Reflect] attribute DOMString cols;
-    [Reflect] attribute DOMString rows;
+[
+    Exposed=Window
+] interface HTMLFrameSetElement : HTMLElement {
+    [CEReactions=NotNeeded, Reflect] attribute DOMString cols;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString rows;
 
+    // Non-standard
     [NotEnumerable, WindowEventHandler] attribute EventHandler onblur;
     [NotEnumerable, WindowEventHandler] attribute EventHandler onerror;
     [NotEnumerable, WindowEventHandler] attribute EventHandler onfocus;
@@ -33,7 +36,7 @@ interface HTMLFrameSetElement : HTMLElement {
 
     // Non-standard named getter
     // FIXME: This is not in the standard, can we remove this?
-    getter DOMWindow (DOMString name);
+    getter WindowProxy (DOMString name);
 };
 
-HTMLFrameSetElement implements WindowEventHandlers;
+HTMLFrameSetElement includes WindowEventHandlers;

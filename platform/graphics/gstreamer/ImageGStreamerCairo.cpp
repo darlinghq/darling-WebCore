@@ -22,15 +22,14 @@
 
 #if ENABLE(VIDEO) && USE(GSTREAMER)
 
-#include "GStreamerUtilities.h"
+#include "GStreamerCommon.h"
 
 #include <cairo.h>
 #include <gst/gst.h>
 #include <gst/video/gstvideometa.h>
 
 
-using namespace std;
-using namespace WebCore;
+namespace WebCore {
 
 ImageGStreamer::ImageGStreamer(GstSample* sample)
 {
@@ -43,8 +42,14 @@ ImageGStreamer::ImageGStreamer(GstSample* sample)
     // Right now the TextureMapper only supports chromas with one plane
     ASSERT(GST_VIDEO_INFO_N_PLANES(&videoInfo) == 1);
 
+    m_hasAlpha = GST_VIDEO_INFO_HAS_ALPHA(&videoInfo);
+
     GstBuffer* buffer = gst_sample_get_buffer(sample);
-    if (!gst_video_frame_map(&m_videoFrame, &videoInfo, buffer, GST_MAP_READ))
+    if (UNLIKELY(!GST_IS_BUFFER(buffer)))
+        return;
+
+    m_frameMapped = gst_video_frame_map(&m_videoFrame, &videoInfo, buffer, GST_MAP_READ);
+    if (!m_frameMapped)
         return;
 
     unsigned char* bufferData = reinterpret_cast<unsigned char*>(GST_VIDEO_FRAME_PLANE_DATA(&m_videoFrame, 0));
@@ -54,11 +59,7 @@ ImageGStreamer::ImageGStreamer(GstSample* sample)
 
     RefPtr<cairo_surface_t> surface;
     cairo_format_t cairoFormat;
-#if G_BYTE_ORDER == G_LITTLE_ENDIAN
-    cairoFormat = (GST_VIDEO_FRAME_FORMAT(&m_videoFrame) == GST_VIDEO_FORMAT_BGRA) ? CAIRO_FORMAT_ARGB32 : CAIRO_FORMAT_RGB24;
-#else
-    cairoFormat = (GST_VIDEO_FRAME_FORMAT(&m_videoFrame) == GST_VIDEO_FORMAT_ARGB) ? CAIRO_FORMAT_ARGB32 : CAIRO_FORMAT_RGB24;
-#endif
+    cairoFormat = (GST_VIDEO_FRAME_FORMAT(&m_videoFrame) == GST_VIDEO_FORMAT_RGBA) ? CAIRO_FORMAT_ARGB32 : CAIRO_FORMAT_RGB24;
 
     // GStreamer doesn't use premultiplied alpha, but cairo does. So if the video format has an alpha component
     // we need to premultiply it before passing the data to cairo. This needs to be both using gstreamer-gl and not
@@ -72,20 +73,19 @@ ImageGStreamer::ImageGStreamer(GstSample* sample)
 
         for (int x = 0; x < width; x++) {
             for (int y = 0; y < height; y++) {
-#if G_BYTE_ORDER == G_LITTLE_ENDIAN
-                // Video frames use BGRA in little endian.
                 unsigned short alpha = bufferData[3];
-                surfacePixel[0] = (bufferData[0] * alpha + 128) / 255;
+#if G_BYTE_ORDER == G_LITTLE_ENDIAN
+                // Video frames use RGBA in little endian.
+                surfacePixel[0] = (bufferData[2] * alpha + 128) / 255;
                 surfacePixel[1] = (bufferData[1] * alpha + 128) / 255;
-                surfacePixel[2] = (bufferData[2] * alpha + 128) / 255;
+                surfacePixel[2] = (bufferData[0] * alpha + 128) / 255;
                 surfacePixel[3] = alpha;
 #else
-                // Video frames use ARGB in big endian.
-                unsigned short alpha = bufferData[0];
+                // Video frames use RGBA in big endian.
                 surfacePixel[0] = alpha;
-                surfacePixel[1] = (bufferData[1] * alpha + 128) / 255;
-                surfacePixel[2] = (bufferData[2] * alpha + 128) / 255;
-                surfacePixel[3] = (bufferData[3] * alpha + 128) / 255;
+                surfacePixel[1] = (bufferData[0] * alpha + 128) / 255;
+                surfacePixel[2] = (bufferData[1] * alpha + 128) / 255;
+                surfacePixel[3] = (bufferData[2] * alpha + 128) / 255;
 #endif
                 bufferData += 4;
                 surfacePixel += 4;
@@ -111,6 +111,10 @@ ImageGStreamer::~ImageGStreamer()
 
     // We keep the buffer memory mapped until the image is destroyed because the internal
     // cairo_surface_t was created using cairo_image_surface_create_for_data().
-    gst_video_frame_unmap(&m_videoFrame);
+    if (m_frameMapped)
+        gst_video_frame_unmap(&m_videoFrame);
 }
+
+} // namespace WebCore
+
 #endif // USE(GSTREAMER)

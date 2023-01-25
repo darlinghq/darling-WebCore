@@ -33,20 +33,20 @@
 
 #include "BlobData.h"
 #include "BlobRegistry.h"
-#include "URLHash.h"
 #include <wtf/HashMap.h>
+#include <wtf/URLHash.h>
 #include <wtf/text/StringHash.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
-class URL;
 class ResourceHandle;
 class ResourceHandleClient;
 class ResourceRequest;
+class ThreadSafeDataBuffer;
 
 // BlobRegistryImpl is not thread-safe. It should only be called from main thread.
-class WEBCORE_EXPORT BlobRegistryImpl final : public BlobRegistry {
+class WEBCORE_EXPORT BlobRegistryImpl {
     WTF_MAKE_FAST_ALLOCATED;
 public:
     virtual ~BlobRegistryImpl();
@@ -54,22 +54,30 @@ public:
     BlobData* getBlobDataFromURL(const URL&) const;
 
     Ref<ResourceHandle> createResourceHandle(const ResourceRequest&, ResourceHandleClient*);
+    void writeBlobToFilePath(const URL& blobURL, const String& path, Function<void(bool success)>&& completionHandler);
 
-private:
     void appendStorageItems(BlobData*, const BlobDataItemList&, long long offset, long long length);
 
-    void registerFileBlobURL(const URL&, Ref<BlobDataFileReference>&&, const String& contentType) override;
-    void registerBlobURL(const URL&, Vector<BlobPart>&&, const String& contentType) override;
-    void registerBlobURL(const URL&, const URL& srcURL) override;
-    void registerBlobURLOptionallyFileBacked(const URL&, const URL& srcURL, RefPtr<BlobDataFileReference>&&, const String& contentType) override;
-    void registerBlobURLForSlice(const URL&, const URL& srcURL, long long start, long long end) override;
-    void unregisterBlobURL(const URL&) override;
-    bool isBlobRegistryImpl() const override { return true; }
+    void registerFileBlobURL(const URL&, Ref<BlobDataFileReference>&&, const String& contentType);
+    void registerBlobURL(const URL&, Vector<BlobPart>&&, const String& contentType);
+    void registerBlobURL(const URL&, const URL& srcURL);
+    void registerBlobURLOptionallyFileBacked(const URL&, const URL& srcURL, RefPtr<BlobDataFileReference>&&, const String& contentType);
+    void registerBlobURLForSlice(const URL&, const URL& srcURL, long long start, long long end);
+    void unregisterBlobURL(const URL&);
 
-    unsigned long long blobSize(const URL&) override;
+    unsigned long long blobSize(const URL&);
 
-    void writeBlobsToTemporaryFiles(const Vector<String>& blobURLs, Function<void (const Vector<String>& filePaths)>&& completionHandler) override;
+    void writeBlobsToTemporaryFiles(const Vector<String>& blobURLs, CompletionHandler<void(Vector<String>&& filePaths)>&&);
 
+    struct BlobForFileWriting {
+        String blobURL;
+        Vector<std::pair<String, ThreadSafeDataBuffer>> filePathsOrDataBuffers;
+    };
+
+    bool populateBlobsForFileWriting(const Vector<String>& blobURLs, Vector<BlobForFileWriting>&);
+    Vector<RefPtr<BlobDataFileReference>> filesInBlob(const URL&) const;
+
+private:
     HashMap<String, RefPtr<BlobData>> m_blobs;
 };
 

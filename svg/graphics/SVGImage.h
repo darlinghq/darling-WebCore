@@ -27,7 +27,7 @@
 #pragma once
 
 #include "Image.h"
-#include "URL.h"
+#include <wtf/URL.h>
 
 namespace WebCore {
 
@@ -42,18 +42,13 @@ class SVGImageForContainer;
 
 class SVGImage final : public Image {
 public:
-    static Ref<SVGImage> create(ImageObserver& observer, const URL& url)
-    {
-        return adoptRef(*new SVGImage(observer, url));
-    }
+    static Ref<SVGImage> create(ImageObserver& observer) { return adoptRef(*new SVGImage(observer)); }
 
     RenderBox* embeddedContentBox() const;
     FrameView* frameView() const;
 
     bool isSVGImage() const final { return true; }
-    FloatSize size() const final { return m_intrinsicSize; }
-
-    void setURL(const URL& url) { m_url = url; }
+    FloatSize size(ImageOrientation = ImageOrientation::FromImage) const final { return m_intrinsicSize; }
 
     bool hasSingleSecurityOrigin() const final;
 
@@ -65,12 +60,16 @@ public:
     void resetAnimation() final;
     bool isAnimating() const final;
 
+    void scheduleStartAnimation();
+
 #if USE(CAIRO)
-    NativeImagePtr nativeImageForCurrentFrame(const GraphicsContext* = nullptr) final;
+    RefPtr<NativeImage> nativeImageForCurrentFrame(const GraphicsContext* = nullptr) final;
 #endif
 #if USE(DIRECT2D)
-    NativeImagePtr nativeImage(const GraphicsContext* = nullptr) final;
+    RefPtr<NativeImage> nativeImage(const GraphicsContext* = nullptr) final;
 #endif
+    
+    Page* internalPage() { return m_page.get(); }
 
 private:
     friend class SVGImageChromeClient;
@@ -94,20 +93,20 @@ private:
     // FIXME: Implement this to be less conservative.
     bool currentFrameKnownToBeOpaque() const final { return false; }
 
-    void dump(TextStream&) const final;
+    void startAnimationTimerFired();
 
-    SVGImage(ImageObserver&, const URL&);
-    ImageDrawResult draw(GraphicsContext&, const FloatRect& fromRect, const FloatRect& toRect, CompositeOperator, BlendMode, DecodingMode, ImageOrientationDescription) final;
-    ImageDrawResult drawForContainer(GraphicsContext&, const FloatSize, float, const FloatRect&, const FloatRect&, CompositeOperator, BlendMode);
-    void drawPatternForContainer(GraphicsContext&, const FloatSize& containerSize, float zoom, const FloatRect& srcRect, const AffineTransform&, const FloatPoint& phase, const FloatSize& spacing,
-        CompositeOperator, const FloatRect&, BlendMode);
+    explicit SVGImage(ImageObserver&);
+    ImageDrawResult draw(GraphicsContext&, const FloatRect& fromRect, const FloatRect& toRect, const ImagePaintingOptions& = { }) final;
+    ImageDrawResult drawForContainer(GraphicsContext&, const FloatSize containerSize, float containerZoom, const URL& initialFragmentURL, const FloatRect& dstRect, const FloatRect& srcRect, const ImagePaintingOptions& = { });
+    void drawPatternForContainer(GraphicsContext&, const FloatSize& containerSize, float containerZoom, const URL& initialFragmentURL, const FloatRect& srcRect, const AffineTransform&, const FloatPoint& phase, const FloatSize& spacing, const FloatRect&, const ImagePaintingOptions& = { });
 
-    SVGSVGElement* rootElement() const;
+    RefPtr<SVGSVGElement> rootElement() const;
 
     std::unique_ptr<SVGImageChromeClient> m_chromeClient;
     std::unique_ptr<Page> m_page;
     FloatSize m_intrinsicSize;
-    URL m_url;
+
+    Timer m_startAnimationTimer;
 };
 
 bool isInSVGImage(const Element*);

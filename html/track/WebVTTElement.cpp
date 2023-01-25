@@ -26,14 +26,17 @@
 #include "config.h"
 #include "WebVTTElement.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "HTMLSpanElement.h"
 #include "RubyElement.h"
 #include "RubyTextElement.h"
 #include "TextTrack.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(WebVTTElement);
 
 static const QualifiedName& nodeTypeToTagName(WebVTTNodeType nodeType)
 {
@@ -85,7 +88,7 @@ Ref<Element> WebVTTElement::cloneElementWithoutAttributesAndChildren(Document& t
 {
     Ref<WebVTTElement> clone = create(static_cast<WebVTTNodeType>(m_webVTTNodeType), targetDocument);
     clone->setLanguage(m_language);
-    return WTFMove(clone);
+    return clone;
 }
 
 Ref<HTMLElement> WebVTTElement::createEquivalentHTMLElement(Document& document)

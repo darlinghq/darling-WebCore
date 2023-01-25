@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009 Apple Inc. All right reserved.
+ * Copyright (C) 2009-2019 Apple Inc. All right reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,19 +32,29 @@
 #include "JSCSSRuleCustom.h"
 #include "JSStyleSheetCustom.h"
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
-bool JSCSSRuleListOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, SlotVisitor& visitor)
+bool JSCSSRuleListOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, SlotVisitor& visitor, const char** reason)
 {
     JSCSSRuleList* jsCSSRuleList = jsCast<JSCSSRuleList*>(handle.slot()->asCell());
-    if (!jsCSSRuleList->hasCustomProperties())
+    if (!jsCSSRuleList->hasCustomProperties(jsCSSRuleList->vm()))
         return false;
-    if (CSSStyleSheet* styleSheet = jsCSSRuleList->wrapped().styleSheet())
+
+    if (CSSStyleSheet* styleSheet = jsCSSRuleList->wrapped().styleSheet()) {
+        if (UNLIKELY(reason))
+            *reason = "CSSStyleSheet is opaque root";
+
         return visitor.containsOpaqueRoot(root(styleSheet));
-    if (CSSRule* cssRule = jsCSSRuleList->wrapped().item(0))
+    }
+    
+    if (CSSRule* cssRule = jsCSSRuleList->wrapped().item(0)) {
+        if (UNLIKELY(reason))
+            *reason = "CSSRule is opaque root";
+
         return visitor.containsOpaqueRoot(root(cssRule));
+    }
     return false;
 }
 

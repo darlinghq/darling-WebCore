@@ -18,23 +18,18 @@
  */
 
 #include "config.h"
-
-#ifdef SKIP_STATIC_CONSTRUCTORS_ON_GCC
-#define WEBCORE_QUALIFIEDNAME_HIDE_GLOBALS 1
-#else
-#define QNAME_DEFAULT_CONSTRUCTOR
-#endif
-
 #include "QualifiedName.h"
+
 #include "QualifiedNameCache.h"
 #include "ThreadGlobalData.h"
 #include <wtf/Assertions.h>
-#include <wtf/NeverDestroyed.h>
-#include <wtf/StaticConstructors.h>
 
 namespace WebCore {
 
-QualifiedName::QualifiedName(const AtomicString& p, const AtomicString& l, const AtomicString& n)
+DEFINE_ALLOCATOR_WITH_HEAP_IDENTIFIER(QualifiedName);
+DEFINE_ALLOCATOR_WITH_HEAP_IDENTIFIER(QualifiedNameQualifiedNameImpl);
+
+QualifiedName::QualifiedName(const AtomString& p, const AtomString& l, const AtomString& n)
     : m_impl(threadGlobalData().qualifiedNameCache().getOrCreate(QualifiedNameComponents { p.impl(), l.impl(), n.isEmpty() ? nullptr : n.impl() }))
 {
 }
@@ -45,7 +40,7 @@ QualifiedName::QualifiedNameImpl::~QualifiedNameImpl()
 }
 
 // Global init routines
-DEFINE_GLOBAL(QualifiedName, anyName, nullAtom(), starAtom(), starAtom())
+LazyNeverDestroyed<const QualifiedName> anyName;
 
 void QualifiedName::init()
 {
@@ -53,9 +48,8 @@ void QualifiedName::init()
     if (initialized)
         return;
 
-    // Use placement new to initialize the globals.
-    AtomicString::init();
-    new (NotNull, (void*)&anyName) QualifiedName(nullAtom(), starAtom(), starAtom());
+    ASSERT_WITH_MESSAGE(WTF::nullAtomData.isConstructed(), "AtomString::init should have been called");
+    anyName.construct(nullAtom(), starAtom(), starAtom());
     initialized = true;
 }
 
@@ -65,7 +59,7 @@ const QualifiedName& nullQName()
     return nullName;
 }
 
-const AtomicString& QualifiedName::localNameUpper() const
+const AtomString& QualifiedName::localNameUpper() const
 {
     if (!m_impl->m_localNameUpper)
         m_impl->m_localNameUpper = m_impl->m_localName.convertToASCIIUppercase();
@@ -76,16 +70,6 @@ unsigned QualifiedName::QualifiedNameImpl::computeHash() const
 {
     QualifiedNameComponents components = { m_prefix.impl(), m_localName.impl(), m_namespace.impl() };
     return hashComponents(components);
-}
-
-void createQualifiedName(void* targetAddress, StringImpl* name, const AtomicString& nameNamespace)
-{
-    new (NotNull, reinterpret_cast<void*>(targetAddress)) QualifiedName(nullAtom(), AtomicString(name), nameNamespace);
-}
-
-void createQualifiedName(void* targetAddress, StringImpl* name)
-{
-    new (NotNull, reinterpret_cast<void*>(targetAddress)) QualifiedName(nullAtom(), AtomicString(name), nullAtom());
 }
 
 }

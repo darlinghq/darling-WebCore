@@ -26,14 +26,15 @@
 
 #pragma once
 
+#include "DocumentMarker.h"
 #include <wtf/Vector.h>
 
 namespace WebCore {
 
 class RenderedDocumentMarker : public DocumentMarker {
 public:
-    explicit RenderedDocumentMarker(const DocumentMarker& marker)
-        : DocumentMarker(marker)
+    explicit RenderedDocumentMarker(DocumentMarker&& marker)
+        : DocumentMarker(WTFMove(marker))
     {
     }
 
@@ -47,10 +48,10 @@ public:
         return false;
     }
 
-    void setUnclippedAbsoluteRects(Vector<FloatRect>& rects)
+    void setUnclippedAbsoluteRects(Vector<FloatRect>&& rects)
     {
         m_isValid = true;
-        m_rects = rects;
+        m_rects = WTFMove(rects);
     }
 
     const Vector<FloatRect, 1>& unclippedAbsoluteRects() const

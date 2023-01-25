@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007, 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2007-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,35 +26,28 @@
 #include "config.h"
 #include "JSDeprecatedCSSOMValue.h"
 
+#include "JSCSSStyleDeclarationCustom.h"
 #include "JSDeprecatedCSSOMPrimitiveValue.h"
 #include "JSDeprecatedCSSOMValueList.h"
 #include "JSNode.h"
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
-bool JSDeprecatedCSSOMValueOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void* context, SlotVisitor& visitor)
+bool JSDeprecatedCSSOMValueOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, SlotVisitor& visitor, const char** reason)
 {
     JSDeprecatedCSSOMValue* jsCSSValue = jsCast<JSDeprecatedCSSOMValue*>(handle.slot()->asCell());
-    if (!jsCSSValue->hasCustomProperties())
+    if (!jsCSSValue->hasCustomProperties(jsCSSValue->vm()))
         return false;
-    DOMWrapperWorld* world = static_cast<DOMWrapperWorld*>(context);
-    void* root = world->m_deprecatedCSSOMValueRoots.get(&jsCSSValue->wrapped());
-    if (!root)
-        return false;
-    return visitor.containsOpaqueRoot(root);
+
+    if (UNLIKELY(reason))
+        *reason = "CSSStyleDeclaration is opaque root";
+
+    return visitor.containsOpaqueRoot(root(&jsCSSValue->wrapped().owner()));
 }
 
-void JSDeprecatedCSSOMValueOwner::finalize(JSC::Handle<JSC::Unknown> handle, void* context)
-{
-    JSDeprecatedCSSOMValue* jsCSSValue = static_cast<JSDeprecatedCSSOMValue*>(handle.slot()->asCell());
-    DOMWrapperWorld& world = *static_cast<DOMWrapperWorld*>(context);
-    world.m_deprecatedCSSOMValueRoots.remove(&jsCSSValue->wrapped());
-    uncacheWrapper(world, &jsCSSValue->wrapped(), jsCSSValue);
-}
-
-JSValue toJSNewlyCreated(ExecState*, JSDOMGlobalObject* globalObject, Ref<DeprecatedCSSOMValue>&& value)
+JSValue toJSNewlyCreated(JSGlobalObject*, JSDOMGlobalObject* globalObject, Ref<DeprecatedCSSOMValue>&& value)
 {
     if (value->isValueList())
         return createWrapper<DeprecatedCSSOMValueList>(globalObject, WTFMove(value));
@@ -63,9 +56,9 @@ JSValue toJSNewlyCreated(ExecState*, JSDOMGlobalObject* globalObject, Ref<Deprec
     return createWrapper<DeprecatedCSSOMValue>(globalObject, WTFMove(value));
 }
 
-JSValue toJS(ExecState* state, JSDOMGlobalObject* globalObject, DeprecatedCSSOMValue& value)
+JSValue toJS(JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject* globalObject, DeprecatedCSSOMValue& value)
 {
-    return wrap(state, globalObject, value);
+    return wrap(lexicalGlobalObject, globalObject, value);
 }
 
 } // namespace WebCore

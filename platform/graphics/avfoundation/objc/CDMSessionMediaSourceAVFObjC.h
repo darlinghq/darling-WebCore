@@ -28,6 +28,7 @@
 
 #include "LegacyCDMSession.h"
 #include "SourceBufferPrivateAVFObjC.h"
+#include <wtf/RefCounted.h>
 #include <wtf/RetainPtr.h>
 #include <wtf/WeakPtr.h>
 
@@ -40,21 +41,24 @@ namespace WebCore {
 
 class CDMPrivateMediaSourceAVFObjC;
 
-class CDMSessionMediaSourceAVFObjC : public CDMSession, public SourceBufferPrivateAVFObjCErrorClient {
+class CDMSessionMediaSourceAVFObjC : public LegacyCDMSession, public SourceBufferPrivateAVFObjCErrorClient, public CanMakeWeakPtr<CDMSessionMediaSourceAVFObjC> {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
-    CDMSessionMediaSourceAVFObjC(CDMPrivateMediaSourceAVFObjC&, CDMSessionClient*);
+    CDMSessionMediaSourceAVFObjC(CDMPrivateMediaSourceAVFObjC&, LegacyCDMSessionClient*);
     virtual ~CDMSessionMediaSourceAVFObjC();
 
     virtual void addParser(AVStreamDataParser*) = 0;
     virtual void removeParser(AVStreamDataParser*) = 0;
 
-    // CDMSession
-    void setClient(CDMSessionClient* client) override { m_client = client; }
+    // LegacyCDMSession
+    void setClient(LegacyCDMSessionClient* client) override { m_client = client; }
     const String& sessionId() const override { return m_sessionId; }
 
     // SourceBufferPrivateAVFObjCErrorClient
     void layerDidReceiveError(AVSampleBufferDisplayLayer *, NSError *, bool& shouldIgnore) override;
+    ALLOW_NEW_API_WITHOUT_GUARDS_BEGIN
     void rendererDidReceiveError(AVSampleBufferAudioRenderer *, NSError *, bool& shouldIgnore) override;
+    ALLOW_NEW_API_WITHOUT_GUARDS_END
 
     void addSourceBuffer(SourceBufferPrivateAVFObjC*);
     void removeSourceBuffer(SourceBufferPrivateAVFObjC*);
@@ -66,14 +70,14 @@ protected:
     String storagePath() const;
 
     CDMPrivateMediaSourceAVFObjC* m_cdm;
-    CDMSessionClient* m_client { nullptr };
+    LegacyCDMSessionClient* m_client { nullptr };
     Vector<RefPtr<SourceBufferPrivateAVFObjC>> m_sourceBuffers;
     RefPtr<Uint8Array> m_certificate;
     String m_sessionId;
     bool m_stopped { false };
 };
 
-inline CDMSessionMediaSourceAVFObjC* toCDMSessionMediaSourceAVFObjC(CDMSession* session)
+inline CDMSessionMediaSourceAVFObjC* toCDMSessionMediaSourceAVFObjC(LegacyCDMSession* session)
 {
     if (!session || (session->type() != CDMSessionTypeAVStreamSession && session->type() != CDMSessionTypeAVContentKeySession))
         return nullptr;

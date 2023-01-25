@@ -23,10 +23,9 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef TextTrackRepresentation_h
-#define TextTrackRepresentation_h
+#pragma once
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "PlatformLayer.h"
 #include <wtf/Forward.h>
@@ -38,26 +37,26 @@ class IntRect;
 
 class TextTrackRepresentationClient {
 public:
-    virtual ~TextTrackRepresentationClient() { }
+    virtual ~TextTrackRepresentationClient() = default;
 
     virtual RefPtr<Image> createTextTrackRepresentationImage() = 0;
     virtual void textTrackRepresentationBoundsChanged(const IntRect&) = 0;
 };
 
 class TextTrackRepresentation {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     static std::unique_ptr<TextTrackRepresentation> create(TextTrackRepresentationClient&);
 
-    virtual ~TextTrackRepresentation() { }
+    virtual ~TextTrackRepresentation() = default;
 
     virtual void update() = 0;
     virtual PlatformLayer* platformLayer() = 0;
     virtual void setContentScale(float) = 0;
     virtual IntRect bounds() const = 0;
+    virtual void setHidden(bool) const = 0;
 };
 
 }
 
 #endif
-
-#endif // TextTrackRepresentation_h

@@ -28,10 +28,11 @@
 #pragma once
 
 #include "ActiveDOMObject.h"
+#include "Document.h"
 #include <wtf/RefPtr.h>
 #include <wtf/ThreadSafeRefCounted.h>
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 #include <wtf/Threading.h>
 #endif
 
@@ -60,19 +61,18 @@ public:
     bool allowDatabaseAccess() const;
     void databaseExceededQuota(const String& name, DatabaseDetails);
 
-    using ActiveDOMObject::scriptExecutionContext;
-    SecurityOriginData securityOrigin() const;
+    Document* document() const { return downcast<Document>(ActiveDOMObject::scriptExecutionContext()); }
+    const SecurityOriginData& securityOrigin() const;
 
     bool isContextThread() const;
 
 private:
-    explicit DatabaseContext(ScriptExecutionContext&);
+    explicit DatabaseContext(Document&);
 
     void stopDatabases() { stopDatabases(nullptr); }
 
     void contextDestroyed() override;
     void stop() override;
-    bool canSuspendForDocumentSuspension() const override;
     const char* activeDOMObjectName() const override { return "DatabaseContext"; }
 
     RefPtr<DatabaseThread> m_databaseThread;

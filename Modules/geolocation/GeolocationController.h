@@ -38,7 +38,7 @@ namespace WebCore {
 
 class GeolocationClient;
 class GeolocationError;
-class GeolocationPosition;
+class GeolocationPositionData;
 
 class GeolocationController : public Supplement<Page>, private ActivityStateChangeObserver {
     WTF_MAKE_FAST_ALLOCATED;
@@ -47,37 +47,39 @@ public:
     GeolocationController(Page&, GeolocationClient&);
     ~GeolocationController();
 
-    void addObserver(Geolocation*, bool enableHighAccuracy);
-    void removeObserver(Geolocation*);
+    void addObserver(Geolocation&, bool enableHighAccuracy);
+    void removeObserver(Geolocation&);
 
-    void requestPermission(Geolocation*);
-    void cancelPermissionRequest(Geolocation*);
+    void requestPermission(Geolocation&);
+    void cancelPermissionRequest(Geolocation&);
 
-    WEBCORE_EXPORT void positionChanged(GeolocationPosition*);
-    WEBCORE_EXPORT void errorOccurred(GeolocationError*);
+    WEBCORE_EXPORT void positionChanged(const Optional<GeolocationPositionData>&);
+    WEBCORE_EXPORT void errorOccurred(GeolocationError&);
 
-    GeolocationPosition* lastPosition();
+    Optional<GeolocationPositionData> lastPosition();
 
     GeolocationClient& client() { return m_client; }
 
     WEBCORE_EXPORT static const char* supplementName();
     static GeolocationController* from(Page* page) { return static_cast<GeolocationController*>(Supplement<Page>::from(page, supplementName())); }
 
+    void revokeAuthorizationToken(const String&);
+
 private:
     Page& m_page;
     GeolocationClient& m_client;
 
-    void activityStateDidChange(ActivityState::Flags oldActivityState, ActivityState::Flags newActivityState) override;
+    void activityStateDidChange(OptionSet<ActivityState::Flag> oldActivityState, OptionSet<ActivityState::Flag> newActivityState) override;
 
-    RefPtr<GeolocationPosition> m_lastPosition;
+    Optional<GeolocationPositionData> m_lastPosition;
 
-    typedef HashSet<RefPtr<Geolocation>> ObserversSet;
+    typedef HashSet<Ref<Geolocation>> ObserversSet;
     // All observers; both those requesting high accuracy and those not.
     ObserversSet m_observers;
     ObserversSet m_highAccuracyObservers;
 
     // While the page is not visible, we pend permission requests.
-    HashSet<RefPtr<Geolocation>> m_pendedPermissionRequest;
+    HashSet<Ref<Geolocation>> m_pendingPermissionRequest;
 };
 
 } // namespace WebCore

@@ -28,6 +28,7 @@
 
 #include "Image.h"
 #include "IntRect.h"
+#include "NotImplemented.h"
 #include <wtf/Assertions.h>
 #include <wtf/NeverDestroyed.h>
 
@@ -151,10 +152,6 @@ Cursor::Cursor(Image* image, const IntPoint& hotSpot)
     : m_type(Custom)
     , m_image(image)
     , m_hotSpot(determineHotSpot(image, hotSpot))
-#if ENABLE(MOUSE_CURSOR_SCALE)
-    , m_imageScaleFactor(1)
-#endif
-    , m_platformCursor(0)
 {
 }
 
@@ -164,21 +161,16 @@ Cursor::Cursor(Image* image, const IntPoint& hotSpot, float scale)
     , m_image(image)
     , m_hotSpot(determineHotSpot(image, hotSpot))
     , m_imageScaleFactor(scale)
-    , m_platformCursor(0)
 {
 }
 #endif
 
 Cursor::Cursor(Type type)
     : m_type(type)
-#if ENABLE(MOUSE_CURSOR_SCALE)
-    , m_imageScaleFactor(1)
-#endif
-    , m_platformCursor(0)
 {
 }
 
-#if !PLATFORM(COCOA)
+#if !HAVE(NSCURSOR)
 
 PlatformCursor Cursor::platformCursor() const
 {
@@ -445,5 +437,19 @@ const Cursor& grabbingCursor()
     static NeverDestroyed<Cursor> c(Cursor::Grabbing);
     return c;
 }
+
+#if !HAVE(NSCURSOR) && !PLATFORM(GTK) && !PLATFORM(WIN)
+void Cursor::ensurePlatformCursor() const
+{
+    notImplemented();
+}
+#endif
+
+#if !HAVE(NSCURSOR)
+void Cursor::setAsPlatformCursor() const
+{
+    notImplemented();
+}
+#endif
 
 } // namespace WebCore

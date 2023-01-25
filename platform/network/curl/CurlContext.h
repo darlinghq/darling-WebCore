@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2013 Apple Inc.  All rights reserved.
- * Copyright (C) 2017 Sony Interactive Entertainment Inc.
+ * Copyright (C) 2018 Sony Interactive Entertainment Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,12 +26,15 @@
 
 #pragma once
 
-#include "URL.h"
+#include "CurlProxySettings.h"
+#include "CurlSSLHandle.h"
 
 #include <wtf/Lock.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/Noncopyable.h>
+#include <wtf/Seconds.h>
 #include <wtf/Threading.h>
+#include <wtf/URL.h>
 
 #if OS(WINDOWS)
 #include <windows.h>
@@ -42,14 +45,11 @@
 
 namespace WebCore {
 
-enum class CurlProxyType {
-    Invalid = -1,
-    HTTP = CURLPROXY_HTTP,
-    Socks4 = CURLPROXY_SOCKS4,
-    Socks4A = CURLPROXY_SOCKS4A,
-    Socks5 = CURLPROXY_SOCKS5,
-    Socks5Hostname = CURLPROXY_SOCKS5_HOSTNAME
-};
+// Values taken from http://www.browserscope.org/ following
+// the rule "Do What Every Other Modern Browser Is Doing".
+const long CurlDefaultMaxConnects { -1 }; // -1 : Does not set CURLMOPT_MAXCONNECTS
+const long CurlDefaultMaxTotalConnections { 17 };
+const long CurlDefaultMaxHostConnections { 6 };
 
 // CurlGlobal --------------------------------------------
 // to make the initialization of libcurl happen before other initialization of CurlContext
@@ -88,73 +88,86 @@ private:
 
 // CurlContext --------------------------------------------
 
+class CurlRequestScheduler;
+class CurlStreamScheduler;
+
 class CurlContext : public CurlGlobal {
     WTF_MAKE_NONCOPYABLE(CurlContext);
-
+    friend NeverDestroyed<CurlContext>;
 public:
-    struct ProxyInfo {
-        String host;
-        unsigned long port;
-        CurlProxyType type { CurlProxyType::Invalid };
-        String username;
-        String password;
-
-        const String url() const;
-    };
-
-    static CurlContext& singleton()
-    {
-        static CurlContext shared;
-        return shared;
-    }
+    WEBCORE_EXPORT static CurlContext& singleton();
 
     virtual ~CurlContext();
 
     const CurlShareHandle& shareHandle() { return m_shareHandle; }
 
-    // Cookie
-    const char* getCookieJarFileName() const { return m_cookieJarFileName.data(); }
-    void setCookieJarFileName(const char* cookieJarFileName) { m_cookieJarFileName = CString(cookieJarFileName); }
-
-    // Certificate
-    const char* getCertificatePath() const { return m_certificatePath.data(); }
-    bool shouldIgnoreSSLErrors() const { return m_ignoreSSLErrors; }
+    CurlRequestScheduler& scheduler() { return *m_scheduler; }
+    CurlStreamScheduler& streamScheduler();
 
     // Proxy
-    const ProxyInfo& proxyInfo() const { return m_proxy; }
-    void setProxyInfo(const ProxyInfo& info) { m_proxy = info;  }
-    void setProxyInfo(const String& host = emptyString(), unsigned long port = 0, CurlProxyType = CurlProxyType::HTTP, const String& username = emptyString(), const String& password = emptyString());
+    const CurlProxySettings& proxySettings() const { return m_proxySettings; }
+    void setProxySettings(CurlProxySettings&& settings) { m_proxySettings = WTFMove(settings); }
+    void setProxyUserPass(const String& user, const String& password) { m_proxySettings.setUserPass(user, password); }
+    void setDefaultProxyAuthMethod() { m_proxySettings.setDefaultAuthMethod(); }
+    void setProxyAuthMethod(long authMethod) { m_proxySettings.setAuthMethod(authMethod); }
+
+    // SSL
+    CurlSSLHandle& sslHandle() { return m_sslHandle; }
+
+    // HTTP/2
+    bool isHttp2Enabled() const;
+
+    // Timeout
+    Seconds dnsCacheTimeout() const { return m_dnsCacheTimeout; }
+    Seconds connectTimeout() const { return m_connectTimeout; }
+    Seconds defaultTimeoutInterval() const { return m_defaultTimeoutInterval; }
 
 #ifndef NDEBUG
     FILE* getLogFile() const { return m_logFile; }
     bool isVerbose() const { return m_verbose; }
 #endif
 
+#if ENABLE(TLS_DEBUG)
+    bool shouldLogTLSKey() const { return !m_tlsKeyLogFilePath.isEmpty(); }
+    const String& tlsKeyLogFilePath() const { return m_tlsKeyLogFilePath; }
+#endif
+
 private:
-    ProxyInfo m_proxy;
-    CString m_cookieJarFileName;
-    CString m_certificatePath;
-    CurlShareHandle m_shareHandle;
-    bool m_ignoreSSLErrors { false };
-
     CurlContext();
-    void initCookieSession();
+    void initShareHandle();
 
+    CurlProxySettings m_proxySettings;
+    CurlShareHandle m_shareHandle;
+    CurlSSLHandle m_sslHandle;
+    std::unique_ptr<CurlRequestScheduler> m_scheduler;
+
+    Seconds m_dnsCacheTimeout { Seconds::fromMinutes(5) };
+    Seconds m_connectTimeout { 30.0 };
+    Seconds m_defaultTimeoutInterval { 60.0 };
 
 #ifndef NDEBUG
     FILE* m_logFile { nullptr };
     bool m_verbose { false };
+#endif
+
+#if ENABLE(TLS_DEBUG)
+    String m_tlsKeyLogFilePath;
 #endif
 };
 
 // CurlMultiHandle --------------------------------------------
 
 class CurlMultiHandle {
+    WTF_MAKE_FAST_ALLOCATED;
     WTF_MAKE_NONCOPYABLE(CurlMultiHandle);
 
 public:
     CurlMultiHandle();
     ~CurlMultiHandle();
+
+    void setMaxConnects(long);
+    void setMaxTotalConnections(long);
+    void setMaxHostConnections(long);
 
     CURLMcode addHandle(CURL*);
     CURLMcode removeHandle(CURL*);
@@ -167,43 +180,76 @@ private:
     CURLM* m_multiHandle { nullptr };
 };
 
+// CurlSList -------------------------------------------------
 
+class CurlSList {
+public:
+    CurlSList() { }
+    ~CurlSList() { clear(); }
+
+    operator struct curl_slist** () { return &m_list; }
+
+    const struct curl_slist* head() const { return m_list; }
+    bool isEmpty() const { return !m_list; }
+    void clear()
+    {
+        if (m_list) {
+            curl_slist_free_all(m_list);
+            m_list = nullptr;
+        }
+    }
+
+    void append(const char* str) { m_list = curl_slist_append(m_list, str); }
+    void append(const String& str) { append(str.latin1().data()); }
+
+private:
+    struct curl_slist* m_list { nullptr };
+};
 
 // CurlHandle -------------------------------------------------
 
+class CertificateInfo;
+class CurlSSLVerifier;
+class HTTPHeaderMap;
+class NetworkLoadMetrics;
+
 class CurlHandle {
+    WTF_MAKE_FAST_ALLOCATED;
     WTF_MAKE_NONCOPYABLE(CurlHandle);
 
 public:
-    enum VerifyPeer {
-        VerifyPeerDisable = 0L,
-        VerifyPeerEnable = 1L
+    enum class VerifyPeer {
+        Disable = 0L,
+        Enable = 1L
     };
 
-    enum VerifyHost {
-        VerifyHostLooseNameCheck = 0,
-        VerifyHostStrictNameCheck = 2
+    enum class VerifyHost {
+        LooseNameCheck = 0,
+        StrictNameCheck = 2
     };
 
     CurlHandle();
-    ~CurlHandle();
+    virtual ~CurlHandle();
 
     CURL* handle() const { return m_handle; }
+    const URL& url() const { return m_url; }
 
     CURLcode perform();
     CURLcode pause(int);
 
+    static const String errorDescription(CURLcode);
+
     void enableShareHandle();
-    void setPrivateData(void* userData);
 
-    void setUrl(const String&);
-    const char* url() const { return m_url; }
+    void setUrl(const URL&);
+    void enableSSLForHost(const String&);
 
-    void clearRequestHeaders();
-    void appendRequestHeader(const String&, const String&);
-    void appendRequestHeader(const String&);
-    void enableRequestHeaders();
+    void appendRequestHeaders(const HTTPHeaderMap&);
+    void appendRequestHeader(const String& name, const String& value);
+    void appendRequestHeader(const String& name);
+    void removeRequestHeader(const String& name);
 
+    void enableHttp();
     void enableHttpGetRequest();
     void enableHttpHeadRequest();
     void enableHttpPostRequest();
@@ -213,45 +259,55 @@ public:
     void setInFileSizeLarge(curl_off_t);
     void setHttpCustomRequest(const String&);
 
+    void enableConnectionOnly();
+
     void enableAcceptEncoding();
     void enableAllowedProtocols();
 
-    void enableFollowLocation();
-    void enableAutoReferer();
+    void setHttpAuthUserPass(const String&, const String&, long authType = CURLAUTH_ANY);
 
-    void enableHttpAuthentication(long);
-    void setHttpAuthUserPass(const String&, const String&);
-
-    void enableCAInfoIfExists();
+    void disableServerTrustEvaluation();
+    void setCACertPath(const char*);
     void setSslVerifyPeer(VerifyPeer);
     void setSslVerifyHost(VerifyHost);
     void setSslCert(const char*);
     void setSslCertType(const char*);
     void setSslKeyPassword(const char*);
-
-    void enableCookieJarIfExists();
-    void setCookieList(const char*);
-    struct curl_slist* getCookieList();
+    void setSslCipherList(const char*);
 
     void enableProxyIfExists();
 
-    void enableTimeout();
+    void setDnsCacheTimeout(Seconds);
+    void setConnectTimeout(Seconds);
+    void setTimeout(Seconds);
 
     // Callback function
     void setHeaderCallbackFunction(curl_write_callback, void*);
     void setWriteCallbackFunction(curl_write_callback, void*);
     void setReadCallbackFunction(curl_read_callback, void*);
     void setSslCtxCallbackFunction(curl_ssl_ctx_callback, void*);
+    void setDebugCallbackFunction(curl_debug_callback, void*);
 
     // Status
-    URL getEffectiveURL();
-    CURLcode getPrimaryPort(long&);
-    CURLcode getResponseCode(long&);
-    CURLcode getContentLenghtDownload(long long&);
-    CURLcode getHttpAuthAvail(long&);
-    CURLcode getTimes(double&, double&, double&, double&);
+    Optional<String> getProxyUrl();
+    Optional<long> getResponseCode();
+    Optional<long> getHttpConnectCode();
+    Optional<long long> getContentLength();
+    Optional<long> getHttpAuthAvail();
+    Optional<long> getProxyAuthAvail();
+    Optional<long> getHttpVersion();
+    Optional<NetworkLoadMetrics> getNetworkLoadMetrics(const WTF::Seconds& domainLookupStart);
+    void addExtraNetworkLoadMetrics(NetworkLoadMetrics&);
+
+    int sslErrors() const;
+    Optional<CertificateInfo> certificateInfo() const;
 
     static long long maxCurlOffT();
+
+    // socket
+    Expected<curl_socket_t, CURLcode> getActiveSocket();
+    CURLcode send(const uint8_t*, size_t, size_t&);
+    CURLcode receive(uint8_t*, size_t, size_t&);
 
 #ifndef NDEBUG
     void enableVerboseIfUsed();
@@ -259,17 +315,18 @@ public:
 #endif
 
 private:
-    void clearUrl();
-    void clearCookieList();
-
+    void enableRequestHeaders();
     static int expectedSizeOfCurlOffT();
+
+    static CURLcode willSetupSslCtxCallback(CURL*, void* sslCtx, void* userData);
+    CURLcode willSetupSslCtx(void* sslCtx);
 
     CURL* m_handle { nullptr };
     char m_errorBuffer[CURL_ERROR_SIZE] { };
 
-    char* m_url { nullptr };
-    struct curl_slist* m_requestHeaders { nullptr };
-    struct curl_slist* m_cookieList { nullptr };
+    URL m_url;
+    CurlSList m_requestHeaders;
+    std::unique_ptr<CurlSSLVerifier> m_sslVerifier;
 };
 
-}
+} // namespace WebCore

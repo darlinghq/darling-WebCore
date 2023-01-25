@@ -31,7 +31,7 @@
 #import "SharedBuffer.h"
 #import <wtf/text/WTFString.h>
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 #import <CoreGraphics/CoreGraphics.h>
 #import <ImageIO/ImageIO.h>
 #import <MobileCoreServices/MobileCoreServices.h>
@@ -74,7 +74,7 @@ Ref<Image> Image::loadPlatformResource(const char *name)
     return Image::nullImage();
 }
 
-RetainPtr<CFDataRef> BitmapImage::tiffRepresentation(const Vector<NativeImagePtr>& nativeImages)
+RetainPtr<CFDataRef> BitmapImage::tiffRepresentation(const Vector<Ref<NativeImage>>& nativeImages)
 {
     // If nativeImages.size() is zero, we know for certain this image doesn't have valid data
     // Even though the call to CGImageDestinationCreateWithData will fail and we'll handle it gracefully,
@@ -83,13 +83,16 @@ RetainPtr<CFDataRef> BitmapImage::tiffRepresentation(const Vector<NativeImagePtr
         return nullptr;
 
     RetainPtr<CFMutableDataRef> data = adoptCF(CFDataCreateMutable(0, 0));
+
+ALLOW_DEPRECATED_DECLARATIONS_BEGIN
     RetainPtr<CGImageDestinationRef> destination = adoptCF(CGImageDestinationCreateWithData(data.get(), kUTTypeTIFF, nativeImages.size(), 0));
+ALLOW_DEPRECATED_DECLARATIONS_END
 
     if (!destination)
         return nullptr;
 
-    for (auto nativeImage : nativeImages)
-        CGImageDestinationAddImage(destination.get(), nativeImage.get(), 0);
+    for (const auto& nativeImage : nativeImages)
+        CGImageDestinationAddImage(destination.get(), nativeImage->platformImage().get(), 0);
 
     CGImageDestinationFinalize(destination.get());
     return data;
@@ -105,9 +108,7 @@ CFDataRef BitmapImage::tiffRepresentation()
         return nullptr;
 
     m_tiffRep = data;
-    return m_tiffRep.get();
-
-    
+    return m_tiffRep.get();    
 }
 
 #if USE(APPKIT)
@@ -120,7 +121,7 @@ NSImage* BitmapImage::nsImage()
     if (!data)
         return nullptr;
     
-    m_nsImage = adoptNS([[NSImage alloc] initWithData:(NSData*)data]);
+    m_nsImage = adoptNS([[NSImage alloc] initWithData:(__bridge NSData *)data]);
     return m_nsImage.get();
 }
 
@@ -130,11 +131,11 @@ RetainPtr<NSImage> BitmapImage::snapshotNSImage()
     if (!nativeImage)
         return nullptr;
 
-    auto data = tiffRepresentation({ nativeImage });
+    auto data = tiffRepresentation({ makeRef(*nativeImage) });
     if (!data)
         return nullptr;
 
-    return adoptNS([[NSImage alloc] initWithData:(NSData*)data.get()]);
+    return adoptNS([[NSImage alloc] initWithData:(__bridge NSData *)data.get()]);
 }
 #endif
 

@@ -29,18 +29,14 @@ namespace WebCore {
 class CachedResourceClient;
 class ResourceTiming;
 class SharedBufferDataView;
-class SubresourceLoader;
 
 class CachedRawResource final : public CachedResource {
 public:
-    CachedRawResource(CachedResourceRequest&&, Type, SessionID);
+    CachedRawResource(CachedResourceRequest&&, Type, const PAL::SessionID&, const CookieJar*);
 
-    // FIXME: AssociatedURLLoader shouldn't be a DocumentThreadableLoader and therefore shouldn't
-    // use CachedRawResource. However, it is, and it needs to be able to defer loading.
-    // This can be fixed by splitting CORS preflighting out of DocumentThreacableLoader.
-    virtual void setDefersLoading(bool);
+    void setDefersLoading(bool);
 
-    virtual void setDataBufferingPolicy(DataBufferingPolicy);
+    void setDataBufferingPolicy(DataBufferingPolicy);
 
     // FIXME: This is exposed for the InspectorInstrumentation for preflights in DocumentThreadableLoader. It's also really lame.
     unsigned long identifier() const { return m_identifier; }
@@ -55,14 +51,14 @@ public:
 
 private:
     void didAddClient(CachedResourceClient&) final;
-    void addDataBuffer(SharedBuffer&) final;
-    void addData(const char* data, unsigned length) final;
-    void finishLoading(SharedBuffer*) final;
+    void updateBuffer(SharedBuffer&) final;
+    void updateData(const char* data, unsigned length) final;
+    void finishLoading(SharedBuffer*, const NetworkLoadMetrics&) final;
 
     bool shouldIgnoreHTTPStatusCodeErrors() const override { return true; }
     void allClientsRemoved() override;
 
-    void redirectReceived(ResourceRequest&, const ResourceResponse&) override;
+    void redirectReceived(ResourceRequest&&, const ResourceResponse&, CompletionHandler<void(ResourceRequest&&)>&&) override;
     void responseReceived(const ResourceResponse&) override;
     bool shouldCacheResponse(const ResourceResponse&) override;
     void didSendData(unsigned long long bytesSent, unsigned long long totalBytesToBeSent) override;
@@ -70,15 +66,16 @@ private:
     void switchClientsToRevalidatedResource() override;
     bool mayTryReplaceEncodedData() const override { return m_allowEncodedDataReplacement; }
 
-    std::optional<SharedBufferDataView> calculateIncrementalDataChunk(const SharedBuffer*) const;
+    Optional<SharedBufferDataView> calculateIncrementalDataChunk(const SharedBuffer*) const;
     void notifyClientsDataWasReceived(const char* data, unsigned length);
-
-#if USE(SOUP)
-    char* getOrCreateReadBuffer(size_t requestedSize, size_t& actualSize) override;
+    
+#if USE(QUICK_LOOK)
+    void previewResponseReceived(const ResourceResponse&) final;
 #endif
 
     unsigned long m_identifier;
     bool m_allowEncodedDataReplacement;
+    bool m_inIncrementalDataNotify { false };
 
     struct RedirectPair {
     public:
@@ -92,7 +89,12 @@ private:
         const ResourceResponse m_redirectResponse;
     };
 
-    Vector<RedirectPair> m_redirectChain;
+    Vector<RedirectPair, 0, CrashOnOverflow, 0> m_redirectChain;
+
+    struct DelayedFinishLoading {
+        RefPtr<SharedBuffer> buffer;
+    };
+    Optional<DelayedFinishLoading> m_delayedFinishLoading;
 };
 
 } // namespace WebCore

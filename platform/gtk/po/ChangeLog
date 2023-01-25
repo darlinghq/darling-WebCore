@@ -1,3 +1,385 @@
+2020-09-18  Rafael Fontenelle  <rafaelff@gnome.org>
+
+        [l10n] [pt_BR] Updated Brazilian Portuguese translation
+        https://bugs.webkit.org/show_bug.cgi?id=216436
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * pt_BR.po:
+
+2020-08-17  Piotr Drąg  <piotrdrag@gmail.com>
+
+        [GTK][l10n] Updated Polish translation of WebKitGTK for 2.30
+        https://bugs.webkit.org/show_bug.cgi?id=215547
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * pl.po:
+
+2020-06-18  Yuri Chornoivan  <yurchor@ukr.net>
+
+        [GTK] [l10n] Updated Ukrainian translation of WebKitGTK
+        https://bugs.webkit.org/show_bug.cgi?id=212844
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * uk.po:
+
+2020-05-20  Yuri Chornoivan  <yurchor@ukr.net>
+
+        [GTK] [l10n] Updated Ukrainian translation of WebKitGTK+
+        https://bugs.webkit.org/show_bug.cgi?id=209798
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * uk.po:
+
+2020-03-05  Piotr Drąg  <piotrdrag@gmail.com>
+
+        [GTK][l10n] Updated Polish translation of WebKitGTK for 2.28
+        https://bugs.webkit.org/show_bug.cgi?id=208410
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * pl.po:
+
+2020-02-17  Yuchen Guo  <egyc@live.com>
+
+        Updated Simplified Chinese translation
+        https://bugs.webkit.org/show_bug.cgi?id=207685
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * zh_CN.po:
+
+2020-01-28  Devin Rousso  <drousso@apple.com>
+
+        Unreviewed, speculative gtk build fix after r255214
+
+        * POTFILES.in:
+        * da.po:
+        * de.po:
+        * es.po:
+        * fr.po:
+        * id.po:
+        * it.po:
+        * pl.po:
+        * pt_BR.po:
+        * sv.po:
+        * uk.po:
+
+2019-11-25  Rafael Fontenelle  <rafaelff@gnome.org>
+
+        [l10n] [pt_BR] Updated Brazilian Portuguese translation
+        https://bugs.webkit.org/show_bug.cgi?id=204564
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * pt_BR.po:
+
+2019-11-25  Yuri Chornoivan  <yurchor@ukr.net>
+
+        [GTK] [l10n] Updated Ukrainian translation of WebKitGTK+
+        https://bugs.webkit.org/show_bug.cgi?id=204057
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * uk.po:
+
+2019-10-15  Carlos Garcia Campos  <cgarcia@igalia.com>
+
+        [GTK][WPE] Add user messages API
+        https://bugs.webkit.org/show_bug.cgi?id=202847
+
+        Reviewed by Adrian Perez de Castro.
+
+        * POTFILES.in: Add new files containing translatable strings.
+
+2019-09-07  Christian Kirbach  <Christian.Kirbach@googlemail.com>
+
+        Updated German translation
+        https://bugs.webkit.org/show_bug.cgi?id=201582
+
+        Rubber-stamped by Adrian Perez de Castro.
+
+        * de.po:
+
+2019-09-09  Rafael Fontenelle  <rafaelff@gnome.org>
+
+        [l10n] [pt_BR] Updated Brazilian Portuguese translation
+        https://bugs.webkit.org/show_bug.cgi?id=201592
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * pt_BR.po:
+
+2019-08-27  Adrian Perez de Castro  <aperez@igalia.com>
+
+        [GTK][l10n] Updated Polish translation of WebKitGTK for 2.26
+        https://bugs.webkit.org/show_bug.cgi?id=201125
+
+        Rubber-stamped by Adrian Perez de Castro. One more string updated.
+
+        * pl.po:
+
+2019-08-27  Yuri Chornoivan  <yurchor@ukr.net>
+
+        [GTK] [l10n] Updated Ukrainian translation of WebKitGTK+
+        https://bugs.webkit.org/show_bug.cgi?id=200858
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * uk.po:
+
+2019-08-27  Piotr Drąg  <piotrdrag@gmail.com>
+
+        [GTK][l10n] Updated Polish translation of WebKitGTK for 2.26
+        https://bugs.webkit.org/show_bug.cgi?id=201125
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * pl.po:
+
+2019-05-25  Rafael Fontenelle  <rafaelff@gnome.org>
+
+        [l10n] [pt_BR] Updated Brazilian Portuguese translation
+        https://bugs.webkit.org/show_bug.cgi?id=198245
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * pt_BR.po:
+
+2019-05-16  Carlos Garcia Campos  <cgarcia@igalia.com>
+
+        [GTK] Need WebKitContextMenuItemType to open emoji picker
+        https://bugs.webkit.org/show_bug.cgi?id=176760
+
+        Reviewed by Michael Catanzaro.
+
+        * POTFILES.in: Add WebKitEmojiChooser.cpp.
+
+2019-04-30  Álvaro Torralba  <donfrutosgomez@gmail.com>
+
+        Update Spanish Translation
+        https://bugs.webkit.org/show_bug.cgi?id=197407
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * es.po:
+
+2019-04-29  Yuri Chornoivan  <yurchor@ukr.net>
+
+        [GTK] [l10n] Updated Ukrainian translation of WebKitGTK+
+        https://bugs.webkit.org/show_bug.cgi?id=197364
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * uk.po:
+
+2019-04-29  scootergrisen  <scootergrisen@gmail.com>
+
+        Add Danish translation
+        https://bugs.webkit.org/show_bug.cgi?id=194850
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * da.po: Added.
+
+2019-04-11  Álvaro Torralba  <donfrutosgomez@gmail.com>
+
+        Updated Spanish translation
+        https://bugs.webkit.org/show_bug.cgi?id=196810
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * es.po:
+
+2019-03-23  Carlos Garcia Campos  <cgarcia@igalia.com>
+
+        [GTK] Remove build time dependency on Geoclue2
+        https://bugs.webkit.org/show_bug.cgi?id=195994
+
+        Reviewed by Michael Catanzaro.
+
+        * POTFILES.in: Add GeoclueGeolocationProvider.cpp.
+
+2019-03-21  Carlos Garcia Campos  <cgarcia@igalia.com>
+
+        [GTK][WPE] Add API to provide geolocation information
+        https://bugs.webkit.org/show_bug.cgi?id=195940
+
+        Reviewed by Michael Catanzaro.
+
+        * POTFILES.in: Add WebKitGeolocationManager.cpp.
+
+2019-03-13  Milo Casagrande <milo@milo.name>
+
+        [l10n] Updated Italian translation of WebKitGTK+
+        https://bugs.webkit.org/show_bug.cgi?id=195620
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * it.po:
+
+2019-03-05  Piotr Drąg  <piotrdrag@gmail.com>
+
+        [GTK][l10n] Updated Polish translation of WebKitGTK for 2.24
+        https://bugs.webkit.org/show_bug.cgi?id=194859
+
+        Rubber-stamped by Carlos Garcia Campos.
+
+        * pl.po:
+
+2019-03-04  Carlos Garcia Campos  <cgarcia@igalia.com>
+
+        Unreviewed. Update POTFILES.in after r239627.
+
+        * POTFILES.in:
+
+2019-02-14  Milo Casagrande  <milo@milo.name>
+
+        [l10n] Updated Italian translation of WebKitGTK+
+        https://bugs.webkit.org/show_bug.cgi?id=194652
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * it.po:
+
+2019-01-24  Carlos Garcia Campos  <cgarcia@igalia.com>
+
+        [GLIB] Expose JavaScriptCore options in GLib public API
+        https://bugs.webkit.org/show_bug.cgi?id=188742
+
+        Reviewed by Michael Catanzaro.
+
+        * POTFILES.in: Add JSCOptions.cpp
+
+2019-01-08  Josef Andersson  <josef.andersson@fripost.org>
+
+        [GTK] Updated Swedish translation
+        https://bugs.webkit.org/show_bug.cgi?id=193257
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * sv.po:
+
+2018-09-14  Carlos Garcia Campos  <cgarcia@igalia.com>
+
+        [GTK] Make script dialogs modal to the current web view only
+        https://bugs.webkit.org/show_bug.cgi?id=189545
+
+        Reviewed by Michael Catanzaro.
+
+        * POTFILES.in:
+
+2018-08-16  Piotr Drąg  <piotrdrag@gmail.com>
+
+        [l10n] Updated Polish translation of WebKitGTK+ for 2.22
+        https://bugs.webkit.org/show_bug.cgi?id=188652
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * pl.po:
+
+2018-08-11  Rafael Fontenelle  <rafaelff@gnome.org>
+
+        [l10n] [pt_BR] Updated Brazilian Portuguese translation
+        https://bugs.webkit.org/show_bug.cgi?id=188482
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * pt_BR.po:
+
+2018-07-02  Yuri Chornoivan  <yurchor@ukr.net>
+
+        [GTK] [l10n] Updated Ukrainian translation of WebKitGTK+
+        https://bugs.webkit.org/show_bug.cgi?id=187231
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * uk.po:
+
+2018-04-08  Daniel Rusek  <mail@asciiwolf.com>
+
+        Updated Czech translation
+        https://bugs.webkit.org/show_bug.cgi?id=184403
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * cs.po:
+
+2018-03-29  Rafael Fontenelle  <rafaelff@gnome.org>
+
+        [l10n] [pt_BR] Updated Brazilian Portuguese translation
+        https://bugs.webkit.org/show_bug.cgi?id=184132
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * pt_BR.po:
+
+2018-03-04  Andika Triwidada  <atriwidada@gnome.org>
+
+        [l10n] Updated Indonesian translation for WebKitGTK+
+        https://bugs.webkit.org/show_bug.cgi?id=183318
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * id.po:
+
+2018-03-03  Michael Catanzaro  <mcatanzaro@igalia.com>
+
+        [GTK] POTFILES.in is out of date
+        https://bugs.webkit.org/show_bug.cgi?id=183313
+
+        Unreviewed, remove WebErrorsGLib.cpp after r229193
+
+        * POTFILES.in:
+
+2018-02-12  Piotr Drąg  <piotrdrag@gmail.com>
+
+        [l10n] Updated Polish translation of WebKitGTK+ for 2.20
+        https://bugs.webkit.org/show_bug.cgi?id=182693
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * pl.po:
+
+2017-12-21  Josef Andersson  <josef.andersson@fripost.org>
+
+        Updated Swedish translation
+        https://bugs.webkit.org/show_bug.cgi?id=180823
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * sv.po:
+
+2017-08-30  Rafael Fontenelle  <rafaelff@gnome.org>
+
+        [l10n] [pt_BR] Updated Brazilian Portuguese translation
+        https://bugs.webkit.org/show_bug.cgi?id=176107
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * pt_BR.po:
+
+2017-08-24  Piotr Drąg  <piotrdrag@gmail.com>
+
+        [l10n] Updated Polish translation of WebKitGTK+ for 2.18
+        https://bugs.webkit.org/show_bug.cgi?id=175720
+
+        Rubber-stamped by Michael Catanzaro.
+
+        * pl.po:
+
+2017-08-07  Carlos Garcia Campos  <cgarcia@igalia.com>
+
+        [GTK] Implement JavaScript dialog methods of API::AutomationSessionClient
+        https://bugs.webkit.org/show_bug.cgi?id=175259
+
+        Reviewed by Michael Catanzaro.
+
+        * POTFILES.in: Add WebKitScriptDialogGtk.cpp.
+
 2017-07-13  Matthew Hanson  <matthew_hanson@apple.com>
 
         Fix the cMake builds (GTK and WPE.)

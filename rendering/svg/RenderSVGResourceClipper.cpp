@@ -29,7 +29,8 @@
 #include "HitTestRequest.h"
 #include "HitTestResult.h"
 #include "IntRect.h"
-#include "RenderObject.h"
+#include "Logging.h"
+#include "RenderSVGText.h"
 #include "RenderStyle.h"
 #include "RenderView.h"
 #include "SVGNames.h"
@@ -37,21 +38,23 @@
 #include "SVGResources.h"
 #include "SVGResourcesCache.h"
 #include "SVGUseElement.h"
+#include <wtf/IsoMallocInlines.h>
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(RenderSVGResourceClipper);
 
 RenderSVGResourceClipper::RenderSVGResourceClipper(SVGClipPathElement& element, RenderStyle&& style)
     : RenderSVGResourceContainer(element, WTFMove(style))
 {
 }
 
-RenderSVGResourceClipper::~RenderSVGResourceClipper()
-{
-}
+RenderSVGResourceClipper::~RenderSVGResourceClipper() = default;
 
 void RenderSVGResourceClipper::removeAllClientsFromCache(bool markForInvalidation)
 {
-    m_clipBoundaries = FloatRect();
+    m_clipBoundaries = { };
     m_clipper.clear();
 
     markAllClientsForInvalidation(markForInvalidation ? LayoutAndBoundariesInvalidation : ParentOnlyInvalidation);
@@ -67,18 +70,22 @@ void RenderSVGResourceClipper::removeClientFromCache(RenderElement& client, bool
 bool RenderSVGResourceClipper::applyResource(RenderElement& renderer, const RenderStyle&, GraphicsContext*& context, OptionSet<RenderSVGResourceMode> resourceMode)
 {
     ASSERT(context);
-    ASSERT_UNUSED(resourceMode, resourceMode == RenderSVGResourceMode::ApplyToDefault);
+    ASSERT_UNUSED(resourceMode, !resourceMode);
 
-    return applyClippingToContext(renderer, renderer.objectBoundingBox(), renderer.repaintRectInLocalCoordinates(), *context);
+    auto repaintRect = renderer.repaintRectInLocalCoordinates();
+    if (repaintRect.isEmpty())
+        return true;
+
+    return applyClippingToContext(renderer, renderer.objectBoundingBox(), *context);
 }
 
 bool RenderSVGResourceClipper::pathOnlyClipping(GraphicsContext& context, const AffineTransform& animatedLocalTransform, const FloatRect& objectBoundingBox)
 {
-    // If the current clip-path gets clipped itself, we have to fallback to masking.
-    if (!style().svgStyle().clipperResource().isEmpty())
+    // If the current clip-path gets clipped itself, we have to fall back to masking.
+    if (style().clipPath())
         return false;
-    WindRule clipRule = RULE_NONZERO;
-    Path clipPath = Path();
+    WindRule clipRule = WindRule::NonZero;
+    Path clipPath;
 
     // If clip-path only contains one visible shape or path, we can use path-based clipping. Invisible
     // shapes don't affect the clipping and can be ignored. If clip-path contains more than one
@@ -86,34 +93,32 @@ bool RenderSVGResourceClipper::pathOnlyClipping(GraphicsContext& context, const 
     // as well as NonZero can cause self-clipping of the elements.
     // See also http://www.w3.org/TR/SVG/painting.html#FillRuleProperty
     for (Node* childNode = clipPathElement().firstChild(); childNode; childNode = childNode->nextSibling()) {
-        RenderObject* renderer = childNode->renderer();
+        auto* renderer = childNode->renderer();
         if (!renderer)
             continue;
-        // Only shapes or paths are supported for direct clipping. We need to fallback to masking for texts.
-        if (renderer->isSVGText())
+        // Only shapes or paths are supported for direct clipping. We need to fall back to masking for texts.
+        if (is<RenderSVGText>(renderer))
             return false;
-        if (!childNode->isSVGElement() || !downcast<SVGElement>(*childNode).isSVGGraphicsElement())
+        if (!is<SVGGraphicsElement>(*childNode))
             continue;
-        SVGGraphicsElement& styled = downcast<SVGGraphicsElement>(*childNode);
-        const RenderStyle& style = renderer->style();
-        if (style.display() == NONE || style.visibility() != VISIBLE)
-             continue;
-        const SVGRenderStyle& svgStyle = style.svgStyle();
-        // Current shape in clip-path gets clipped too. Fallback to masking.
-        if (!svgStyle.clipperResource().isEmpty())
+        auto& style = renderer->style();
+        if (style.display() == DisplayType::None || style.visibility() != Visibility::Visible)
+            continue;
+        // Current shape in clip-path gets clipped too. Fall back to masking.
+        if (style.clipPath())
             return false;
-        // Fallback to masking, if there is more than one clipping path.
-        if (clipPath.isEmpty()) {
-            styled.toClipPath(clipPath);
-            clipRule = svgStyle.clipRule();
-        } else
+        // Fall back to masking if there is more than one clipping path.
+        if (!clipPath.isEmpty())
             return false;
+        clipPath = downcast<SVGGraphicsElement>(*childNode).toClipPath();
+        clipRule = style.svgStyle().clipRule();
     }
+
     // Only one visible shape/path was found. Directly continue clipping and transform the content to userspace if necessary.
     if (clipPathElement().clipPathUnits() == SVGUnitTypes::SVG_UNIT_TYPE_OBJECTBOUNDINGBOX) {
         AffineTransform transform;
-        transform.translate(objectBoundingBox.x(), objectBoundingBox.y());
-        transform.scaleNonUniform(objectBoundingBox.width(), objectBoundingBox.height());
+        transform.translate(objectBoundingBox.location());
+        transform.scale(objectBoundingBox.size());
         clipPath.transform(transform);
     }
 
@@ -127,25 +132,27 @@ bool RenderSVGResourceClipper::pathOnlyClipping(GraphicsContext& context, const 
     return true;
 }
 
-bool RenderSVGResourceClipper::applyClippingToContext(RenderElement& renderer, const FloatRect& objectBoundingBox, const FloatRect& repaintRect, GraphicsContext& context)
+bool RenderSVGResourceClipper::applyClippingToContext(RenderElement& renderer, const FloatRect& objectBoundingBox, GraphicsContext& context)
 {
-    ClipperMaskImage& clipperMaskImage = addRendererToClipper(renderer);
-    bool shouldCreateClipperMaskImage = !clipperMaskImage;
+    ClipperData& clipperData = addRendererToClipper(renderer);
+    
+    LOG_WITH_STREAM(SVG, stream << "RenderSVGResourceClipper " << this << " applyClippingToContext: renderer " << &renderer << " objectBoundingBox " << objectBoundingBox << " (existing image buffer " << clipperData.imageBuffer.get() << ")");
 
     AffineTransform animatedLocalTransform = clipPathElement().animatedLocalTransform();
 
-    if (shouldCreateClipperMaskImage && pathOnlyClipping(context, animatedLocalTransform, objectBoundingBox))
+    if (!clipperData.imageBuffer && pathOnlyClipping(context, animatedLocalTransform, objectBoundingBox))
         return true;
 
     AffineTransform absoluteTransform = SVGRenderingContext::calculateTransformationToOutermostCoordinateSystem(renderer);
-
-    if (shouldCreateClipperMaskImage && !repaintRect.isEmpty()) {
+    if (!clipperData.isValidForGeometry(objectBoundingBox, absoluteTransform)) {
         // FIXME (149469): This image buffer should not be unconditionally unaccelerated. Making it match the context breaks nested clipping, though.
-        clipperMaskImage = SVGRenderingContext::createImageBuffer(repaintRect, absoluteTransform, ColorSpaceSRGB, Unaccelerated);
-        if (!clipperMaskImage)
+        auto maskImage = SVGRenderingContext::createImageBuffer(objectBoundingBox, absoluteTransform, ColorSpace::SRGB, RenderingMode::Unaccelerated, &context);
+        if (!maskImage)
             return false;
 
-        GraphicsContext& maskContext = clipperMaskImage->context();
+        clipperData = { WTFMove(maskImage), objectBoundingBox, absoluteTransform };
+
+        GraphicsContext& maskContext = clipperData.imageBuffer->context();
         maskContext.concatCTM(animatedLocalTransform);
 
         // clipPath can also be clipped by another clipPath.
@@ -155,35 +162,33 @@ bool RenderSVGResourceClipper::applyClippingToContext(RenderElement& renderer, c
         if (resources && (clipper = resources->clipper())) {
             GraphicsContextStateSaver stateSaver(maskContext);
 
-            if (!clipper->applyClippingToContext(*this, objectBoundingBox, repaintRect, maskContext))
+            if (!clipper->applyClippingToContext(*this, objectBoundingBox, maskContext))
                 return false;
 
-            succeeded = drawContentIntoMaskImage(clipperMaskImage, objectBoundingBox);
+            succeeded = drawContentIntoMaskImage(*clipperData.imageBuffer, objectBoundingBox);
             // The context restore applies the clipping on non-CG platforms.
         } else
-            succeeded = drawContentIntoMaskImage(clipperMaskImage, objectBoundingBox);
+            succeeded = drawContentIntoMaskImage(*clipperData.imageBuffer, objectBoundingBox);
 
         if (!succeeded)
-            clipperMaskImage.reset();
+            clipperData = { };
     }
 
-    if (!clipperMaskImage)
+    if (!clipperData.imageBuffer)
         return false;
 
-    SVGRenderingContext::clipToImageBuffer(context, absoluteTransform, repaintRect, clipperMaskImage, shouldCreateClipperMaskImage);
+    SVGRenderingContext::clipToImageBuffer(context, absoluteTransform, objectBoundingBox, clipperData.imageBuffer, true);
     return true;
 }
 
-bool RenderSVGResourceClipper::drawContentIntoMaskImage(const ClipperMaskImage& clipperMaskImage, const FloatRect& objectBoundingBox)
+bool RenderSVGResourceClipper::drawContentIntoMaskImage(ImageBuffer& maskImageBuffer, const FloatRect& objectBoundingBox)
 {
-    ASSERT(clipperMaskImage);
-
-    GraphicsContext& maskContext = clipperMaskImage->context();
+    GraphicsContext& maskContext = maskImageBuffer.context();
 
     AffineTransform maskContentTransformation;
     if (clipPathElement().clipPathUnits() == SVGUnitTypes::SVG_UNIT_TYPE_OBJECTBOUNDINGBOX) {
-        maskContentTransformation.translate(objectBoundingBox.x(), objectBoundingBox.y());
-        maskContentTransformation.scaleNonUniform(objectBoundingBox.width(), objectBoundingBox.height());
+        maskContentTransformation.translate(objectBoundingBox.location());
+        maskContentTransformation.scale(objectBoundingBox.size());
         maskContext.concatCTM(maskContentTransformation);
     }
 
@@ -192,8 +197,8 @@ bool RenderSVGResourceClipper::drawContentIntoMaskImage(const ClipperMaskImage& 
     // - masker/filter not applied when rendering the children
     // - fill is set to the initial fill paint server (solid, black)
     // - stroke is set to the initial stroke paint server (none)
-    PaintBehavior oldBehavior = view().frameView().paintBehavior();
-    view().frameView().setPaintBehavior(oldBehavior | PaintBehaviorRenderingSVGMask);
+    auto oldBehavior = view().frameView().paintBehavior();
+    view().frameView().setPaintBehavior(oldBehavior | PaintBehavior::RenderingSVGMask);
 
     // Draw all clipPath children into a global mask.
     for (auto& child : childrenOfType<SVGElement>(clipPathElement())) {
@@ -205,7 +210,7 @@ bool RenderSVGResourceClipper::drawContentIntoMaskImage(const ClipperMaskImage& 
             return false;
         }
         const RenderStyle& style = renderer->style();
-        if (style.display() == NONE || style.visibility() != VISIBLE)
+        if (style.display() == DisplayType::None || style.visibility() != Visibility::Visible)
             continue;
 
         WindRule newClipRule = style.svgStyle().clipRule();
@@ -226,9 +231,9 @@ bool RenderSVGResourceClipper::drawContentIntoMaskImage(const ClipperMaskImage& 
         maskContext.setFillRule(newClipRule);
 
         // In the case of a <use> element, we obtained its renderere above, to retrieve its clipRule.
-        // We have to pass the <use> renderer itself to renderSubtreeToImageBuffer() to apply it's x/y/transform/etc. values when rendering.
-        // So if isUseElement is true, refetch the childNode->renderer(), as renderer got overriden above.
-        SVGRenderingContext::renderSubtreeToImageBuffer(clipperMaskImage.get(), isUseElement ? *child.renderer() : *renderer, maskContentTransformation);
+        // We have to pass the <use> renderer itself to renderSubtreeToContext() to apply it's x/y/transform/etc. values when rendering.
+        // So if isUseElement is true, refetch the childNode->renderer(), as renderer got overridden above.
+        SVGRenderingContext::renderSubtreeToContext(maskContext, isUseElement ? *child.renderer() : *renderer, maskContentTransformation);
     }
 
     view().frameView().setPaintBehavior(oldBehavior);
@@ -245,16 +250,16 @@ void RenderSVGResourceClipper::calculateClipContentRepaintRect()
         if (!renderer->isSVGShape() && !renderer->isSVGText() && !childNode->hasTagName(SVGNames::useTag))
             continue;
         const RenderStyle& style = renderer->style();
-        if (style.display() == NONE || style.visibility() != VISIBLE)
+        if (style.display() == DisplayType::None || style.visibility() != Visibility::Visible)
              continue;
         m_clipBoundaries.unite(renderer->localToParentTransform().mapRect(renderer->repaintRectInLocalCoordinates()));
     }
     m_clipBoundaries = clipPathElement().animatedLocalTransform().mapRect(m_clipBoundaries);
 }
 
-ClipperMaskImage& RenderSVGResourceClipper::addRendererToClipper(const RenderObject& object)
+RenderSVGResourceClipper::ClipperData& RenderSVGResourceClipper::addRendererToClipper(const RenderObject& object)
 {
-    return m_clipper.add(&object, ClipperMaskImage()).iterator->value;
+    return m_clipper.add(&object, ClipperData()).iterator->value;
 }
 
 bool RenderSVGResourceClipper::hitTestClipContent(const FloatRect& objectBoundingBox, const FloatPoint& nodeAtPoint)
@@ -263,14 +268,16 @@ bool RenderSVGResourceClipper::hitTestClipContent(const FloatRect& objectBoundin
     if (!SVGRenderSupport::pointInClippingArea(*this, point))
         return false;
 
+    SVGHitTestCycleDetectionScope hitTestScope(*this);
+
     if (clipPathElement().clipPathUnits() == SVGUnitTypes::SVG_UNIT_TYPE_OBJECTBOUNDINGBOX) {
         AffineTransform transform;
-        transform.translate(objectBoundingBox.x(), objectBoundingBox.y());
-        transform.scaleNonUniform(objectBoundingBox.width(), objectBoundingBox.height());
-        point = transform.inverse().value_or(AffineTransform()).mapPoint(point);
+        transform.translate(objectBoundingBox.location());
+        transform.scale(objectBoundingBox.size());
+        point = transform.inverse().valueOr(AffineTransform()).mapPoint(point);
     }
 
-    point = clipPathElement().animatedLocalTransform().inverse().value_or(AffineTransform()).mapPoint(point);
+    point = clipPathElement().animatedLocalTransform().inverse().valueOr(AffineTransform()).mapPoint(point);
 
     for (Node* childNode = clipPathElement().firstChild(); childNode; childNode = childNode->nextSibling()) {
         RenderObject* renderer = childNode->renderer();
@@ -278,9 +285,11 @@ bool RenderSVGResourceClipper::hitTestClipContent(const FloatRect& objectBoundin
             continue;
         if (!renderer->isSVGShape() && !renderer->isSVGText() && !childNode->hasTagName(SVGNames::useTag))
             continue;
+
         IntPoint hitPoint;
         HitTestResult result(hitPoint);
-        if (renderer->nodeAtFloatPoint(HitTestRequest(HitTestRequest::SVGClipContent | HitTestRequest::DisallowUserAgentShadowContent), result, point, HitTestForeground))
+        constexpr OptionSet<HitTestRequest::RequestType> hitType { HitTestRequest::SVGClipContent, HitTestRequest::DisallowUserAgentShadowContent };
+        if (renderer->nodeAtFloatPoint(hitType, result, point, HitTestForeground))
             return true;
     }
 
@@ -291,7 +300,7 @@ FloatRect RenderSVGResourceClipper::resourceBoundingBox(const RenderObject& obje
 {
     // Resource was not layouted yet. Give back the boundingBox of the object.
     if (selfNeedsLayout()) {
-        addRendererToClipper(object);
+        addRendererToClipper(object); // For selfNeedsClientInvalidation().
         return object.objectBoundingBox();
     }
     
@@ -301,8 +310,8 @@ FloatRect RenderSVGResourceClipper::resourceBoundingBox(const RenderObject& obje
     if (clipPathElement().clipPathUnits() == SVGUnitTypes::SVG_UNIT_TYPE_OBJECTBOUNDINGBOX) {
         FloatRect objectBoundingBox = object.objectBoundingBox();
         AffineTransform transform;
-        transform.translate(objectBoundingBox.x(), objectBoundingBox.y());
-        transform.scaleNonUniform(objectBoundingBox.width(), objectBoundingBox.height());
+        transform.translate(objectBoundingBox.location());
+        transform.scale(objectBoundingBox.size());
         return transform.mapRect(m_clipBoundaries);
     }
 

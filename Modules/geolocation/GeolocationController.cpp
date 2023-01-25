@@ -30,7 +30,7 @@
 
 #include "GeolocationClient.h"
 #include "GeolocationError.h"
-#include "GeolocationPosition.h"
+#include "GeolocationPositionData.h"
 
 namespace WebCore {
 
@@ -52,7 +52,7 @@ GeolocationController::~GeolocationController()
     m_client.geolocationDestroyed();
 }
 
-void GeolocationController::addObserver(Geolocation* observer, bool enableHighAccuracy)
+void GeolocationController::addObserver(Geolocation& observer, bool enableHighAccuracy)
 {
     // This may be called multiple times with the same observer, though removeObserver()
     // is called only once with each.
@@ -64,10 +64,10 @@ void GeolocationController::addObserver(Geolocation* observer, bool enableHighAc
     if (enableHighAccuracy)
         m_client.setEnableHighAccuracy(true);
     if (wasEmpty && m_page.isVisible())
-        m_client.startUpdating();
+        m_client.startUpdating(observer.authorizationToken());
 }
 
-void GeolocationController::removeObserver(Geolocation* observer)
+void GeolocationController::removeObserver(Geolocation& observer)
 {
     if (!m_observers.contains(observer))
         return;
@@ -81,56 +81,65 @@ void GeolocationController::removeObserver(Geolocation* observer)
         m_client.setEnableHighAccuracy(false);
 }
 
-void GeolocationController::requestPermission(Geolocation* geolocation)
+void GeolocationController::revokeAuthorizationToken(const String& authorizationToken)
+{
+    m_client.revokeAuthorizationToken(authorizationToken);
+}
+
+void GeolocationController::requestPermission(Geolocation& geolocation)
 {
     if (!m_page.isVisible()) {
-        m_pendedPermissionRequest.add(geolocation);
+        m_pendingPermissionRequest.add(geolocation);
         return;
     }
 
     m_client.requestPermission(geolocation);
 }
 
-void GeolocationController::cancelPermissionRequest(Geolocation* geolocation)
+void GeolocationController::cancelPermissionRequest(Geolocation& geolocation)
 {
-    if (m_pendedPermissionRequest.remove(geolocation))
+    if (m_pendingPermissionRequest.remove(geolocation))
         return;
 
     m_client.cancelPermissionRequest(geolocation);
 }
 
-void GeolocationController::positionChanged(GeolocationPosition* position)
+void GeolocationController::positionChanged(const Optional<GeolocationPositionData>& position)
 {
     m_lastPosition = position;
-    Vector<RefPtr<Geolocation>> observersVector;
-    copyToVector(m_observers, observersVector);
+    Vector<Ref<Geolocation>> observersVector;
+    observersVector.reserveInitialCapacity(m_observers.size());
+    for (auto& observer : m_observers)
+        observersVector.uncheckedAppend(observer.copyRef());
     for (auto& observer : observersVector)
         observer->positionChanged();
 }
 
-void GeolocationController::errorOccurred(GeolocationError* error)
+void GeolocationController::errorOccurred(GeolocationError& error)
 {
-    Vector<RefPtr<Geolocation>> observersVector;
-    copyToVector(m_observers, observersVector);
+    Vector<Ref<Geolocation>> observersVector;
+    observersVector.reserveInitialCapacity(m_observers.size());
+    for (auto& observer : m_observers)
+        observersVector.uncheckedAppend(observer.copyRef());
     for (auto& observer : observersVector)
         observer->setError(error);
 }
 
-GeolocationPosition* GeolocationController::lastPosition()
+Optional<GeolocationPositionData> GeolocationController::lastPosition()
 {
-    if (m_lastPosition.get())
-        return m_lastPosition.get();
+    if (m_lastPosition)
+        return m_lastPosition.value();
 
     return m_client.lastPosition();
 }
 
-void GeolocationController::activityStateDidChange(ActivityState::Flags oldActivityState, ActivityState::Flags newActivityState)
+void GeolocationController::activityStateDidChange(OptionSet<ActivityState::Flag> oldActivityState, OptionSet<ActivityState::Flag> newActivityState)
 {
     // Toggle GPS based on page visibility to save battery.
-    ActivityState::Flags changed = oldActivityState ^ newActivityState;
+    auto changed = oldActivityState ^ newActivityState;
     if (changed & ActivityState::IsVisible && !m_observers.isEmpty()) {
         if (newActivityState & ActivityState::IsVisible)
-            m_client.startUpdating();
+            m_client.startUpdating((*m_observers.random())->authorizationToken());
         else
             m_client.stopUpdating();
     }
@@ -138,7 +147,7 @@ void GeolocationController::activityStateDidChange(ActivityState::Flags oldActiv
     if (!m_page.isVisible())
         return;
 
-    HashSet<RefPtr<Geolocation>> pendedPermissionRequests = WTFMove(m_pendedPermissionRequest);
+    auto pendedPermissionRequests = WTFMove(m_pendingPermissionRequest);
     for (auto& permissionRequest : pendedPermissionRequests)
         m_client.requestPermission(permissionRequest.get());
 }
@@ -148,11 +157,10 @@ const char* GeolocationController::supplementName()
     return "GeolocationController";
 }
 
-void provideGeolocationTo(Page* page, GeolocationClient* client)
+void provideGeolocationTo(Page* page, GeolocationClient& client)
 {
     ASSERT(page);
-    ASSERT(client);
-    Supplement<Page>::provideTo(page, GeolocationController::supplementName(), std::make_unique<GeolocationController>(*page, *client));
+    Supplement<Page>::provideTo(page, GeolocationController::supplementName(), makeUnique<GeolocationController>(*page, client));
 }
     
 } // namespace WebCore

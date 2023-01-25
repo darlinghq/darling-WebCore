@@ -31,12 +31,15 @@
 #pragma once
 
 #include "ActiveDOMObject.h"
+#include "DOMException.h"
 #include "EventTarget.h"
+#include "ExceptionCode.h"
 #include "ExceptionOr.h"
-#include "FileError.h"
 #include "FileReaderLoader.h"
 #include "FileReaderLoaderClient.h"
-#include <chrono>
+#include "FileReaderSync.h"
+#include <wtf/HashMap.h>
+#include <wtf/UniqueRef.h>
 
 namespace JSC {
 class ArrayBuffer;
@@ -47,6 +50,7 @@ namespace WebCore {
 class Blob;
 
 class FileReader final : public RefCounted<FileReader>, public ActiveDOMObject, public EventTargetWithInlineData, private FileReaderLoaderClient {
+    WTF_MAKE_ISO_ALLOCATED(FileReader);
 public:
     static Ref<FileReader> create(ScriptExecutionContext&);
 
@@ -67,9 +71,9 @@ public:
     void doAbort();
 
     ReadyState readyState() const { return m_state; }
-    RefPtr<FileError> error() { return m_error; }
+    DOMException* error() { return m_error.get(); }
     FileReaderLoader::ReadType readType() const { return m_readType; }
-    std::optional<Variant<String, RefPtr<JSC::ArrayBuffer>>> result() const;
+    Optional<Variant<String, RefPtr<JSC::ArrayBuffer>>> result() const;
 
     using RefCounted::ref;
     using RefCounted::deref;
@@ -77,32 +81,36 @@ public:
 private:
     explicit FileReader(ScriptExecutionContext&);
 
+    // ActiveDOMObject.
     const char* activeDOMObjectName() const final;
-    bool canSuspendForDocumentSuspension() const final;
     void stop() final;
+    bool virtualHasPendingActivity() const final;
 
     EventTargetInterface eventTargetInterface() const final { return FileReaderEventTargetInterfaceType; }
     ScriptExecutionContext* scriptExecutionContext() const final { return ActiveDOMObject::scriptExecutionContext(); }
     void refEventTarget() final { ref(); }
     void derefEventTarget() final { deref(); }
 
+    void enqueueTask(Function<void()>&&);
+
     void didStartLoading() final;
     void didReceiveData() final;
     void didFinishLoading() final;
-    void didFail(int errorCode) final;
+    void didFail(ExceptionCode errorCode) final;
 
     ExceptionOr<void> readInternal(Blob&, FileReaderLoader::ReadType);
     void fireErrorEvent(int httpStatusCode);
-    void fireEvent(const AtomicString& type);
+    void fireEvent(const AtomString& type);
 
     ReadyState m_state { EMPTY };
-    bool m_aborting { false };
+    bool m_finishedLoading { false };
     RefPtr<Blob> m_blob;
     FileReaderLoader::ReadType m_readType { FileReaderLoader::ReadAsBinaryString };
     String m_encoding;
     std::unique_ptr<FileReaderLoader> m_loader;
-    RefPtr<FileError> m_error;
-    std::chrono::steady_clock::time_point m_lastProgressNotificationTime;
+    RefPtr<DOMException> m_error;
+    MonotonicTime m_lastProgressNotificationTime { MonotonicTime::nan() };
+    HashMap<uint64_t, Function<void()>> m_pendingTasks;
 };
 
 } // namespace WebCore

@@ -27,6 +27,7 @@
 
 #include "CSSValue.h"
 #include "CachedResourceHandle.h"
+#include "ResourceLoaderOptions.h"
 #include <wtf/Function.h>
 #include <wtf/text/WTFString.h>
 
@@ -38,13 +39,13 @@ class SVGFontFaceElement;
 
 class CSSFontFaceSrcValue final : public CSSValue {
 public:
-    static Ref<CSSFontFaceSrcValue> create(const String& resource)
+    static Ref<CSSFontFaceSrcValue> create(const String& resource, LoadedFromOpaqueSource loadedFromOpaqueSource)
     {
-        return adoptRef(*new CSSFontFaceSrcValue(resource, false));
+        return adoptRef(*new CSSFontFaceSrcValue(resource, false, loadedFromOpaqueSource));
     }
     static Ref<CSSFontFaceSrcValue> createLocal(const String& resource)
     {
-        return adoptRef(*new CSSFontFaceSrcValue(resource, true));
+        return adoptRef(*new CSSFontFaceSrcValue(resource, true, LoadedFromOpaqueSource::No));
     }
 
     const String& resource() const { return m_resource; }
@@ -55,13 +56,11 @@ public:
 
     bool isSupportedFormat() const;
 
-#if ENABLE(SVG_FONTS)
     bool isSVGFontFaceSrc() const;
     bool isSVGFontTarget() const;
 
     SVGFontFaceElement* svgFontFaceElement() const { return m_svgFontFaceElement; }
     void setSVGFontFaceElement(SVGFontFaceElement* element) { m_svgFontFaceElement = element; }
-#endif
 
     String customCSSText() const;
 
@@ -72,25 +71,23 @@ public:
     bool equals(const CSSFontFaceSrcValue&) const;
 
 private:
-    CSSFontFaceSrcValue(const String& resource, bool local)
+    CSSFontFaceSrcValue(const String& resource, bool local, LoadedFromOpaqueSource loadedFromOpaqueSource)
         : CSSValue(FontFaceSrcClass)
         , m_resource(resource)
         , m_isLocal(local)
-#if ENABLE(SVG_FONTS)
+        , m_loadedFromOpaqueSource(loadedFromOpaqueSource)
         , m_svgFontFaceElement(0)
-#endif
     {
     }
 
     String m_resource;
     String m_format;
     bool m_isLocal;
+    LoadedFromOpaqueSource m_loadedFromOpaqueSource { LoadedFromOpaqueSource::No };
 
     CachedResourceHandle<CachedFont> m_cachedFont;
 
-#if ENABLE(SVG_FONTS)
     SVGFontFaceElement* m_svgFontFaceElement;
-#endif
 };
 
 } // namespace WebCore

@@ -27,10 +27,10 @@
 #pragma once
 
 #include "HTTPHeaderMap.h"
+#include <wtf/Box.h>
 #include <wtf/Optional.h>
 #include <wtf/Seconds.h>
-#include <wtf/persistence/Decoder.h>
-#include <wtf/persistence/Encoder.h>
+#include <wtf/persistence/PersistentCoder.h>
 #include <wtf/text/WTFString.h>
 
 #if PLATFORM(COCOA)
@@ -39,22 +39,56 @@ OBJC_CLASS NSDictionary;
 
 namespace WebCore {
 
-enum class NetworkLoadPriority {
+enum class NetworkLoadPriority : uint8_t {
     Low,
     Medium,
     High,
+    Unknown,
 };
 
-class NetworkLoadMetrics {
+class NetworkLoadMetricsWithoutNonTimingData {
+    WTF_MAKE_FAST_ALLOCATED(NetworkLoadMetricsWithoutNonTimingData);
+public:
+    NetworkLoadMetricsWithoutNonTimingData() = default;
+
+    bool isComplete() const { return complete; }
+    void markComplete() { complete = true; }
+
+    Seconds fetchStart;
+
+    // These should be treated as deltas to fetchStart.
+    // They should be in ascending order as listed here.
+    Seconds domainLookupStart { -1 };     // -1 if no DNS.
+    Seconds domainLookupEnd { -1 };       // -1 if no DNS.
+    Seconds connectStart { -1 };          // -1 if reused connection.
+    Seconds secureConnectionStart { -1 }; // -1 if no secure connection.
+    Seconds connectEnd { -1 };            // -1 if reused connection.
+    Seconds requestStart;
+    Seconds responseStart;
+    Seconds responseEnd;
+
+    // ALPN Protocol ID: https://w3c.github.io/resource-timing/#bib-RFC7301
+    String protocol;
+    bool complete { false };
+    bool cellular { false };
+    bool expensive { false };
+    bool constrained { false };
+    bool multipath { false };
+    bool isReusedConnection { false };
+};
+
+class NetworkLoadMetrics : public NetworkLoadMetricsWithoutNonTimingData {
 public:
     NetworkLoadMetrics()
+        : NetworkLoadMetricsWithoutNonTimingData()
     {
-        reset();
     }
 
     NetworkLoadMetrics isolatedCopy() const
     {
         NetworkLoadMetrics copy;
+
+        copy.fetchStart = fetchStart;
 
         copy.domainLookupStart = domainLookupStart;
         copy.domainLookupEnd = domainLookupEnd;
@@ -66,15 +100,18 @@ public:
         copy.responseEnd = responseEnd;
         copy.complete = complete;
         copy.protocol = protocol.isolatedCopy();
+        copy.cellular = cellular;
+        copy.expensive = expensive;
+        copy.constrained = constrained;
+        copy.multipath = multipath;
+        copy.isReusedConnection = isReusedConnection;
 
-        if (remoteAddress)
-            copy.remoteAddress = remoteAddress.value().isolatedCopy();
-        if (connectionIdentifier)
-            copy.connectionIdentifier = connectionIdentifier.value().isolatedCopy();
-        if (priority)
-            copy.priority = *priority;
-        if (requestHeaders)
-            copy.requestHeaders = requestHeaders.value().isolatedCopy();
+        copy.remoteAddress = remoteAddress.isolatedCopy();
+        copy.connectionIdentifier = connectionIdentifier.isolatedCopy();
+        copy.tlsProtocol = tlsProtocol.isolatedCopy();
+        copy.tlsCipher = tlsCipher.isolatedCopy();
+        copy.priority = priority;
+        copy.requestHeaders = requestHeaders.isolatedCopy();
 
         copy.requestHeaderBytesSent = requestHeaderBytesSent;
         copy.requestBodyBytesSent = requestBodyBytesSent;
@@ -85,45 +122,10 @@ public:
         return copy;
     }
 
-    void reset()
-    {
-        domainLookupStart = Seconds(-1);
-        domainLookupEnd = Seconds(-1);
-        connectStart = Seconds(-1);
-        secureConnectionStart = Seconds(-1);
-        connectEnd = Seconds(-1);
-        requestStart = Seconds(0);
-        responseStart = Seconds(0);
-        responseEnd = Seconds(0);
-        complete = false;
-        protocol = String();
-        remoteAddress = std::nullopt;
-        connectionIdentifier = std::nullopt;
-        priority = std::nullopt;
-        requestHeaders = std::nullopt;
-        requestHeaderBytesSent = std::nullopt;
-        requestBodyBytesSent = std::nullopt;
-        responseHeaderBytesReceived = std::nullopt;
-        responseBodyBytesReceived = std::nullopt;
-        responseBodyDecodedSize = std::nullopt;
-    }
-
-    void clearNonTimingData()
-    {
-        remoteAddress = std::nullopt;
-        connectionIdentifier = std::nullopt;
-        priority = std::nullopt;
-        requestHeaders = std::nullopt;
-        requestHeaderBytesSent = std::nullopt;
-        requestBodyBytesSent = std::nullopt;
-        responseHeaderBytesReceived = std::nullopt;
-        responseBodyBytesReceived = std::nullopt;
-        responseBodyDecodedSize = std::nullopt;
-    }
-
     bool operator==(const NetworkLoadMetrics& other) const
     {
-        return domainLookupStart == other.domainLookupStart
+        return fetchStart == other.fetchStart
+            && domainLookupStart == other.domainLookupStart
             && domainLookupEnd == other.domainLookupEnd
             && connectStart == other.connectStart
             && secureConnectionStart == other.secureConnectionStart
@@ -132,9 +134,16 @@ public:
             && responseStart == other.responseStart
             && responseEnd == other.responseEnd
             && complete == other.complete
+            && cellular == other.cellular
+            && expensive == other.expensive
+            && constrained == other.constrained
+            && multipath == other.multipath
+            && isReusedConnection == other.isReusedConnection
             && protocol == other.protocol
             && remoteAddress == other.remoteAddress
             && connectionIdentifier == other.connectionIdentifier
+            && tlsProtocol == other.tlsProtocol
+            && tlsCipher == other.tlsCipher
             && priority == other.priority
             && requestHeaders == other.requestHeaders
             && requestHeaderBytesSent == other.requestHeaderBytesSent
@@ -149,52 +158,34 @@ public:
         return !(*this == other);
     }
 
-    bool isComplete() const { return complete; }
-    void markComplete() { complete = true; }
-
     template<class Encoder> void encode(Encoder&) const;
-    template<class Decoder> static bool decode(Decoder&, NetworkLoadMetrics&);
+    template<class Decoder> static WARN_UNUSED_RETURN bool decode(Decoder&, NetworkLoadMetrics&);
 
-    // These should be treated as deltas to LoadTiming's fetchStart.
-    // They should be in ascending order as listed here.
-    Seconds domainLookupStart;     // -1 if no DNS.
-    Seconds domainLookupEnd;       // -1 if no DNS.
-    Seconds connectStart;          // -1 if reused connection.
-    Seconds secureConnectionStart; // -1 if no secure connection.
-    Seconds connectEnd;            // -1 if reused connection.
-    Seconds requestStart;
-    Seconds responseStart;
-    Seconds responseEnd;
+    String remoteAddress;
+    String connectionIdentifier;
 
-    // Whether or not all of the properties (0 or otherwise) have been set.
-    bool complete { false };
+    String tlsProtocol;
+    String tlsCipher;
 
-    // ALPN Protocol ID: https://w3c.github.io/resource-timing/#bib-RFC7301
-    String protocol;
+    NetworkLoadPriority priority { NetworkLoadPriority::Unknown };
 
-    std::optional<String> remoteAddress;
-    std::optional<String> connectionIdentifier;
-    std::optional<NetworkLoadPriority> priority;
-    std::optional<HTTPHeaderMap> requestHeaders;
+    HTTPHeaderMap requestHeaders;
 
-    std::optional<uint64_t> requestHeaderBytesSent;
-    std::optional<uint64_t> requestBodyBytesSent;
-    std::optional<uint64_t> responseHeaderBytesReceived;
-    std::optional<uint64_t> responseBodyBytesReceived;
-    std::optional<uint64_t> responseBodyDecodedSize;
+    uint64_t requestHeaderBytesSent { std::numeric_limits<uint32_t>::max() };
+    uint64_t responseHeaderBytesReceived { std::numeric_limits<uint32_t>::max() };
+    uint64_t requestBodyBytesSent { std::numeric_limits<uint64_t>::max() };
+    uint64_t responseBodyBytesReceived { std::numeric_limits<uint64_t>::max() };
+    uint64_t responseBodyDecodedSize { std::numeric_limits<uint64_t>::max() };
 };
 
 #if PLATFORM(COCOA)
-WEBCORE_EXPORT void copyTimingData(NSDictionary *timingData, NetworkLoadMetrics&);
-#endif
-
-#if PLATFORM(COCOA) && !HAVE(TIMINGDATAOPTIONS)
-WEBCORE_EXPORT void setCollectsTimingData();
+WEBCORE_EXPORT Box<NetworkLoadMetrics> copyTimingData(NSDictionary *timingData);
 #endif
 
 template<class Encoder>
 void NetworkLoadMetrics::encode(Encoder& encoder) const
 {
+    encoder << fetchStart;
     encoder << domainLookupStart;
     encoder << domainLookupEnd;
     encoder << connectStart;
@@ -204,9 +195,16 @@ void NetworkLoadMetrics::encode(Encoder& encoder) const
     encoder << responseStart;
     encoder << responseEnd;
     encoder << complete;
+    encoder << cellular;
+    encoder << expensive;
+    encoder << constrained;
+    encoder << multipath;
+    encoder << isReusedConnection;
     encoder << protocol;
     encoder << remoteAddress;
     encoder << connectionIdentifier;
+    encoder << tlsProtocol;
+    encoder << tlsCipher;
     encoder << priority;
     encoder << requestHeaders;
     encoder << requestHeaderBytesSent;
@@ -219,7 +217,8 @@ void NetworkLoadMetrics::encode(Encoder& encoder) const
 template<class Decoder>
 bool NetworkLoadMetrics::decode(Decoder& decoder, NetworkLoadMetrics& metrics)
 {
-    return decoder.decode(metrics.domainLookupStart)
+    return decoder.decode(metrics.fetchStart)
+        && decoder.decode(metrics.domainLookupStart)
         && decoder.decode(metrics.domainLookupEnd)
         && decoder.decode(metrics.connectStart)
         && decoder.decode(metrics.secureConnectionStart)
@@ -228,9 +227,16 @@ bool NetworkLoadMetrics::decode(Decoder& decoder, NetworkLoadMetrics& metrics)
         && decoder.decode(metrics.responseStart)
         && decoder.decode(metrics.responseEnd)
         && decoder.decode(metrics.complete)
+        && decoder.decode(metrics.cellular)
+        && decoder.decode(metrics.expensive)
+        && decoder.decode(metrics.constrained)
+        && decoder.decode(metrics.multipath)
+        && decoder.decode(metrics.isReusedConnection)
         && decoder.decode(metrics.protocol)
         && decoder.decode(metrics.remoteAddress)
         && decoder.decode(metrics.connectionIdentifier)
+        && decoder.decode(metrics.tlsProtocol)
+        && decoder.decode(metrics.tlsCipher)
         && decoder.decode(metrics.priority)
         && decoder.decode(metrics.requestHeaders)
         && decoder.decode(metrics.requestHeaderBytesSent)
@@ -246,13 +252,13 @@ bool NetworkLoadMetrics::decode(Decoder& decoder, NetworkLoadMetrics& metrics)
 namespace WTF {
 namespace Persistence {
 
-template<> struct Coder<std::optional<WebCore::NetworkLoadPriority>> {
-    static NO_RETURN_DUE_TO_ASSERT void encode(Encoder&, const std::optional<WebCore::NetworkLoadPriority>&)
+template<> struct Coder<Optional<WebCore::NetworkLoadPriority>> {
+    static NO_RETURN_DUE_TO_ASSERT void encode(Encoder&, const Optional<WebCore::NetworkLoadPriority>&)
     {
         ASSERT_NOT_REACHED();
     }
 
-    static bool decode(Decoder&, std::optional<WebCore::NetworkLoadPriority>&)
+    static bool decode(Decoder&, Optional<WebCore::NetworkLoadPriority>&)
     {
         ASSERT_NOT_REACHED();
         return false;

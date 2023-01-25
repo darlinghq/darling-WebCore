@@ -28,17 +28,18 @@
 #if ENABLE(VIDEO)
 #include "MediaController.h"
 
-#include "Clock.h"
 #include "EventNames.h"
-#include "ExceptionCode.h"
 #include "HTMLMediaElement.h"
 #include "TimeRanges.h"
-#include <wtf/CurrentTime.h>
+#include <pal/system/Clock.h>
+#include <wtf/IsoMallocInlines.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/StdLibExtras.h>
-#include <wtf/text/AtomicString.h>
+#include <wtf/text/AtomString.h>
 
-using namespace WebCore;
+namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(MediaController);
 
 Ref<MediaController> MediaController::create(ScriptExecutionContext& context)
 {
@@ -56,15 +57,13 @@ MediaController::MediaController(ScriptExecutionContext& context)
     , m_asyncEventTimer(*this, &MediaController::asyncEventTimerFired)
     , m_clearPositionTimer(*this, &MediaController::clearPositionTimerFired)
     , m_closedCaptionsVisible(false)
-    , m_clock(Clock::create())
+    , m_clock(PAL::Clock::create())
     , m_scriptExecutionContext(context)
     , m_timeupdateTimer(*this, &MediaController::scheduleTimeupdateEvent)
 {
 }
 
-MediaController::~MediaController()
-{
-}
+MediaController::~MediaController() = default;
 
 void MediaController::addMediaElement(HTMLMediaElement& element)
 {
@@ -91,7 +90,7 @@ Ref<TimeRanges> MediaController::buffered() const
         return TimeRanges::create();
 
     // The buffered attribute must return a new static normalized TimeRanges object that represents 
-    // the intersection of the ranges of the media resources of the slaved media elements that the 
+    // the intersection of the ranges of the media resources of the mediagroup elements that the
     // user agent has buffered, at the time the attribute is evaluated.
     Ref<TimeRanges> bufferedRanges = m_mediaElements.first()->buffered();
     for (size_t index = 1; index < m_mediaElements.size(); ++index)
@@ -105,7 +104,7 @@ Ref<TimeRanges> MediaController::seekable() const
         return TimeRanges::create();
 
     // The seekable attribute must return a new static normalized TimeRanges object that represents
-    // the intersection of the ranges of the media resources of the slaved media elements that the
+    // the intersection of the ranges of the media resources of the mediagroup elements that the
     // user agent is able to seek to, at the time the attribute is evaluated.
     Ref<TimeRanges> seekableRanges = m_mediaElements.first()->seekable();
     for (size_t index = 1; index < m_mediaElements.size(); ++index)
@@ -119,7 +118,7 @@ Ref<TimeRanges> MediaController::played()
         return TimeRanges::create();
 
     // The played attribute must return a new static normalized TimeRanges object that represents 
-    // the union of the ranges of the media resources of the slaved media elements that the 
+    // the union of the ranges of the media resources of the mediagroup elements that the
     // user agent has so far rendered, at the time the attribute is evaluated.
     Ref<TimeRanges> playedRanges = m_mediaElements.first()->played();
     for (size_t index = 1; index < m_mediaElements.size(); ++index)
@@ -130,7 +129,7 @@ Ref<TimeRanges> MediaController::played()
 double MediaController::duration() const
 {
     // FIXME: Investigate caching the maximum duration and only updating the cached value
-    // when the slaved media elements' durations change.
+    // when the mediagroup elements' durations change.
     double maxDuration = 0;
     for (auto& mediaElement : m_mediaElements) {
         double duration = mediaElement->duration();
@@ -169,7 +168,7 @@ void MediaController::setCurrentTime(double time)
     // Set the media controller position to the new playback position.
     m_clock->setCurrentTime(time);
     
-    // Seek each slaved media element to the new playback position relative to the media element timeline.
+    // Seek each mediagroup element to the new playback position relative to the media element timeline.
     for (auto& mediaElement : m_mediaElements)
         mediaElement->seek(MediaTime::createWithDouble(time));
 
@@ -193,7 +192,7 @@ void MediaController::unpause()
 void MediaController::play()
 {
     // When the play() method is invoked, the user agent must invoke the play method of each
-    // slaved media element in turn,
+    // mediagroup element in turn,
     for (auto& mediaElement : m_mediaElements)
         mediaElement->play();
 
@@ -257,7 +256,7 @@ ExceptionOr<void> MediaController::setVolume(double level)
     // If the new value is outside the range 0.0 to 1.0 inclusive, then, on setting, an 
     // IndexSizeError exception must be raised instead.
     if (!(level >= 0 && level <= 1))
-        return Exception { INDEX_SIZE_ERR };
+        return Exception { IndexSizeError };
 
     // The volume attribute, on setting, if the new value is in the range 0.0 to 1.0 inclusive,
     // must set the MediaController's media controller volume multiplier to the new value
@@ -288,25 +287,25 @@ void MediaController::setMuted(bool flag)
         mediaElement->updateVolume();
 }
 
-static const AtomicString& playbackStateWaiting()
+static const AtomString& playbackStateWaiting()
 {
-    static NeverDestroyed<AtomicString> waiting("waiting", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> waiting("waiting", AtomString::ConstructFromLiteral);
     return waiting;
 }
 
-static const AtomicString& playbackStatePlaying()
+static const AtomString& playbackStatePlaying()
 {
-    static NeverDestroyed<AtomicString> playing("playing", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> playing("playing", AtomString::ConstructFromLiteral);
     return playing;
 }
 
-static const AtomicString& playbackStateEnded()
+static const AtomString& playbackStateEnded()
 {
-    static NeverDestroyed<AtomicString> ended("ended", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> ended("ended", AtomString::ConstructFromLiteral);
     return ended;
 }
 
-const AtomicString& MediaController::playbackState() const
+const AtomString& MediaController::playbackState() const
 {
     switch (m_playbackState) {
     case WAITING:
@@ -327,7 +326,7 @@ void MediaController::reportControllerState()
     updatePlaybackState();
 }
 
-static AtomicString eventNameForReadyState(MediaControllerInterface::ReadyState state)
+static AtomString eventNameForReadyState(MediaControllerInterface::ReadyState state)
 {
     switch (state) {
     case MediaControllerInterface::HAVE_NOTHING:
@@ -352,11 +351,11 @@ void MediaController::updateReadyState()
     ReadyState newReadyState;
     
     if (m_mediaElements.isEmpty()) {
-        // If the MediaController has no slaved media elements, let new readiness state be 0.
+        // If the MediaController has no mediagroup elements, let new readiness state be 0.
         newReadyState = HAVE_NOTHING;
     } else {
         // Otherwise, let it have the lowest value of the readyState IDL attributes of all of its
-        // slaved media elements.
+        // mediagroup elements.
         newReadyState = m_mediaElements.first()->readyState();
         for (size_t index = 1; index < m_mediaElements.size(); ++index)
             newReadyState = std::min(newReadyState, m_mediaElements[index]->readyState());
@@ -398,11 +397,11 @@ void MediaController::updatePlaybackState()
     // Initialize new playback state by setting it to the state given for the first matching 
     // condition from the following list:
     if (m_mediaElements.isEmpty()) {
-        // If the MediaController has no slaved media elements
+        // If the MediaController has no mediagroup elements
         // Let new playback state be waiting.
         newPlaybackState = WAITING;
     } else if (hasEnded()) {
-        // If all of the MediaController's slaved media elements have ended playback and the media
+        // If all of the MediaController's mediagroup elements have ended playback and the media
         // controller playback rate is positive or zero
         // Let new playback state be ended.
         newPlaybackState = ENDED;
@@ -423,7 +422,7 @@ void MediaController::updatePlaybackState()
     // and the new playback state is ended,
     if (newPlaybackState == ENDED) {
         // then queue a task that, if the MediaController object is a playing media controller, and 
-        // all of the MediaController's slaved media elements have still ended playback, and the 
+        // all of the MediaController's mediagroup elements have still ended playback, and the
         // media controller playback rate is still positive or zero, 
         if (!m_paused && hasEnded()) {
             // changes the MediaController object to a paused media controller
@@ -437,7 +436,7 @@ void MediaController::updatePlaybackState()
     // If the MediaController's most recently reported playback state is not equal to new playback state
     // then queue a task to fire a simple event at the MediaController object, whose name is playing 
     // if new playback state is playing, ended if new playback state is ended, and waiting otherwise.
-    AtomicString eventName;
+    AtomString eventName;
     switch (newPlaybackState) {
     case WAITING:
         eventName = eventNames().waitingEvent;
@@ -498,11 +497,11 @@ bool MediaController::isBlocked() const
     
     bool allPaused = true;
     for (auto& element : m_mediaElements) {
-        //  or if any of its slaved media elements are blocked media elements,
+        //  or if any of its mediagroup elements are blocked media elements,
         if (element->isBlocked())
             return true;
         
-        // or if any of its slaved media elements whose autoplaying flag is true still have their 
+        // or if any of its mediagroup elements whose autoplaying flag is true still have their
         // paused attribute set to true,
         if (element->isAutoplaying() && element->paused())
             return true;
@@ -511,7 +510,7 @@ bool MediaController::isBlocked() const
             allPaused = false;
     }
     
-    // or if all of its slaved media elements have their paused attribute set to true.
+    // or if all of its mediagroup elements have their paused attribute set to true.
     return allPaused;
 }
 
@@ -521,7 +520,7 @@ bool MediaController::hasEnded() const
     if (m_clock->playRate() < 0)
         return false;
 
-    // [and] all of the MediaController's slaved media elements have ended playback ... let new
+    // [and] all of the MediaController's mediagroup elements have ended playback ... let new
     // playback state be ended.
     if (m_mediaElements.isEmpty())
         return false;
@@ -534,9 +533,9 @@ bool MediaController::hasEnded() const
     return allHaveEnded;
 }
 
-void MediaController::scheduleEvent(const AtomicString& eventName)
+void MediaController::scheduleEvent(const AtomString& eventName)
 {
-    m_pendingEvents.append(Event::create(eventName, false, true));
+    m_pendingEvents.append(Event::create(eventName, Event::CanBubble::No, Event::IsCancelable::Yes));
     if (!m_asyncEventTimer.isActive())
         m_asyncEventTimer.startOneShot(0_s);
 }
@@ -685,5 +684,7 @@ void MediaController::scheduleTimeupdateEvent()
     scheduleEvent(eventNames().timeupdateEvent);
     m_previousTimeupdateTime = now;
 }
+
+} // namespace WebCore
 
 #endif

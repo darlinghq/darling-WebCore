@@ -28,30 +28,47 @@
 
 #if ENABLE(INDEXED_DATABASE)
 
+#include "IDBBindingUtilities.h"
 #include "JSDOMBinding.h"
 #include "JSIDBCursorWithValue.h"
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
+
+JSC::JSValue JSIDBCursor::key(JSC::JSGlobalObject& lexicalGlobalObject) const
+{
+    return cachedPropertyValue(lexicalGlobalObject, *this, wrapped().keyWrapper(), [&] {
+        return toJS(lexicalGlobalObject, lexicalGlobalObject, wrapped().key());
+    });
+}
+
+JSC::JSValue JSIDBCursor::primaryKey(JSC::JSGlobalObject& lexicalGlobalObject) const
+{
+    return cachedPropertyValue(lexicalGlobalObject, *this, wrapped().primaryKeyWrapper(), [&] {
+        return toJS(lexicalGlobalObject, lexicalGlobalObject, wrapped().primaryKey());
+    });
+}
 
 void JSIDBCursor::visitAdditionalChildren(SlotVisitor& visitor)
 {
     auto& cursor = wrapped();
     if (auto* request = cursor.request())
         visitor.addOpaqueRoot(request);
+    cursor.keyWrapper().visit(visitor);
+    cursor.primaryKeyWrapper().visit(visitor);
 }
 
-JSValue toJSNewlyCreated(JSC::ExecState*, JSDOMGlobalObject* globalObject, Ref<IDBCursor>&& cursor)
+JSValue toJSNewlyCreated(JSC::JSGlobalObject*, JSDOMGlobalObject* globalObject, Ref<IDBCursor>&& cursor)
 {
     if (is<IDBCursorWithValue>(cursor))
         return createWrapper<IDBCursorWithValue>(globalObject, WTFMove(cursor));
     return createWrapper<IDBCursor>(globalObject, WTFMove(cursor));
 }
 
-JSValue toJS(JSC::ExecState* state, JSDOMGlobalObject* globalObject, IDBCursor& cursor)
+JSValue toJS(JSC::JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject* globalObject, IDBCursor& cursor)
 {
-    return wrap(state, globalObject, cursor);
+    return wrap(lexicalGlobalObject, globalObject, cursor);
 }
 
 } // namespace WebCore

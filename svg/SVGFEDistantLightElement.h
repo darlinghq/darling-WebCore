@@ -30,7 +30,8 @@ public:
 private:
     SVGFEDistantLightElement(const QualifiedName&, Document&);
 
-    Ref<LightSource> lightSource() const override;
+    Ref<LightSource> lightSource(SVGFilterBuilder&) const override;
 };
+static_assert(sizeof(SVGFEDistantLightElement) == sizeof(SVGFELightElement));
 
 } // namespace WebCore

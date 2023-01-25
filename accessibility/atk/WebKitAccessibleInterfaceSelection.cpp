@@ -31,14 +31,14 @@
 #include "config.h"
 #include "WebKitAccessibleInterfaceSelection.h"
 
-#if HAVE(ACCESSIBILITY)
+#if ENABLE(ACCESSIBILITY)
 
 #include "AccessibilityListBox.h"
 #include "AccessibilityObject.h"
 #include "HTMLSelectElement.h"
 #include "RenderObject.h"
+#include "WebKitAccessible.h"
 #include "WebKitAccessibleUtil.h"
-#include "WebKitAccessibleWrapperAtk.h"
 
 using namespace WebCore;
 
@@ -47,13 +47,11 @@ static AccessibilityObject* core(AtkSelection* selection)
     if (!WEBKIT_IS_ACCESSIBLE(selection))
         return nullptr;
 
-    return webkitAccessibleGetAccessibilityObject(WEBKIT_ACCESSIBLE(selection));
+    return &webkitAccessibleGetAccessibilityObject(WEBKIT_ACCESSIBLE(selection));
 }
 
-static AccessibilityObject* listObjectForSelection(AtkSelection* selection)
+static AXCoreObject* listObjectForCoreSelection(AccessibilityObject* coreSelection)
 {
-    AccessibilityObject* coreSelection = core(selection);
-
     // Only list boxes and menu lists supported so far.
     if (!coreSelection->isListBox() && !coreSelection->isMenuList())
         return nullptr;
@@ -69,21 +67,21 @@ static AccessibilityObject* listObjectForSelection(AtkSelection* selection)
     if (!children.size())
         return nullptr;
 
-    AccessibilityObject* listObject = children.at(0).get();
+    AXCoreObject* listObject = children.at(0).get();
     if (!listObject->isMenuListPopup())
         return nullptr;
 
     return listObject;
 }
 
-static AccessibilityObject* optionFromList(AtkSelection* selection, gint index)
+static AXCoreObject* optionFromList(AtkSelection* selection, gint index)
 {
     AccessibilityObject* coreSelection = core(selection);
     if (!coreSelection || index < 0)
         return nullptr;
 
     // Need to select the proper list object depending on the type.
-    AccessibilityObject* listObject = listObjectForSelection(selection);
+    AXCoreObject* listObject = listObjectForCoreSelection(coreSelection);
     if (!listObject)
         return nullptr;
 
@@ -94,7 +92,7 @@ static AccessibilityObject* optionFromList(AtkSelection* selection, gint index)
     return nullptr;
 }
 
-static AccessibilityObject* optionFromSelection(AtkSelection* selection, gint index)
+static AXCoreObject* optionFromSelection(AtkSelection* selection, gint index)
 {
     AccessibilityObject* coreSelection = core(selection);
     if (!coreSelection || !coreSelection->isAccessibilityRenderObject() || index < 0)
@@ -122,7 +120,7 @@ static gboolean webkitAccessibleSelectionAddSelection(AtkSelection* selection, g
     if (!coreSelection)
         return FALSE;
 
-    AccessibilityObject* option = optionFromList(selection, index);
+    AXCoreObject* option = optionFromList(selection, index);
     if (option && (coreSelection->isListBox() || coreSelection->isMenuList())) {
         option->setSelected(true);
         return option->isSelected();
@@ -156,11 +154,11 @@ static AtkObject* webkitAccessibleSelectionRefSelection(AtkSelection* selection,
     g_return_val_if_fail(ATK_SELECTION(selection), nullptr);
     returnValIfWebKitAccessibleIsInvalid(WEBKIT_ACCESSIBLE(selection), nullptr);
 
-    AccessibilityObject* option = optionFromSelection(selection, index);
+    AXCoreObject* option = optionFromSelection(selection, index);
     if (option) {
-        AtkObject* child = option->wrapper();
+        auto* child = option->wrapper();
         g_object_ref(child);
-        return child;
+        return ATK_OBJECT(child);
     }
 
     return nullptr;
@@ -198,7 +196,7 @@ static gboolean webkitAccessibleSelectionIsChildSelected(AtkSelection* selection
     if (!coreSelection)
         return FALSE;
 
-    AccessibilityObject* option = optionFromList(selection, index);
+    AXCoreObject* option = optionFromList(selection, index);
     if (option && (coreSelection->isListBox() || coreSelection->isMenuList()))
         return option->isSelected();
 
@@ -214,7 +212,7 @@ static gboolean webkitAccessibleSelectionRemoveSelection(AtkSelection* selection
     if (!coreSelection)
         return FALSE;
 
-    AccessibilityObject* option = optionFromSelection(selection, index);
+    AXCoreObject* option = optionFromSelection(selection, index);
     if (option && (coreSelection->isListBox() || coreSelection->isMenuList())) {
         option->setSelected(false);
         return !option->isSelected();

@@ -23,8 +23,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef ANGLEWebKitBridge_h
-#define ANGLEWebKitBridge_h
+#pragma once
+
+#if ENABLE(WEBGL) && !USE(ANGLE)
 
 #if USE(LIBEPOXY)
 // libepoxy headers have to be included before <ANGLE/ShaderLang.h> in order to avoid
@@ -35,21 +36,23 @@
 #include <ANGLE/ShaderLang.h>
 #include <wtf/text/WTFString.h>
 
-#if PLATFORM(IOS)
-#import <OpenGLES/ES2/glext.h>
-#elif PLATFORM(MAC)
-#include <OpenGL/gl.h>
-#elif PLATFORM(WIN)
+#if PLATFORM(WIN)
 #include "OpenGLESShims.h"
-#elif PLATFORM(GTK) || PLATFORM(WPE)
-#if USE(LIBEPOXY)
+
+#elif USE(LIBEPOXY)
 // <epoxy/gl.h> already included above.
-#elif USE(OPENGL_ES_2)
+
+#elif USE(OPENGL_ES)
 #include <GLES2/gl2.h>
+
 #else
 #include "OpenGLShims.h"
 #endif
-#endif
+
+// FIXME
+#define GL_VERTEX_SHADER 0x8B31
+#define GL_FRAGMENT_SHADER 0x8B30
+//
 
 namespace WebCore {
 
@@ -73,7 +76,7 @@ public:
     const ShBuiltInResources& getResources() { return m_resources; }
     void setResources(const ShBuiltInResources&);
     
-    bool compileShaderSource(const char* shaderSource, ANGLEShaderType, String& translatedShaderSource, String& shaderValidationLog, Vector<std::pair<ANGLEShaderSymbolType, sh::ShaderVariable>>& symbols, int extraCompileOptions = 0);
+    bool compileShaderSource(const char* shaderSource, ANGLEShaderType, String& translatedShaderSource, String& shaderValidationLog, Vector<std::pair<ANGLEShaderSymbolType, sh::ShaderVariable>>& symbols, uint64_t extraCompileOptions = 0);
 
 private:
 
@@ -92,4 +95,4 @@ private:
 
 } // namespace WebCore
 
-#endif
+#endif // ENABLE(WEBGL) && !USE(ANGLE)

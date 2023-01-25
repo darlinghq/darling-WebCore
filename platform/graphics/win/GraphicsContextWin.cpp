@@ -42,7 +42,6 @@
 #include <wtf/MathExtras.h>
 #include <wtf/win/GDIObject.h>
 
-using namespace std;
 
 namespace WebCore {
 
@@ -96,14 +95,17 @@ GraphicsContext::WindowsBitmap::~WindowsBitmap()
 
 std::unique_ptr<GraphicsContext::WindowsBitmap> GraphicsContext::createWindowsBitmap(const IntSize& size)
 {
-    return std::make_unique<WindowsBitmap>(m_data->m_hdc, size);
+    return makeUnique<WindowsBitmap>(m_data->m_hdc, size);
 }
 #endif
 
-HDC GraphicsContext::getWindowsContext(const IntRect& dstRect, bool supportAlphaBlend, bool mayCreateBitmap)
+HDC GraphicsContext::getWindowsContext(const IntRect& dstRect, bool supportAlphaBlend)
 {
+    HDC hdc = nullptr;
+    if (!m_impl)
+        hdc = m_data->m_hdc;
     // FIXME: Should a bitmap be created also when a shadow is set?
-    if (mayCreateBitmap && (!m_data->m_hdc || isInTransparencyLayer())) {
+    if (!hdc || isInTransparencyLayer()) {
         if (dstRect.isEmpty())
             return 0;
 
@@ -115,7 +117,7 @@ HDC GraphicsContext::getWindowsContext(const IntRect& dstRect, bool supportAlpha
         if (!bitmap)
             return 0;
 
-        auto bitmapDC = adoptGDIObject(::CreateCompatibleDC(m_data->m_hdc));
+        auto bitmapDC = adoptGDIObject(::CreateCompatibleDC(hdc));
         ::SelectObject(bitmapDC.get(), bitmap);
 
         // Fill our buffer with clear if we're going to alpha blend.
@@ -182,8 +184,6 @@ void GraphicsContextPlatformPrivate::scale(const FloatSize& size)
     XFORM xform = TransformationMatrix().scaleNonUniform(size.width(), size.height());
     ModifyWorldTransform(m_hdc, &xform, MWT_LEFTMULTIPLY);
 }
-
-static const double deg2rad = 0.017453292519943295769; // pi/180
 
 void GraphicsContextPlatformPrivate::rotate(float degreesAngle)
 {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc.  All rights reserved.
+ * Copyright (C) 2016-2019 Apple Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,10 +28,12 @@
 
 #if USE(DIRECT2D)
 
+#include "DirectWriteUtilities.h"
 #include "GraphicsContext.h"
+#include "HWndDC.h"
 #include "SharedGDIObject.h"
 #include <d2d1.h>
-#include <dwrite.h>
+#include <dwrite_3.h>
 #include <wtf/Vector.h>
 
 namespace WebCore {
@@ -39,26 +41,24 @@ namespace WebCore {
 void FontPlatformData::platformDataInit(HFONT font, float size, HDC hdc, WCHAR* faceName)
 {
     LOGFONT logfont;
-    GetObject(font, sizeof(logfont), &logfont);
-
-    HRESULT hr = Font::systemDWriteGdiInterop()->CreateFontFromLOGFONT(&logfont, &m_dwFont);
-    if (!SUCCEEDED(hr))
-        return;
+    HRESULT hr = ::GetObject(font, sizeof(LOGFONT), &logfont);
+    if (SUCCEEDED(hr))
+        m_dwFont = DirectWrite::createWithPlatformFont(logfont);
+    RELEASE_ASSERT(m_dwFont);
 
     hr = m_dwFont->CreateFontFace(&m_dwFontFace);
-    if (!SUCCEEDED(hr))
-        return;
+    RELEASE_ASSERT(SUCCEEDED(hr));
 
     if (!m_useGDI)
         m_isSystemFont = !wcscmp(faceName, L"Lucida Grande");
 }
 
-FontPlatformData::FontPlatformData(GDIObject<HFONT> hfont, IDWriteFont* font, float size, bool bold, bool oblique, bool useGDI)
+FontPlatformData::FontPlatformData(GDIObject<HFONT>&& hfont, COMPtr<IDWriteFont>&& font, float size, bool bold, bool oblique, bool useGDI)
     : m_syntheticBold(bold)
     , m_syntheticOblique(oblique)
     , m_size(size)
     , m_font(SharedGDIObject<HFONT>::create(WTFMove(hfont)))
-    , m_dwFont(font)
+    , m_dwFont(WTFMove(font))
     , m_useGDI(useGDI)
 {
     HRESULT hr = m_dwFont->CreateFontFace(&m_dwFontFace);
