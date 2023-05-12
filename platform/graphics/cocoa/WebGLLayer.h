@@ -20,47 +20,26 @@
  * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
-
-#import "IOSurface.h"
-#import "IntSize.h"
+#import "GraphicsContextGLIOSurfaceSwapChain.h"
 #import <QuartzCore/QuartzCore.h>
+#import <memory>
+#import <wtf/NakedPtr.h>
 
-namespace WebCore {
-class GraphicsLayer;
-class GraphicsContext3D;
-}
+ALLOW_DEPRECATED_DECLARATIONS_BEGIN
 
-#if PLATFORM(MAC)
+// A layer class implementing front buffer management of a 3-buffering swap
+// chain of IOSurfaces.
 @interface WebGLLayer : CALayer
-#else
-@interface WebGLLayer : CAEAGLLayer
-#endif
-{
-    WebCore::GraphicsContext3D* _context;
-    float _devicePixelRatio;
-#if PLATFORM(MAC)
-    std::unique_ptr<WebCore::IOSurface> _contentsBuffer;
-    std::unique_ptr<WebCore::IOSurface> _drawingBuffer;
-    std::unique_ptr<WebCore::IOSurface> _spareBuffer;
-    WebCore::IntSize _bufferSize;
-    BOOL _usingAlpha;
-#endif
-}
 
-@property (nonatomic) WebCore::GraphicsContext3D* context;
-
-- (id)initWithGraphicsContext3D:(WebCore::GraphicsContext3D*)context;
+- (id)initWithDevicePixelRatio:(float)devicePixelRatio contentsOpaque:(bool)contentsOpaque;
 
 - (CGImageRef)copyImageSnapshotWithColorSpace:(CGColorSpaceRef)colorSpace;
 
-#if PLATFORM(MAC)
-- (void)allocateIOSurfaceBackingStoreWithSize:(WebCore::IntSize)size usingAlpha:(BOOL)usingAlpha;
-- (void)bindFramebufferToNextAvailableSurface;
-#endif
+- (WebCore::GraphicsContextGLIOSurfaceSwapChain&) swapChain;
 
 @end
 
+ALLOW_DEPRECATED_DECLARATIONS_END

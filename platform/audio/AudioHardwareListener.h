@@ -26,7 +26,6 @@
 #ifndef AudioHardwareListener_h
 #define AudioHardwareListener_h
 
-#include "PlatformExportMacros.h"
 #include <wtf/Ref.h>
 #include <wtf/RefCounted.h>
 
@@ -42,27 +41,34 @@ class AudioHardwareListener : public RefCounted<AudioHardwareListener> {
 public:
     class Client {
     public:
-        virtual ~Client() { }
+        virtual ~Client() = default;
         virtual void audioHardwareDidBecomeActive() = 0;
         virtual void audioHardwareDidBecomeInactive() = 0;
         virtual void audioOutputDeviceChanged() = 0;
     };
 
     WEBCORE_EXPORT static Ref<AudioHardwareListener> create(Client&);
-    virtual ~AudioHardwareListener() { }
+    virtual ~AudioHardwareListener() = default;
     
     AudioHardwareActivityType hardwareActivity() const { return m_activity; }
-    bool outputDeviceSupportsLowPowerMode() const { return m_outputDeviceSupportsLowPowerMode; }
+
+    struct BufferSizeRange {
+        size_t minimum { 0 };
+        size_t maximum { 0 };
+        operator bool() const { return minimum && maximum; }
+        size_t nearest(size_t value) const { return std::min(std::max(value, minimum), maximum); }
+    };
+    BufferSizeRange supportedBufferSizes() const { return m_supportedBufferSizes; }
 
 protected:
     AudioHardwareListener(Client&);
 
     void setHardwareActivity(AudioHardwareActivityType activity) { m_activity = activity; }
-    void setOutputDeviceSupportsLowPowerMode(bool support) { m_outputDeviceSupportsLowPowerMode = support; }
+    void setSupportedBufferSizes(BufferSizeRange sizes) { m_supportedBufferSizes = sizes; }
 
     Client& m_client;
-    AudioHardwareActivityType m_activity;
-    bool m_outputDeviceSupportsLowPowerMode;
+    AudioHardwareActivityType m_activity { AudioHardwareActivityType::Unknown };
+    BufferSizeRange m_supportedBufferSizes;
 };
 
 }

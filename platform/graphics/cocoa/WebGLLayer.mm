@@ -23,52 +23,69 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
+#import "config.h"
 
 #if ENABLE(WEBGL)
 #import "WebGLLayer.h"
 
-#import "GraphicsContext3D.h"
-#import "GraphicsContextCG.h"
 #import "GraphicsLayer.h"
 #import "GraphicsLayerCA.h"
 #import "PlatformCALayer.h"
-#import "QuartzCoreSPI.h"
-#import <wtf/FastMalloc.h>
-#import <wtf/RetainPtr.h>
+#import <pal/spi/cocoa/QuartzCoreSPI.h>
+#import <wtf/Optional.h>
 
-#if PLATFORM(MAC)
-#import <OpenGL/OpenGL.h>
-#import <OpenGL/gl.h>
-#endif
+class WebGLLayerSwapChain final : public WebCore::GraphicsContextGLIOSurfaceSwapChain {
+public:
+    explicit WebGLLayerSwapChain(WebGLLayer* layer)  : m_layer(layer) { };
+    ~WebGLLayerSwapChain() override = default;
+    void present(Buffer) override;
+    const Buffer& displayBuffer() const override
+    {
+        return m_displayBuffer;
+    }
+    Buffer recycleBuffer() override
+    {
+        if (m_spareBuffer.surface) {
+            if (m_spareBuffer.surface->isInUse())
+                m_spareBuffer.surface.reset();
+            return WTFMove(m_spareBuffer);
+        }
+        return { };
+    }
+    void* detachClient() override
+    {
+        ASSERT(!m_spareBuffer.surface);
+        void* result = m_displayBuffer.handle;
+        m_displayBuffer.handle = nullptr;
+        return result;
+    }
+    WebCore::IOSurface* displaySurface() { return m_displayBuffer.surface.get(); }
+private:
+    Buffer m_displayBuffer;
+    Buffer m_spareBuffer;
+    WebGLLayer* const m_layer;
+};
 
-using namespace WebCore;
+@implementation WebGLLayer {
+    BOOL _preparedForDisplay;
+    Optional<WebGLLayerSwapChain> _swapChain;
+}
 
-@implementation WebGLLayer
-
-@synthesize context=_context;
-
--(id)initWithGraphicsContext3D:(GraphicsContext3D*)context
+- (id)initWithDevicePixelRatio:(float)devicePixelRatio contentsOpaque:(bool)contentsOpaque
 {
-    _context = context;
     self = [super init];
-    _devicePixelRatio = context->getContextAttributes().devicePixelRatio;
-#if PLATFORM(MAC)
-    if (!context->getContextAttributes().alpha)
-        self.opaque = YES;
     self.transform = CATransform3DIdentity;
-    self.contentsScale = _devicePixelRatio;
-#endif
+    self.contentsOpaque = contentsOpaque;
+    self.contentsScale = devicePixelRatio;
+    _swapChain.emplace(self);
     return self;
 }
 
-#if PLATFORM(MAC)
-// On Mac, we need to flip the layer to take into account
-// that the IOSurface provides content in Y-up. This
-// means that any incoming transform (unlikely, since this
-// is a contents layer) and anchor point must add a
-// Y scale of -1 and make sure the transform happens from
-// the top.
+// When using an IOSurface as layer contents, we need to flip the
+// layer to take into account that the IOSurface provides content
+// in Y-up. This means that any incoming transform (unlikely, since
+// this is a contents layer) and anchor point must add a Y scale of
+// -1 and make sure the transform happens from the top.
 
 - (void)setTransform:(CATransform3D)t
 {
@@ -80,102 +97,45 @@ using namespace WebCore;
     [super setAnchorPoint:CGPointMake(p.x, 1.0 - p.y)];
 }
 
-static void freeData(void *, const void *data, size_t /* size */)
+- (CGImageRef)copyImageSnapshotWithColorSpace:(CGColorSpaceRef)colorSpace
 {
-    fastFree(const_cast<void *>(data));
-}
-#endif
-
--(CGImageRef)copyImageSnapshotWithColorSpace:(CGColorSpaceRef)colorSpace
-{
-    if (!_context)
-        return nullptr;
-
-#if PLATFORM(IOS)
+    // FIXME: implement. https://bugs.webkit.org/show_bug.cgi?id=217377
+    // When implementing, remember to use self.contentsScale.
     UNUSED_PARAM(colorSpace);
     return nullptr;
-#else
-    CGLSetCurrentContext(_context->platformGraphicsContext3D());
+}
+- (WebCore::GraphicsContextGLIOSurfaceSwapChain&) swapChain
+{
+    return _swapChain.value();
+}
 
-    RetainPtr<CGColorSpaceRef> imageColorSpace = colorSpace;
-    if (!imageColorSpace)
-        imageColorSpace = sRGBColorSpaceRef();
-
-    CGRect layerBounds = CGRectIntegral([self bounds]);
-
-    size_t width = layerBounds.size.width * _devicePixelRatio;
-    size_t height = layerBounds.size.height * _devicePixelRatio;
-
-    size_t rowBytes = (width * 4 + 15) & ~15;
-    size_t dataSize = rowBytes * height;
-    void* data = fastMalloc(dataSize);
-    if (!data)
-        return nullptr;
-
-    glPixelStorei(GL_PACK_ROW_LENGTH, rowBytes / 4);
-    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, data);
-
-    CGDataProviderRef provider = CGDataProviderCreateWithData(0, data, dataSize, freeData);
-    CGImageRef image = CGImageCreate(width, height, 8, 32, rowBytes, imageColorSpace.get(),
-        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host, provider, 0, true, kCGRenderingIntentDefault);
-    CGDataProviderRelease(provider);
-    return image;
-#endif
+- (void)prepareForDisplay
+{
+    [self setNeedsDisplay];
+    _preparedForDisplay = YES;
 }
 
 - (void)display
 {
-    if (!_context)
-        return;
-
-#if PLATFORM(MAC)
-    _context->prepareTexture();
-    if (_drawingBuffer) {
-        std::swap(_contentsBuffer, _drawingBuffer);
-        self.contents = _contentsBuffer->asLayerContents();
+    if (_swapChain->displaySurface() && _preparedForDisplay) {
+        self.contents = _swapChain->displaySurface()->asLayerContents();
         [self reloadValueForKeyPath:@"contents"];
-        [self bindFramebufferToNextAvailableSurface];
     }
-#else
-    _context->presentRenderbuffer();
-#endif
-
-    _context->markLayerComposited();
-    PlatformCALayer* layer = PlatformCALayer::platformCALayer(self);
+    auto layer = WebCore::PlatformCALayer::platformCALayerForLayer((__bridge void*)self);
     if (layer && layer->owner())
-        layer->owner()->platformCALayerLayerDidDisplay(layer);
+        layer->owner()->platformCALayerLayerDidDisplay(layer.get());
+
+    _preparedForDisplay = NO;
 }
-
-#if PLATFORM(MAC)
-- (void)allocateIOSurfaceBackingStoreWithSize:(IntSize)size usingAlpha:(BOOL)usingAlpha
-{
-    _bufferSize = size;
-    _usingAlpha = usingAlpha;
-    _contentsBuffer = WebCore::IOSurface::create(size, sRGBColorSpaceRef());
-    _drawingBuffer = WebCore::IOSurface::create(size, sRGBColorSpaceRef());
-    _spareBuffer = WebCore::IOSurface::create(size, sRGBColorSpaceRef());
-    ASSERT(_contentsBuffer);
-    ASSERT(_drawingBuffer);
-    ASSERT(_spareBuffer);
-}
-
-- (void)bindFramebufferToNextAvailableSurface
-{
-    GC3Denum texture = _context->platformTexture();
-    glBindTexture(GL_TEXTURE_RECTANGLE_ARB, texture);
-
-    if (_drawingBuffer && _drawingBuffer->isInUse())
-        std::swap(_drawingBuffer, _spareBuffer);
-
-    IOSurfaceRef ioSurface = _drawingBuffer->surface();
-    GC3Denum internalFormat = _usingAlpha ? GL_RGBA : GL_RGB;
-
-    // Link the IOSurface to the texture.
-    CGLError error = CGLTexImageIOSurface2D(_context->platformGraphicsContext3D(), GL_TEXTURE_RECTANGLE_ARB, internalFormat, _bufferSize.width(), _bufferSize.height(), GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, ioSurface, 0);
-    ASSERT_UNUSED(error, error == kCGLNoError);
-}
-#endif
 
 @end
+
+void WebGLLayerSwapChain::present(Buffer buffer)
+{
+    ASSERT(!m_spareBuffer.surface);
+    m_spareBuffer = WTFMove(m_displayBuffer);
+    m_displayBuffer = WTFMove(buffer);
+    [m_layer prepareForDisplay];
+}
 
 #endif // ENABLE(WEBGL)

@@ -27,44 +27,29 @@
 #import "FrameSelection.h"
 
 #import "AXObjectCache.h"
+#import "Chrome.h"
+#import "ChromeClient.h"
 #import "Frame.h"
 #import "RenderView.h"
 
 namespace WebCore {
 
-#if !PLATFORM(IOS)
-static CGRect accessibilityConvertScreenRect(CGRect bounds)
-{
-    NSArray *screens = [NSScreen screens];
-    if ([screens count]) {
-        CGFloat screenHeight = NSHeight([(NSScreen *)[screens objectAtIndex:0] frame]);
-        bounds.origin.y = (screenHeight - (bounds.origin.y + bounds.size.height));
-    } else
-        bounds = CGRectZero;    
-    
-    return bounds;
-}
-#endif // !PLATFORM(IOS)
-    
-    
 void FrameSelection::notifyAccessibilityForSelectionChange(const AXTextStateChangeIntent& intent)
 {
-    Document* document = m_frame->document();
-
     if (m_selection.start().isNotNull() && m_selection.end().isNotNull()) {
-        if (AXObjectCache* cache = document->existingAXObjectCache())
+        if (AXObjectCache* cache = m_document->existingAXObjectCache())
             cache->postTextStateChangeNotification(m_selection.start(), intent, m_selection);
     }
 
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     // if zoom feature is enabled, insertion point changes should update the zoom
-    if (!UAZoomEnabled() || !m_selection.isCaret())
+    if (!m_selection.isCaret())
         return;
 
-    RenderView* renderView = document->renderView();
+    RenderView* renderView = m_document->renderView();
     if (!renderView)
         return;
-    FrameView* frameView = m_frame->view();
+    FrameView* frameView = m_document->view();
     if (!frameView)
         return;
 
@@ -73,13 +58,12 @@ void FrameSelection::notifyAccessibilityForSelectionChange(const AXTextStateChan
 
     selectionRect = frameView->contentsToScreen(selectionRect);
     viewRect = frameView->contentsToScreen(viewRect);
-    CGRect cgCaretRect = CGRectMake(selectionRect.x(), selectionRect.y(), selectionRect.width(), selectionRect.height());
-    CGRect cgViewRect = CGRectMake(viewRect.x(), viewRect.y(), viewRect.width(), viewRect.height());
-    cgCaretRect = accessibilityConvertScreenRect(cgCaretRect);
-    cgViewRect = accessibilityConvertScreenRect(cgViewRect);
 
-    UAZoomChangeFocus(&cgViewRect, &cgCaretRect, kUAZoomFocusTypeInsertionPoint);
-#endif // !PLATFORM(IOS)
+    if (!m_document->page())
+        return;
+    
+    m_document->page()->chrome().client().changeUniversalAccessZoomFocus(viewRect, selectionRect);
+#endif // !PLATFORM(IOS_FAMILY)
 }
 
 } // namespace WebCore

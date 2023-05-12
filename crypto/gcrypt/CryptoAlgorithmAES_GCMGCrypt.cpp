@@ -28,46 +28,44 @@
 #include "config.h"
 #include "CryptoAlgorithmAES_GCM.h"
 
-#if ENABLE(SUBTLE_CRYPTO)
+#if ENABLE(WEB_CRYPTO)
 
 #include "CryptoAlgorithmAesGcmParams.h"
 #include "CryptoKeyAES.h"
-#include "ExceptionCode.h"
 #include "NotImplemented.h"
-#include "ScriptExecutionContext.h"
 #include <pal/crypto/gcrypt/Handle.h>
 #include <pal/crypto/gcrypt/Utilities.h>
 #include <wtf/CryptographicUtilities.h>
 
 namespace WebCore {
 
-static std::optional<Vector<uint8_t>> gcryptEncrypt(const Vector<uint8_t>& key, const Vector<uint8_t>& iv, Vector<uint8_t>&& plainText, const Vector<uint8_t>& additionalData, uint8_t tagLength)
+static Optional<Vector<uint8_t>> gcryptEncrypt(const Vector<uint8_t>& key, const Vector<uint8_t>& iv, const Vector<uint8_t>& plainText, const Vector<uint8_t>& additionalData, uint8_t tagLength)
 {
     // Determine the AES algorithm for the given key size.
     auto algorithm = PAL::GCrypt::aesAlgorithmForKeySize(key.size() * 8);
     if (!algorithm)
-        return std::nullopt;
+        return WTF::nullopt;
 
     // Create a new GCrypt cipher object for the AES algorithm and the GCM cipher mode.
     PAL::GCrypt::Handle<gcry_cipher_hd_t> handle;
     gcry_error_t error = gcry_cipher_open(&handle, *algorithm, GCRY_CIPHER_MODE_GCM, GCRY_CIPHER_SECURE);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Use the given key for this cipher object.
     error = gcry_cipher_setkey(handle, key.data(), key.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Use the given IV for this cipher object.
     error = gcry_cipher_setiv(handle, iv.data(), iv.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Use the given additonal data, if any, as the authentication data for this cipher object.
@@ -75,7 +73,7 @@ static std::optional<Vector<uint8_t>> gcryptEncrypt(const Vector<uint8_t>& key, 
         error = gcry_cipher_authenticate(handle, additionalData.data(), additionalData.size());
         if (error != GPG_ERR_NO_ERROR) {
             PAL::GCrypt::logError(error);
-            return std::nullopt;
+            return WTF::nullopt;
         }
     }
 
@@ -83,7 +81,7 @@ static std::optional<Vector<uint8_t>> gcryptEncrypt(const Vector<uint8_t>& key, 
     error = gcry_cipher_final(handle);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Perform the encryption and retrieve the encrypted output.
@@ -91,7 +89,7 @@ static std::optional<Vector<uint8_t>> gcryptEncrypt(const Vector<uint8_t>& key, 
     error = gcry_cipher_encrypt(handle, output.data(), output.size(), plainText.data(), plainText.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // If tag length was specified, retrieve the tag data and append it to the output vector.
@@ -100,7 +98,7 @@ static std::optional<Vector<uint8_t>> gcryptEncrypt(const Vector<uint8_t>& key, 
         error = gcry_cipher_gettag(handle, tag.data(), tag.size());
         if (error != GPG_ERR_NO_ERROR) {
             PAL::GCrypt::logError(error);
-            return std::nullopt;
+            return WTF::nullopt;
         }
 
         output.appendVector(tag);
@@ -109,33 +107,33 @@ static std::optional<Vector<uint8_t>> gcryptEncrypt(const Vector<uint8_t>& key, 
     return output;
 }
 
-static std::optional<Vector<uint8_t>> gcryptDecrypt(const Vector<uint8_t>& key, const Vector<uint8_t>& iv, Vector<uint8_t>&& cipherText, const Vector<uint8_t>& additionalData, uint8_t tagLength)
+static Optional<Vector<uint8_t>> gcryptDecrypt(const Vector<uint8_t>& key, const Vector<uint8_t>& iv, const Vector<uint8_t>& cipherText, const Vector<uint8_t>& additionalData, uint8_t tagLength)
 {
     // Determine the AES algorithm for the given key size.
     auto algorithm = PAL::GCrypt::aesAlgorithmForKeySize(key.size() * 8);
     if (!algorithm)
-        return std::nullopt;
+        return WTF::nullopt;
 
     // Create a new GCrypt cipher object for the AES algorithm and the GCM cipher mode.
     PAL::GCrypt::Handle<gcry_cipher_hd_t> handle;
     gcry_error_t error = gcry_cipher_open(&handle, *algorithm, GCRY_CIPHER_MODE_GCM, 0);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Use the given key for this cipher object.
     error = gcry_cipher_setkey(handle, key.data(), key.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Use the given IV for this cipher object.
     error = gcry_cipher_setiv(handle, iv.data(), iv.size());
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Use the given additonal data, if any, as the authentication data for this cipher object.
@@ -143,7 +141,7 @@ static std::optional<Vector<uint8_t>> gcryptDecrypt(const Vector<uint8_t>& key, 
         error = gcry_cipher_authenticate(handle, additionalData.data(), additionalData.size());
         if (error != GPG_ERR_NO_ERROR) {
             PAL::GCrypt::logError(error);
-            return std::nullopt;
+            return WTF::nullopt;
         }
     }
 
@@ -151,7 +149,7 @@ static std::optional<Vector<uint8_t>> gcryptDecrypt(const Vector<uint8_t>& key, 
     error = gcry_cipher_final(handle);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // Account for the specified tag length when performing the decryption and retrieving the decrypted output.
@@ -160,7 +158,7 @@ static std::optional<Vector<uint8_t>> gcryptDecrypt(const Vector<uint8_t>& key, 
     error = gcry_cipher_decrypt(handle, output.data(), output.size(), cipherText.data(), cipherLength);
     if (error != GPG_ERR_NO_ERROR) {
         PAL::GCrypt::logError(error);
-        return std::nullopt;
+        return WTF::nullopt;
     }
 
     // If tag length was indeed specified, retrieve the tag data and compare it securely to the tag data that
@@ -171,72 +169,32 @@ static std::optional<Vector<uint8_t>> gcryptDecrypt(const Vector<uint8_t>& key, 
         error = gcry_cipher_gettag(handle, tag.data(), tagLength);
         if (error != GPG_ERR_NO_ERROR) {
             PAL::GCrypt::logError(error);
-            return std::nullopt;
+            return WTF::nullopt;
         }
 
         if (constantTimeMemcmp(tag.data(), cipherText.data() + cipherLength, tagLength))
-            return std::nullopt;
+            return WTF::nullopt;
     }
 
     return output;
 }
 
-void CryptoAlgorithmAES_GCM::platformEncrypt(std::unique_ptr<CryptoAlgorithmParameters>&& parameters, Ref<CryptoKey>&& key, Vector<uint8_t>&& plainText, VectorCallback&& callback, ExceptionCallback&& exceptionCallback, ScriptExecutionContext& context, WorkQueue& workQueue)
+ExceptionOr<Vector<uint8_t>> CryptoAlgorithmAES_GCM::platformEncrypt(const CryptoAlgorithmAesGcmParams& parameters, const CryptoKeyAES& key, const Vector<uint8_t>& plainText)
 {
-    context.ref();
-    workQueue.dispatch(
-        [parameters = WTFMove(parameters), key = WTFMove(key), plainText = WTFMove(plainText), callback = WTFMove(callback), exceptionCallback = WTFMove(exceptionCallback), &context]() mutable {
-            auto& aesParameters = downcast<CryptoAlgorithmAesGcmParams>(*parameters);
-            auto& aesKey = downcast<CryptoKeyAES>(key.get());
-
-            auto output = gcryptEncrypt(aesKey.key(), aesParameters.ivVector(), WTFMove(plainText), aesParameters.additionalDataVector(), aesParameters.tagLength.value_or(0) / 8);
-            if (!output) {
-                // We should only dereference callbacks after being back to the Document/Worker threads.
-                context.postTask(
-                    [callback = WTFMove(callback), exceptionCallback = WTFMove(exceptionCallback)](ScriptExecutionContext& context) {
-                        exceptionCallback(OperationError);
-                        context.deref();
-                    });
-                return;
-            }
-
-            // We should only dereference callbacks after being back to the Document/Worker threads.
-            context.postTask(
-                [output = WTFMove(*output), callback = WTFMove(callback), exceptionCallback = WTFMove(exceptionCallback)](ScriptExecutionContext& context) mutable {
-                    callback(WTFMove(output));
-                    context.deref();
-                });
-        });
+    auto output = gcryptEncrypt(key.key(), parameters.ivVector(), plainText, parameters.additionalDataVector(), parameters.tagLength.valueOr(0) / 8);
+    if (!output)
+        return Exception { OperationError };
+    return WTFMove(*output);
 }
 
-void CryptoAlgorithmAES_GCM::platformDecrypt(std::unique_ptr<CryptoAlgorithmParameters>&& parameters, Ref<CryptoKey>&& key, Vector<uint8_t>&& cipherText, VectorCallback&& callback, ExceptionCallback&& exceptionCallback, ScriptExecutionContext& context, WorkQueue& workQueue)
+ExceptionOr<Vector<uint8_t>> CryptoAlgorithmAES_GCM::platformDecrypt(const CryptoAlgorithmAesGcmParams& parameters, const CryptoKeyAES& key, const Vector<uint8_t>& cipherText)
 {
-    context.ref();
-    workQueue.dispatch(
-        [parameters = WTFMove(parameters), key = WTFMove(key), cipherText = WTFMove(cipherText), callback = WTFMove(callback), exceptionCallback = WTFMove(exceptionCallback), &context]() mutable {
-            auto& aesParameters = downcast<CryptoAlgorithmAesGcmParams>(*parameters);
-            auto& aesKey = downcast<CryptoKeyAES>(key.get());
-
-            auto output = gcryptDecrypt(aesKey.key(), aesParameters.ivVector(), WTFMove(cipherText), aesParameters.additionalDataVector(), aesParameters.tagLength.value_or(0) / 8);
-            if (!output) {
-                // We should only dereference callbacks after being back to the Document/Worker threads.
-                context.postTask(
-                    [callback = WTFMove(callback), exceptionCallback = WTFMove(exceptionCallback)](ScriptExecutionContext& context) {
-                        exceptionCallback(OperationError);
-                        context.deref();
-                    });
-                return;
-            }
-
-            // We should only dereference callbacks after being back to the Document/Worker threads.
-            context.postTask(
-                [output = WTFMove(*output), callback = WTFMove(callback), exceptionCallback = WTFMove(exceptionCallback)](ScriptExecutionContext& context) mutable {
-                    callback(WTFMove(output));
-                    context.deref();
-                });
-        });
+    auto output = gcryptDecrypt(key.key(), parameters.ivVector(), cipherText, parameters.additionalDataVector(), parameters.tagLength.valueOr(0) / 8);
+    if (!output)
+        return Exception { OperationError };
+    return WTFMove(*output);
 }
 
 } // namespace WebCore
 
-#endif // ENABLE(SUBTLE_CRYPTO)
+#endif // ENABLE(WEB_CRYPTO)

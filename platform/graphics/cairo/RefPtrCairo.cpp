@@ -23,110 +23,79 @@
 
 #include <cairo.h>
 
-#if USE(FREETYPE)
-#include <cairo-ft.h>
-#include <fontconfig/fcfreetype.h>
-#endif
-
 namespace WTF {
 
-template<> void refIfNotNull(cairo_t* ptr)
+void DefaultRefDerefTraits<cairo_t>::refIfNotNull(cairo_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_reference(ptr);
 }
 
-template<> void derefIfNotNull(cairo_t* ptr)
+void DefaultRefDerefTraits<cairo_t>::derefIfNotNull(cairo_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_destroy(ptr);
 }
 
-template<> void refIfNotNull(cairo_surface_t* ptr)
+void DefaultRefDerefTraits<cairo_surface_t>::refIfNotNull(cairo_surface_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_surface_reference(ptr);
 }
 
-template<> void derefIfNotNull(cairo_surface_t* ptr)
+void DefaultRefDerefTraits<cairo_surface_t>::derefIfNotNull(cairo_surface_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_surface_destroy(ptr);
 }
 
-template<> void refIfNotNull(cairo_font_face_t* ptr)
+void DefaultRefDerefTraits<cairo_font_face_t>::refIfNotNull(cairo_font_face_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_font_face_reference(ptr);
 }
 
-template<> void derefIfNotNull(cairo_font_face_t* ptr)
+void DefaultRefDerefTraits<cairo_font_face_t>::derefIfNotNull(cairo_font_face_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_font_face_destroy(ptr);
 }
 
-template<> void refIfNotNull(cairo_scaled_font_t* ptr)
+void DefaultRefDerefTraits<cairo_scaled_font_t>::refIfNotNull(cairo_scaled_font_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_scaled_font_reference(ptr);
 }
 
-template<> void derefIfNotNull(cairo_scaled_font_t* ptr)
+void DefaultRefDerefTraits<cairo_scaled_font_t>::derefIfNotNull(cairo_scaled_font_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_scaled_font_destroy(ptr);
 }
 
-template<> void refIfNotNull(cairo_pattern_t* ptr)
+void DefaultRefDerefTraits<cairo_pattern_t>::refIfNotNull(cairo_pattern_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_pattern_reference(ptr);
 }
 
-template<> void derefIfNotNull(cairo_pattern_t* ptr)
+void DefaultRefDerefTraits<cairo_pattern_t>::derefIfNotNull(cairo_pattern_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_pattern_destroy(ptr);
 }
 
-template<> void refIfNotNull(cairo_region_t* ptr)
+void DefaultRefDerefTraits<cairo_region_t>::refIfNotNull(cairo_region_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_region_reference(ptr);
 }
 
-template<> void derefIfNotNull(cairo_region_t* ptr)
+void DefaultRefDerefTraits<cairo_region_t>::derefIfNotNull(cairo_region_t* ptr)
 {
     if (LIKELY(ptr))
         cairo_region_destroy(ptr);
 }
-
-#if USE(FREETYPE)
-template<> void refIfNotNull(FcPattern* ptr)
-{
-    if (LIKELY(ptr))
-        FcPatternReference(ptr);
-}
-
-template<> void derefIfNotNull(FcPattern* ptr)
-{
-    if (LIKELY(ptr))
-        FcPatternDestroy(ptr);
-}
-
-template<> void refIfNotNull(FcConfig* ptr)
-{
-    if (LIKELY(ptr))
-        FcConfigReference(ptr);
-}
-
-template<> void derefIfNotNull(FcConfig* ptr)
-{
-    if (LIKELY(ptr))
-        FcConfigDestroy(ptr);
-}
-#endif
 
 } // namespace WTF
 

@@ -26,7 +26,7 @@
 #include "config.h"
 #include "IOSurfacePool.h"
 
-#if USE(IOSURFACE)
+#if HAVE(IOSURFACE)
 
 #include "GraphicsContextCG.h"
 #include <CoreGraphics/CoreGraphics.h>
@@ -131,7 +131,7 @@ std::unique_ptr<IOSurface> IOSurfacePool::takeSurface(IntSize size, CGColorSpace
 
         didRemoveSurface(*surface, false);
 
-        surface->setIsVolatile(false);
+        surface->setVolatile(false);
 
         DUMP_POOL_STATISTICS("takeSurface - taking");
         return surface;
@@ -148,7 +148,7 @@ std::unique_ptr<IOSurface> IOSurfacePool::takeSurface(IntSize size, CGColorSpace
         m_inUseSurfaces.remove(surfaceIter);
         didRemoveSurface(*surface, true);
 
-        surface->setIsVolatile(false);
+        surface->setVolatile(false);
 
         DUMP_POOL_STATISTICS("takeSurface - taking in-use");
         return surface;
@@ -298,7 +298,7 @@ bool IOSurfacePool::markOlderSurfacesPurgeable()
             continue;
         }
 
-        surfaceAndDetails.key->setIsVolatile(true);
+        surfaceAndDetails.key->setVolatile(true);
         surfaceAndDetails.value.hasMarkedPurgeable = true;
     }
 
@@ -383,4 +383,4 @@ void IOSurfacePool::showPoolStatistics(const char* reason)
 }
 
 }
-#endif // USE(IOSURFACE)
+#endif // HAVE(IOSURFACE)

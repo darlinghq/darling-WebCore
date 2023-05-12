@@ -26,32 +26,25 @@
 #pragma once
 
 #include "HTMLElement.h"
-#include "MediaQueryEvaluator.h"
 
 namespace WebCore {
 
 class HTMLPictureElement final : public HTMLElement {
+    WTF_MAKE_ISO_ALLOCATED(HTMLPictureElement);
 public:
     static Ref<HTMLPictureElement> create(const QualifiedName&, Document&);
     virtual ~HTMLPictureElement();
 
     void sourcesChanged();
 
-    void clearViewportDependentResults() { m_viewportDependentMediaQueryResults.clear(); }
-    bool hasViewportDependentResults() const { return m_viewportDependentMediaQueryResults.size(); }
-    Vector<MediaQueryResult>& viewportDependentResults() { return m_viewportDependentMediaQueryResults; }
-
-    bool viewportChangeAffectedPicture() const;
-
-    WeakPtr<HTMLPictureElement> createWeakPtr() { return m_weakFactory.createWeakPtr(); }
+#if USE(SYSTEM_PREVIEW)
+    WEBCORE_EXPORT bool isSystemPreviewImage();
+#endif
 
 private:
     HTMLPictureElement(const QualifiedName&, Document&);
 
     void didMoveToNewDocument(Document& oldDocument, Document& newDocument) final;
-
-    WeakPtrFactory<HTMLPictureElement> m_weakFactory { this };
-    Vector<MediaQueryResult> m_viewportDependentMediaQueryResults;
 };
 
 } // namespace WebCore

@@ -1,7 +1,7 @@
 /*
  * (C) 1999 Lars Knoll (knoll@kde.org)
  * (C) 2000 Dirk Mueller (mueller@kde.org)
- * Copyright (C) 2004, 2005, 2006, 2009, 2010, 2011, 2014 Apple Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -28,16 +28,19 @@
 
 namespace WebCore {
 
-struct CompositionUnderline;
 class RenderCombineText;
 class RenderedDocumentMarker;
 class TextPainter;
+struct CompositionUnderline;
+struct MarkedText;
+struct StyledMarkedText;
 struct TextPaintStyle;
 
 const unsigned short cNoTruncation = USHRT_MAX;
 const unsigned short cFullTruncation = USHRT_MAX - 1;
 
 class InlineTextBox : public InlineBox {
+    WTF_MAKE_ISO_ALLOCATED(InlineTextBox);
 public:
     explicit InlineTextBox(RenderText& renderer)
         : InlineBox(renderer)
@@ -55,9 +58,16 @@ public:
     void setNextTextBox(InlineTextBox* n) { m_nextTextBox = n; }
     void setPreviousTextBox(InlineTextBox* p) { m_prevTextBox = p; }
 
+    bool hasTextContent() const;
+
+    // These functions do not account for combined text. For combined text this box will always have len() == 1
+    // regardless of whether the resulting composition is the empty string. Use hasTextContent() if you want to
+    // know whether this box has text content.
+    //
     // FIXME: These accessors should ASSERT(!isDirty()). See https://bugs.webkit.org/show_bug.cgi?id=97264
+    // Note len() == 1 for combined text regardless of whether the composition is empty. Use hasTextContent() to
     unsigned start() const { return m_start; }
-    unsigned end() const { return m_len ? m_start + m_len - 1 : m_start; }
+    unsigned end() const { return m_start + m_len; }
     unsigned len() const { return m_len; }
 
     void setStart(unsigned start) { m_start = start; }
@@ -71,21 +81,21 @@ public:
 
     using InlineBox::hasHyphen;
     using InlineBox::setHasHyphen;
-    using InlineBox::canHaveLeadingExpansion;
-    using InlineBox::setCanHaveLeadingExpansion;
-    using InlineBox::canHaveTrailingExpansion;
-    using InlineBox::setCanHaveTrailingExpansion;
-    using InlineBox::forceTrailingExpansion;
-    using InlineBox::setForceTrailingExpansion;
-    using InlineBox::forceLeadingExpansion;
-    using InlineBox::setForceLeadingExpansion;
+    using InlineBox::canHaveLeftExpansion;
+    using InlineBox::setCanHaveLeftExpansion;
+    using InlineBox::canHaveRightExpansion;
+    using InlineBox::setCanHaveRightExpansion;
+    using InlineBox::forceRightExpansion;
+    using InlineBox::setForceRightExpansion;
+    using InlineBox::forceLeftExpansion;
+    using InlineBox::setForceLeftExpansion;
 
     static inline bool compareByStart(const InlineTextBox* first, const InlineTextBox* second) { return first->start() < second->start(); }
 
     int baselinePosition(FontBaseline) const final;
     LayoutUnit lineHeight() const final;
 
-    bool emphasisMarkExistsAndIsAbove(const RenderStyle&, bool& isAbove) const;
+    Optional<bool> emphasisMarkExistsAndIsAbove(const RenderStyle&) const;
 
     LayoutRect logicalOverflowRect() const;
     void setLogicalOverflowRect(const LayoutRect&);
@@ -97,7 +107,7 @@ public:
     virtual void dirtyOwnLineBoxes() { dirtyLineBoxes(); }
 
 #if ENABLE(TREE_DEBUGGING)
-    void outputLineBox(TextStream&, bool mark, int depth) const final;
+    void outputLineBox(WTF::TextStream&, bool mark, int depth) const final;
     const char* boxName() const final;
 #endif
 
@@ -106,29 +116,28 @@ private:
     LayoutUnit selectionBottom() const;
     LayoutUnit selectionHeight() const;
 
-    StringView substringToRender(std::optional<unsigned> overridingLength = { }) const;
-    String hyphenatedStringForTextRun(const RenderStyle&, std::optional<unsigned> alternateLength = { }) const;
-    TextRun constructTextRun(const RenderStyle&, StringView alternateStringToRender = { }, std::optional<unsigned> alternateLength = { }) const;
-    TextRun constructTextRun(const RenderStyle&, StringView, unsigned maximumLength) const;
-
 public:
-    FloatRect calculateBoundaries() const override { return FloatRect(x(), y(), width(), height()); }
-
     virtual LayoutRect localSelectionRect(unsigned startPos, unsigned endPos) const;
-    bool isSelected(unsigned startPos, unsigned endPos) const;
+    bool isSelected(unsigned startPosition, unsigned endPosition) const;
     std::pair<unsigned, unsigned> selectionStartEnd() const;
+    std::pair<unsigned, unsigned> highlightStartEnd(HighlightData&) const;
 
 protected:
     void paint(PaintInfo&, const LayoutPoint&, LayoutUnit lineTop, LayoutUnit lineBottom) override;
     bool nodeAtPoint(const HitTestRequest&, HitTestResult&, const HitTestLocation& locationInContainer, const LayoutPoint& accumulatedOffset, LayoutUnit lineTop, LayoutUnit lineBottom, HitTestAction) override;
 
+    unsigned clampedOffset(unsigned) const;
+
 private:
     void deleteLine() final;
     void extractLine() final;
     void attachLine() final;
+    
+    RenderObject::HighlightState verifySelectionState(RenderObject::HighlightState, HighlightData&) const;
+    std::pair<unsigned, unsigned> clampedStartEndForState(unsigned, unsigned, RenderObject::HighlightState) const;
 
 public:
-    RenderObject::SelectionState selectionState() final;
+    RenderObject::HighlightState selectionState() final;
 
 private:
     void clearTruncation() final { m_truncation = cNoTruncation; }
@@ -151,18 +160,40 @@ public:
     virtual int offsetForPosition(float x, bool includePartialGlyphs = true) const;
     virtual float positionForOffset(unsigned offset) const;
 
-protected:
-    void paintCompositionBackground(GraphicsContext&, const FloatPoint& boxOrigin, const RenderStyle&, const FontCascade&, unsigned startPos, unsigned endPos);
-    void paintDocumentMarkers(GraphicsContext&, const FloatPoint& boxOrigin, const RenderStyle&, const FontCascade&, bool background);
-    void paintCompositionUnderline(GraphicsContext&, const FloatPoint& boxOrigin, const CompositionUnderline&);
-    unsigned clampedOffset(unsigned) const;
+    bool hasMarkers() const;
+    FloatRect calculateUnionOfAllDocumentMarkerBounds() const;
+    FloatRect calculateDocumentMarkerBounds(const MarkedText&) const;
 
 private:
-    void paintDecoration(GraphicsContext&, const FontCascade&, RenderCombineText*, const TextRun&, const FloatPoint& textOrigin, const FloatRect& boxRect,
-        TextDecoration, TextPaintStyle, const ShadowData*, const FloatRect& clipOutRect);
-    void paintSelection(GraphicsContext&, const FloatPoint& boxOrigin, const RenderStyle&, const FontCascade&, const Color& textColor);
-    void paintDocumentMarker(GraphicsContext&, const FloatPoint& boxOrigin, RenderedDocumentMarker&, const RenderStyle&, const FontCascade&, bool grammar);
-    void paintTextMatchMarker(GraphicsContext&, const FloatPoint& boxOrigin, RenderedDocumentMarker&, const RenderStyle&, const FontCascade&);
+    enum class TextPaintPhase { Background, Foreground, Decoration };
+
+    Vector<MarkedText> collectMarkedTextsForDraggedContent();
+    Vector<MarkedText> collectMarkedTextsForDocumentMarkers(TextPaintPhase) const;
+    Vector<MarkedText> collectMarkedTextsForHighlights(TextPaintPhase) const;
+
+    FloatPoint textOriginFromBoxRect(const FloatRect&) const;
+
+    void paintMarkedTexts(PaintInfo&, TextPaintPhase, const FloatRect& boxRect, const Vector<StyledMarkedText>&, const FloatRect& decorationClipOutRect = { });
+
+    void paintPlatformDocumentMarker(GraphicsContext&, const FloatPoint& boxOrigin, const MarkedText&);
+    void paintPlatformDocumentMarkers(GraphicsContext&, const FloatPoint& boxOrigin);
+
+    void paintCompositionBackground(PaintInfo&, const FloatPoint& boxOrigin);
+    void paintCompositionUnderlines(PaintInfo&, const FloatPoint& boxOrigin) const;
+    void paintCompositionUnderline(PaintInfo&, const FloatPoint& boxOrigin, const CompositionUnderline&) const;
+
+    enum class MarkedTextBackgroundStyle : bool { Default, Rounded };
+    void paintMarkedTextBackground(PaintInfo&, const FloatPoint& boxOrigin, const Color&, unsigned clampedStartOffset, unsigned clampedEndOffset, MarkedTextBackgroundStyle = MarkedTextBackgroundStyle::Default);
+    void paintMarkedTextForeground(PaintInfo&, const FloatRect& boxRect, const StyledMarkedText&);
+    void paintMarkedTextDecoration(PaintInfo&, const FloatRect& boxRect, const FloatRect& clipOutRect, const StyledMarkedText&);
+
+    const RenderCombineText* combinedText() const;
+    const FontCascade& lineFont() const;
+
+    ShadowData* debugTextShadow();
+
+    String text(bool ignoreCombinedText = false, bool ignoreHyphen = false) const; // The effective text for the run.
+    TextRun createTextRun(bool ignoreCombinedText = false, bool ignoreHyphen = false) const;
 
     ExpansionBehavior expansionBehavior() const;
 
@@ -178,6 +209,8 @@ private:
     // denote no truncation (the whole run paints) and full truncation (nothing paints at all).
     unsigned short m_truncation { cNoTruncation };
 };
+
+LayoutRect snappedSelectionRect(const LayoutRect&, float logicalRight, float selectionTop, float selectionHeight, bool isHorizontal);
 
 } // namespace WebCore
 

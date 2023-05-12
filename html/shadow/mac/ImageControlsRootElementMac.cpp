@@ -33,10 +33,14 @@
 #include "RenderBlockFlow.h"
 #include "RenderImage.h"
 #include "RenderStyle.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(ImageControlsRootElementMac);
+
 class RenderImageControls final : public RenderBlockFlow {
+    WTF_MAKE_ISO_ALLOCATED_INLINE(RenderImageControls);
 public:
     RenderImageControls(HTMLElement&, RenderStyle&&);
     virtual ~RenderImageControls();
@@ -53,9 +57,7 @@ RenderImageControls::RenderImageControls(HTMLElement& element, RenderStyle&& sty
 {
 }
 
-RenderImageControls::~RenderImageControls()
-{
-}
+RenderImageControls::~RenderImageControls() = default;
 
 void RenderImageControls::updateLogicalWidth()
 {
@@ -84,8 +86,10 @@ RefPtr<ImageControlsRootElement> ImageControlsRootElement::tryCreate(Document& d
     if (!document.page())
         return nullptr;
 
+    static MainThreadNeverDestroyed<const AtomString> xWebkitImageControlsName("x-webkit-image-controls", AtomString::ConstructFromLiteral);
+
     Ref<ImageControlsRootElementMac> controls = adoptRef(*new ImageControlsRootElementMac(document));
-    controls->setAttributeWithoutSynchronization(HTMLNames::classAttr, AtomicString("x-webkit-image-controls", AtomicString::ConstructFromLiteral));
+    controls->setAttributeWithoutSynchronization(HTMLNames::classAttr, xWebkitImageControlsName);
 
     if (RefPtr<ImageControlsButtonElementMac> button = ImageControlsButtonElementMac::tryCreate(document))
         controls->appendChild(*button);
@@ -98,9 +102,7 @@ ImageControlsRootElementMac::ImageControlsRootElementMac(Document& document)
 {
 }
 
-ImageControlsRootElementMac::~ImageControlsRootElementMac()
-{
-}
+ImageControlsRootElementMac::~ImageControlsRootElementMac() = default;
 
 RenderPtr<RenderElement> ImageControlsRootElementMac::createElementRenderer(RenderStyle&& style, const RenderTreePosition&)
 {

@@ -21,54 +21,33 @@
 
 #pragma once
 
-#include "Timer.h"
-#include <wtf/NeverDestroyed.h>
+#include <wtf/Forward.h>
 #include <wtf/Vector.h>
+
+namespace JSC {
+class VM;
+} // namespace JSC
 
 namespace WebCore {
 
-class MicrotaskQueue;
+class EventLoopTask;
 
-class Microtask {
+class MicrotaskQueue final {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
-    virtual ~Microtask()
-    {
-    }
-
-    enum class Result {
-        Done,
-        KeepInQueue
-    };
-
-    virtual Result run() = 0;
-
-protected:
-    void removeSelfFromQueue(MicrotaskQueue&);
-};
-
-class MicrotaskQueue {
-    friend NeverDestroyed<MicrotaskQueue>;
-    friend class Microtask;
-public:
-    WEBCORE_EXPORT static MicrotaskQueue& mainThreadQueue();
-
-    WEBCORE_EXPORT MicrotaskQueue();
+    WEBCORE_EXPORT MicrotaskQueue(JSC::VM&);
     WEBCORE_EXPORT ~MicrotaskQueue();
 
-    WEBCORE_EXPORT void append(std::unique_ptr<Microtask>&&);
+    WEBCORE_EXPORT void append(std::unique_ptr<EventLoopTask>&&);
     WEBCORE_EXPORT void performMicrotaskCheckpoint();
 
 private:
-    WEBCORE_EXPORT void remove(const Microtask&);
+    JSC::VM& vm() const { return m_vm.get(); }
 
-    void timerFired();
-
-    bool m_performingMicrotaskCheckpoint = false;
-    Vector<std::unique_ptr<Microtask>> m_microtaskQueue;
-
-    // FIXME: Instead of a Timer, we should have a centralized Event Loop that calls performMicrotaskCheckpoint()
-    // on every iteration, implementing https://html.spec.whatwg.org/multipage/webappapis.html#processing-model-9
-    Timer m_timer;
+    bool m_performingMicrotaskCheckpoint { false };
+    Vector<std::unique_ptr<EventLoopTask>> m_microtaskQueue;
+    // For the main thread the VM lives forever. For workers it's lifetime is tied to our owning WorkerGlobalScope. Regardless, we retain the VM here to be safe.
+    Ref<JSC::VM> m_vm;
 };
 
 } // namespace WebCore

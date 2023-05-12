@@ -27,54 +27,55 @@
 #include "DeviceOrientationEvent.h"
 
 #include "DeviceOrientationData.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
-DeviceOrientationEvent::~DeviceOrientationEvent()
-{
-}
+WTF_MAKE_ISO_ALLOCATED_IMPL(DeviceOrientationEvent);
+
+DeviceOrientationEvent::~DeviceOrientationEvent() = default;
 
 DeviceOrientationEvent::DeviceOrientationEvent()
     : m_orientation(DeviceOrientationData::create())
 {
 }
 
-DeviceOrientationEvent::DeviceOrientationEvent(const AtomicString& eventType, DeviceOrientationData* orientation)
-    : Event(eventType, false, false) // Can't bubble, not cancelable
+DeviceOrientationEvent::DeviceOrientationEvent(const AtomString& eventType, DeviceOrientationData* orientation)
+    : Event(eventType, CanBubble::No, IsCancelable::No)
     , m_orientation(orientation)
 {
 }
 
-std::optional<double> DeviceOrientationEvent::alpha() const
+Optional<double> DeviceOrientationEvent::alpha() const
 {
     return m_orientation->alpha();
 }
 
-std::optional<double> DeviceOrientationEvent::beta() const
+Optional<double> DeviceOrientationEvent::beta() const
 {
     return m_orientation->beta();
 }
 
-std::optional<double> DeviceOrientationEvent::gamma() const
+Optional<double> DeviceOrientationEvent::gamma() const
 {
     return m_orientation->gamma();
 }
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
-std::optional<double> DeviceOrientationEvent::compassHeading() const
+Optional<double> DeviceOrientationEvent::compassHeading() const
 {
     return m_orientation->compassHeading();
 }
 
-std::optional<double> DeviceOrientationEvent::compassAccuracy() const
+Optional<double> DeviceOrientationEvent::compassAccuracy() const
 {
     return m_orientation->compassAccuracy();
 }
 
-void DeviceOrientationEvent::initDeviceOrientationEvent(const AtomicString& type, bool bubbles, bool cancelable, std::optional<double> alpha, std::optional<double> beta, std::optional<double> gamma, std::optional<double> compassHeading, std::optional<double> compassAccuracy)
+void DeviceOrientationEvent::initDeviceOrientationEvent(const AtomString& type, bool bubbles, bool cancelable, Optional<double> alpha, Optional<double> beta, Optional<double> gamma, Optional<double> compassHeading, Optional<double> compassAccuracy)
 {
-    if (dispatched())
+    if (isBeingDispatched())
         return;
 
     initEvent(type, bubbles, cancelable);
@@ -83,14 +84,14 @@ void DeviceOrientationEvent::initDeviceOrientationEvent(const AtomicString& type
 
 #else
 
-std::optional<bool> DeviceOrientationEvent::absolute() const
+Optional<bool> DeviceOrientationEvent::absolute() const
 {
     return m_orientation->absolute();
 }
 
-void DeviceOrientationEvent::initDeviceOrientationEvent(const AtomicString& type, bool bubbles, bool cancelable, std::optional<double> alpha, std::optional<double> beta, std::optional<double> gamma, std::optional<bool> absolute)
+void DeviceOrientationEvent::initDeviceOrientationEvent(const AtomString& type, bool bubbles, bool cancelable, Optional<double> alpha, Optional<double> beta, Optional<double> gamma, Optional<bool> absolute)
 {
-    if (dispatched())
+    if (isBeingDispatched())
         return;
 
     initEvent(type, bubbles, cancelable);

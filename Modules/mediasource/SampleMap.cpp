@@ -26,8 +26,6 @@
 #include "config.h"
 #include "SampleMap.h"
 
-#if ENABLE(MEDIA_SOURCE)
-
 #include "MediaSample.h"
 
 namespace WebCore {
@@ -68,7 +66,7 @@ class SampleIsRandomAccess {
 public:
     bool operator()(DecodeOrderSampleMap::MapType::value_type& value)
     {
-        return value.second->flags() == MediaSample::IsSync;
+        return value.second->isSync();
     }
 };
 
@@ -190,6 +188,11 @@ DecodeOrderSampleMap::iterator DecodeOrderSampleMap::findSampleWithDecodeKey(con
     return m_samples.find(key);
 }
 
+DecodeOrderSampleMap::iterator DecodeOrderSampleMap::findSampleAfterDecodeKey(const KeyType& key)
+{
+    return m_samples.upper_bound(key);
+}
+
 PresentationOrderSampleMap::reverse_iterator PresentationOrderSampleMap::reverseFindSampleContainingPresentationTime(const MediaTime& time)
 {
     auto range = std::equal_range(rbegin(), rend(), time, SampleIsGreaterThanMediaTimeComparator<MapType>());
@@ -284,28 +287,21 @@ PresentationOrderSampleMap::iterator_range PresentationOrderSampleMap::findSampl
     return { lower_bound, upper_bound };
 }
 
-PresentationOrderSampleMap::iterator_range PresentationOrderSampleMap::findSamplesWithinPresentationRange(const MediaTime& beginTime, const MediaTime& endTime)
+PresentationOrderSampleMap::iterator_range PresentationOrderSampleMap::findSamplesBetweenPresentationTimesFromEnd(const MediaTime& beginTime, const MediaTime& endTime)
 {
-    // startTime is not inclusive, so use upper_bound to exclude samples which start exactly at startTime.
-    // endTime is inclusive, so use upper_bound to include samples which start exactly at endTime.
-    auto lower_bound = m_samples.upper_bound(beginTime);
-    auto upper_bound = m_samples.upper_bound(endTime);
-    if (lower_bound == upper_bound)
+    reverse_iterator rangeEnd = std::find_if(rbegin(), rend(), [&endTime](auto& value) {
+        return value.first < endTime;
+    });
+
+    reverse_iterator rangeStart = std::find_if(rangeEnd, rend(), [&beginTime](auto& value) {
+        return value.first < beginTime;
+    });
+
+    if (rangeStart == rangeEnd)
         return { end(), end() };
-    return { lower_bound, upper_bound };
-}
 
-PresentationOrderSampleMap::iterator_range PresentationOrderSampleMap::findSamplesWithinPresentationRangeFromEnd(const MediaTime& beginTime, const MediaTime& endTime)
-{
-    reverse_iterator rangeEnd = std::find_if(rbegin(), rend(), [&beginTime](auto& value) {
-        return value.second->presentationTime() <= beginTime;
-    });
-
-    reverse_iterator rangeStart = std::find_if(rbegin(), rangeEnd, [&endTime](auto& value) {
-        return value.second->presentationTime() <= endTime;
-    });
-
-    return iterator_range(rangeEnd.base(), rangeStart.base());
+    // ( rangeStart, rangeEnd ] == [ rangeStart.base(), rangeEnd.base() )
+    return { rangeStart.base(), rangeEnd.base() };
 }
 
 DecodeOrderSampleMap::reverse_iterator_range DecodeOrderSampleMap::findDependentSamples(MediaSample* sample)
@@ -316,6 +312,18 @@ DecodeOrderSampleMap::reverse_iterator_range DecodeOrderSampleMap::findDependent
     return reverse_iterator_range(currentDecodeIter, nextSyncSample);
 }
 
+DecodeOrderSampleMap::iterator_range DecodeOrderSampleMap::findSamplesBetweenDecodeKeys(const KeyType& beginKey, const KeyType& endKey)
+{
+    if (beginKey > endKey)
+        return { end(), end() };
+
+    // beginKey is inclusive, so use lower_bound to include samples wich start exactly at beginKey.
+    // endKey is not inclusive, so use lower_bound to exclude samples which start exactly at endKey.
+    auto lower_bound = m_samples.lower_bound(beginKey);
+    auto upper_bound = m_samples.lower_bound(endKey);
+    if (lower_bound == upper_bound)
+        return { end(), end() };
+    return { lower_bound, upper_bound };
 }
 
-#endif
+}

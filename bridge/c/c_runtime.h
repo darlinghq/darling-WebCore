@@ -38,8 +38,8 @@ class CField : public Field {
 public:
     CField(NPIdentifier ident) : _fieldIdentifier(ident) { }
 
-    JSValue valueFromInstance(ExecState*, const Instance*) const override;
-    bool setValueToInstance(ExecState*, const Instance*, JSValue) const override;
+    JSValue valueFromInstance(JSGlobalObject*, const Instance*) const override;
+    bool setValueToInstance(JSGlobalObject*, const Instance*, JSValue) const override;
 
     NPIdentifier identifier() const { return _fieldIdentifier; }
 
@@ -48,8 +48,7 @@ private:
 };
 
 
-class CMethod : public Method
-{
+class CMethod : public Method {
 public:
     CMethod(NPIdentifier ident) : _methodIdentifier(ident) { }
 

@@ -34,9 +34,8 @@ namespace WebCore {
 
 struct DragState {
     RefPtr<Element> source; // Element that may be a drag source, for the current mouse gesture.
-    RefPtr<Range> draggedContentRange;
     bool shouldDispatchEvents;
-    DragSourceAction type;
+    OptionSet<DragSourceAction> type; // Should be Optional<>. See Bug 213086.
     RefPtr<DataTransfer> dataTransfer; // Used on only the source side of dragging.
 };
 

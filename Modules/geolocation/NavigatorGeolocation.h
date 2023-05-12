@@ -26,28 +26,28 @@
 
 namespace WebCore {
 
-class Frame;
 class Geolocation;
 class Navigator;
 
-class NavigatorGeolocation : public Supplement<Navigator>, public DOMWindowProperty {
+class NavigatorGeolocation : public Supplement<Navigator> {
     WTF_MAKE_FAST_ALLOCATED;
 public:
-    explicit NavigatorGeolocation(Frame*);
+    explicit NavigatorGeolocation(Navigator&);
     virtual ~NavigatorGeolocation();
-    static NavigatorGeolocation* from(Navigator*);
+    static NavigatorGeolocation* from(Navigator&);
 
     static Geolocation* geolocation(Navigator&);
     Geolocation* geolocation() const;
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     void resetAllGeolocationPermission();
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY)
 
 private:
     static const char* supplementName();
 
     mutable RefPtr<Geolocation> m_geolocation;
+    Navigator& m_navigator;
 };
 
 } // namespace WebCore

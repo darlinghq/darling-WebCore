@@ -24,21 +24,24 @@
 #include "BeforeUnloadEvent.h"
 
 #include "EventNames.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(BeforeUnloadEvent);
+
 BeforeUnloadEvent::BeforeUnloadEvent()
-    : Event(eventNames().beforeunloadEvent, false, true)
+    : Event(eventNames().beforeunloadEvent, CanBubble::No, IsCancelable::Yes)
+{
+}
+
+BeforeUnloadEvent::BeforeUnloadEvent(ForBindingsFlag)
 {
 }
 
 bool BeforeUnloadEvent::isBeforeUnloadEvent() const
 {
     return true;
-}
-
-BeforeUnloadEvent::~BeforeUnloadEvent()
-{
 }
 
 } // namespace WebCore

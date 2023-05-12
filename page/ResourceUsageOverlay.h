@@ -58,7 +58,7 @@ public:
 #endif
 
     static const int normalWidth = 570;
-    static const int normalHeight = 160;
+    static const int normalHeight = 180;
 
 private:
     void willMoveToPage(PageOverlay&, Page*) override { }
@@ -78,13 +78,12 @@ private:
     IntPoint m_dragPoint;
 
 #if PLATFORM(COCOA)
-    ThreadIdentifier m_threadID { 0 };
     RetainPtr<CALayer> m_layer;
     RetainPtr<CALayer> m_containerLayer;
 #endif
 
 #if OS(LINUX)
-    std::unique_ptr<GraphicsLayer> m_paintLayer;
+    RefPtr<GraphicsLayer> m_paintLayer;
     std::unique_ptr<GraphicsLayerClient> m_overlayPainter;
 #endif
 };

@@ -27,8 +27,7 @@
  * OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef FloatPolygon_h
-#define FloatPolygon_h
+#pragma once
 
 #include "FloatPoint.h"
 #include "FloatRect.h"
@@ -43,10 +42,10 @@ class FloatPolygonEdge;
 
 class FloatPolygon {
 public:
-    FloatPolygon(std::unique_ptr<Vector<FloatPoint>> vertices, WindRule fillRule);
+    FloatPolygon(Vector<FloatPoint>&& vertices, WindRule fillRule);
 
-    const FloatPoint& vertexAt(unsigned index) const { return (*m_vertices)[index]; }
-    unsigned numberOfVertices() const { return m_vertices->size(); }
+    const FloatPoint& vertexAt(unsigned index) const { return m_vertices[index]; }
+    unsigned numberOfVertices() const { return m_vertices.size(); }
 
     WindRule fillRule() const { return m_fillRule; }
 
@@ -54,18 +53,17 @@ public:
     unsigned numberOfEdges() const { return m_edges.size(); }
 
     FloatRect boundingBox() const { return m_boundingBox; }
-    bool overlappingEdges(float minY, float maxY, Vector<const FloatPolygonEdge*>& result) const;
+    Vector<std::reference_wrapper<const FloatPolygonEdge>> overlappingEdges(float minY, float maxY) const;
     bool contains(const FloatPoint&) const;
     bool isEmpty() const { return m_empty; }
 
 private:
-    typedef PODInterval<float, FloatPolygonEdge*> EdgeInterval;
-    typedef PODIntervalTree<float, FloatPolygonEdge*> EdgeIntervalTree;
+    using EdgeIntervalTree = PODIntervalTree<float, FloatPolygonEdge*>;
 
     bool containsNonZero(const FloatPoint&) const;
     bool containsEvenOdd(const FloatPoint&) const;
 
-    std::unique_ptr<Vector<FloatPoint>> m_vertices;
+    Vector<FloatPoint> m_vertices;
     WindRule m_fillRule;
     FloatRect m_boundingBox;
     bool m_empty;
@@ -76,7 +74,7 @@ private:
 
 class VertexPair {
 public:
-    virtual ~VertexPair() { }
+    virtual ~VertexPair() = default;
 
     virtual const FloatPoint& vertex1() const = 0;
     virtual const FloatPoint& vertex2() const = 0;
@@ -124,20 +122,15 @@ public:
 
 private:
     // Edge vertex index1 is less than index2, except the last edge, where index2 is 0. When a polygon edge
-    // is defined by 3 or more colinear vertices, index2 can be the the index of the last colinear vertex.
+    // is defined by 3 or more colinear vertices, index2 can be the index of the last colinear vertex.
     unsigned m_vertexIndex1;
     unsigned m_vertexIndex2;
     unsigned m_edgeIndex;
     const FloatPolygon* m_polygon;
 };
 
-// This structure is used by PODIntervalTree for debugging.
 #ifndef NDEBUG
-template<> struct ValueToString<FloatPolygonEdge*> {
-    static String string(const FloatPolygonEdge* edge) { return String::format("%p (%f,%f %f,%f)", edge, edge->vertex1().x(), edge->vertex1().y(), edge->vertex2().x(), edge->vertex2().y()); }
-};
+TextStream& operator<<(TextStream&, const FloatPolygonEdge&);
 #endif
 
 } // namespace WebCore
-
-#endif // FloatPolygon_h

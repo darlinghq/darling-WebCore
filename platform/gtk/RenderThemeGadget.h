@@ -25,12 +25,11 @@
 
 #pragma once
 
-#include <gtk/gtk.h>
-
-#if GTK_CHECK_VERSION(3, 20, 0)
+#if !USE(GTK4)
 
 #include "Color.h"
 #include "IntSize.h"
+#include <gtk/gtk.h>
 #include <wtf/OptionSet.h>
 #include <wtf/Vector.h>
 #include <wtf/glib/GRefPtr.h>
@@ -45,12 +44,7 @@ class RenderThemeGadget {
 public:
     enum class Type {
         Generic,
-        TextField,
-        Check,
-        Radio,
-        Arrow,
-        Icon,
-        Scrollbar
+        Scrollbar,
     };
 
     struct Info {
@@ -66,8 +60,6 @@ public:
     virtual IntSize preferredSize() const;
     virtual bool render(cairo_t*, const FloatRect&, FloatRect* = nullptr);
     virtual IntSize minimumSize() const;
-
-    void renderFocus(cairo_t*, const FloatRect&);
 
     GtkBorder contentsBox() const;
     Color color() const;
@@ -100,57 +92,6 @@ private:
     GtkOrientation m_orientation { GTK_ORIENTATION_HORIZONTAL };
 };
 
-class RenderThemeTextFieldGadget final : public RenderThemeGadget {
-public:
-    RenderThemeTextFieldGadget(const Info&, RenderThemeGadget* parent, const Vector<RenderThemeGadget::Info> siblings, unsigned position);
-
-    IntSize minimumSize() const override;
-};
-
-class RenderThemeToggleGadget final : public RenderThemeGadget {
-public:
-    RenderThemeToggleGadget(const Info&, RenderThemeGadget* parent, const Vector<RenderThemeGadget::Info> siblings, unsigned position);
-
-    bool render(cairo_t*, const FloatRect&, FloatRect* = nullptr) override;
-
-private:
-    RenderThemeGadget::Type m_type;
-};
-
-class RenderThemeArrowGadget final : public RenderThemeGadget {
-public:
-    RenderThemeArrowGadget(const Info&, RenderThemeGadget* parent, const Vector<RenderThemeGadget::Info> siblings, unsigned position);
-
-    bool render(cairo_t*, const FloatRect&, FloatRect* = nullptr) override;
-};
-
-class RenderThemeIconGadget final : public RenderThemeGadget {
-public:
-    RenderThemeIconGadget(const Info&, RenderThemeGadget* parent, const Vector<RenderThemeGadget::Info> siblings, unsigned position);
-
-    bool render(cairo_t*, const FloatRect&, FloatRect* = nullptr) override;
-    IntSize minimumSize() const override;
-
-    void setIconName(const char* iconName) { m_iconName = iconName; }
-    void setIconSize(unsigned iconSize) { m_iconSize = iconSize; }
-
-    // Defined in GTK+ (gtk/gtkiconfactory.c).
-    enum IconSizeGtk {
-        Menu = 16,
-        SmallToolbar = 18,
-        Button = 20,
-        LargeToolbar = 24,
-        DragAndDrop = 32,
-        Dialog = 48
-    };
-
-private:
-    GtkIconSize gtkIconSizeForPixelSize(unsigned) const;
-
-    CString m_iconName;
-    unsigned m_iconSize { 0 };
-};
-
 class RenderThemeScrollbarGadget final : public RenderThemeGadget {
 public:
     RenderThemeScrollbarGadget(const Info&, RenderThemeGadget* parent, const Vector<RenderThemeGadget::Info> siblings, unsigned position);
@@ -171,4 +112,4 @@ private:
 
 } // namespace WebCore
 
-#endif // GTK_CHECK_VERSION(3, 20, 0)
+#endif // !USE(GTK4)

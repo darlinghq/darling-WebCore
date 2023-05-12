@@ -29,11 +29,11 @@
 #include "HTMLSelectElement.h"
 
 #include "AXObjectCache.h"
+#include "DOMFormData.h"
 #include "ElementTraversal.h"
 #include "EventHandler.h"
 #include "EventNames.h"
 #include "FormController.h"
-#include "FormDataList.h"
 #include "Frame.h"
 #include "GenericCachedHTMLCollection.h"
 #include "HTMLFormElement.h"
@@ -54,10 +54,14 @@
 #include "RenderTheme.h"
 #include "Settings.h"
 #include "SpatialNavigation.h"
-
-using namespace WTF::Unicode;
+#include <wtf/IsoMallocInlines.h>
+#include <wtf/text/StringConcatenateNumbers.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(HTMLSelectElement);
+
+using namespace WTF::Unicode;
 
 using namespace HTMLNames;
 
@@ -94,10 +98,10 @@ void HTMLSelectElement::didRecalcStyle(Style::Change styleChange)
     HTMLFormControlElement::didRecalcStyle(styleChange);
 }
 
-const AtomicString& HTMLSelectElement::formControlType() const
+const AtomString& HTMLSelectElement::formControlType() const
 {
-    static NeverDestroyed<const AtomicString> selectMultiple("select-multiple", AtomicString::ConstructFromLiteral);
-    static NeverDestroyed<const AtomicString> selectOne("select-one", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> selectMultiple("select-multiple", AtomString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> selectOne("select-one", AtomString::ConstructFromLiteral);
     return m_multiple ? selectMultiple : selectOne;
 }
 
@@ -114,6 +118,8 @@ void HTMLSelectElement::optionSelectedByUser(int optionIndex, bool fireOnChangeN
     if (!usesMenuList()) {
         updateSelectedState(optionToListIndex(optionIndex), allowMultipleSelection, false);
         updateValidity();
+        if (auto* renderer = this->renderer())
+            renderer->updateFromElement();
         if (fireOnChangeNow)
             listBoxOnChange();
         return;
@@ -192,7 +198,7 @@ void HTMLSelectElement::listBoxSelectItem(int listIndex, bool allowMultiplySelec
 
 bool HTMLSelectElement::usesMenuList() const
 {
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     if (RenderTheme::singleton().delegatesMenuListRendering())
         return true;
 
@@ -216,9 +222,9 @@ int HTMLSelectElement::activeSelectionEndListIndex() const
     return lastSelectedListIndex();
 }
 
-ExceptionOr<void> HTMLSelectElement::add(const OptionOrOptGroupElement& element, const std::optional<HTMLElementOrInt>& before)
+ExceptionOr<void> HTMLSelectElement::add(const OptionOrOptGroupElement& element, const Optional<HTMLElementOrInt>& before)
 {
-    HTMLElement* beforeElement = nullptr;
+    RefPtr<HTMLElement> beforeElement;
     if (before) {
         beforeElement = WTF::switchOn(before.value(),
             [](const RefPtr<HTMLElement>& element) -> HTMLElement* { return element.get(); },
@@ -230,7 +236,7 @@ ExceptionOr<void> HTMLSelectElement::add(const OptionOrOptGroupElement& element,
     );
 
 
-    return insertBefore(toInsert, beforeElement);
+    return insertBefore(toInsert, beforeElement.get());
 }
 
 void HTMLSelectElement::remove(int optionIndex)
@@ -282,7 +288,7 @@ bool HTMLSelectElement::isPresentationAttribute(const QualifiedName& name) const
     return HTMLFormControlElementWithState::isPresentationAttribute(name);
 }
 
-void HTMLSelectElement::parseAttribute(const QualifiedName& name, const AtomicString& value)
+void HTMLSelectElement::parseAttribute(const QualifiedName& name, const AtomString& value)
 {
     if (name == sizeAttr) {
         unsigned oldSize = m_size;
@@ -301,14 +307,16 @@ void HTMLSelectElement::parseAttribute(const QualifiedName& name, const AtomicSt
         }
     } else if (name == multipleAttr)
         parseMultipleAttribute(value);
-    else if (name == accesskeyAttr) {
-        // FIXME: ignore for the moment.
-        //
-    } else
+    else
         HTMLFormControlElementWithState::parseAttribute(name, value);
 }
 
-bool HTMLSelectElement::isKeyboardFocusable(KeyboardEvent& event) const
+int HTMLSelectElement::defaultTabIndex() const
+{
+    return 0;
+}
+
+bool HTMLSelectElement::isKeyboardFocusable(KeyboardEvent* event) const
 {
     if (renderer())
         return isFocusable();
@@ -329,7 +337,7 @@ bool HTMLSelectElement::canSelectAll() const
 
 RenderPtr<RenderElement> HTMLSelectElement::createElementRenderer(RenderStyle&& style, const RenderTreePosition&)
 {
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     if (usesMenuList())
         return createRenderer<RenderMenuList>(*this, WTFMove(style));
     return createRenderer<RenderListBox>(*this, WTFMove(style));
@@ -342,7 +350,7 @@ bool HTMLSelectElement::childShouldCreateRenderer(const Node& child) const
 {
     if (!HTMLFormControlElementWithState::childShouldCreateRenderer(child))
         return false;
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     if (!usesMenuList())
         return is<HTMLOptionElement>(child) || is<HTMLOptGroupElement>(child) || validationMessageShadowTreeContains(child);
 #endif
@@ -382,10 +390,10 @@ void HTMLSelectElement::optionElementChildrenChanged()
         cache->childrenChanged(this);
 }
 
-void HTMLSelectElement::accessKeyAction(bool sendMouseEvents)
+bool HTMLSelectElement::accessKeyAction(bool sendMouseEvents)
 {
     focus();
-    dispatchSimulatedClick(0, sendMouseEvents ? SendMouseUpDownEvents : SendNoEvents);
+    return dispatchSimulatedClick(0, sendMouseEvents ? SendMouseUpDownEvents : SendNoEvents);
 }
 
 void HTMLSelectElement::setMultiple(bool multiple)
@@ -405,7 +413,7 @@ void HTMLSelectElement::setSize(unsigned size)
     setUnsignedIntegralAttribute(sizeAttr, limitToOnlyHTMLNonNegative(size));
 }
 
-HTMLOptionElement* HTMLSelectElement::namedItem(const AtomicString& name)
+HTMLOptionElement* HTMLSelectElement::namedItem(const AtomString& name)
 {
     return options()->namedItem(name);
 }
@@ -453,7 +461,7 @@ ExceptionOr<void> HTMLSelectElement::setItem(unsigned index, HTMLOptionElement* 
 ExceptionOr<void> HTMLSelectElement::setLength(unsigned newLength)
 {
     if (newLength > length() && newLength > maxSelectItems) {
-        document().addConsoleMessage(MessageSource::Other, MessageLevel::Warning, String::format("Blocked attempt to expand the option list to %u items. The maximum number of items allowed is %u.", newLength, maxSelectItems));
+        document().addConsoleMessage(MessageSource::Other, MessageLevel::Warning, makeString("Blocked attempt to expand the option list to ", newLength, " items. The maximum number of items allowed is ", maxSelectItems, '.'));
         return { };
     }
 
@@ -461,7 +469,7 @@ ExceptionOr<void> HTMLSelectElement::setLength(unsigned newLength)
 
     if (diff < 0) { // Add dummy elements.
         do {
-            auto result = add(HTMLOptionElement::create(document()).ptr(), std::nullopt);
+            auto result = add(HTMLOptionElement::create(document()).ptr(), WTF::nullopt);
             if (result.hasException())
                 return result;
         } while (++diff);
@@ -495,7 +503,7 @@ bool HTMLSelectElement::isRequiredFormControl() const
 
 bool HTMLSelectElement::willRespondToMouseClickEvents()
 {
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     return !isDisabledFormControl();
 #else
     return HTMLFormControlElementWithState::willRespondToMouseClickEvents();
@@ -622,7 +630,7 @@ void HTMLSelectElement::updateListBoxSelection(bool deselectOtherOptions)
 {
     ASSERT(renderer());
 
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     ASSERT(renderer()->isListBox() || m_multiple);
 #else
     ASSERT(renderer()->isMenuList() || m_multiple);
@@ -695,7 +703,7 @@ void HTMLSelectElement::dispatchChangeEventForMenuList()
 
 void HTMLSelectElement::scrollToSelection()
 {
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     if (usesMenuList())
         return;
 
@@ -712,7 +720,7 @@ void HTMLSelectElement::scrollToSelection()
 void HTMLSelectElement::setOptionsChangedOnRenderer()
 {
     if (auto* renderer = this->renderer()) {
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
         if (is<RenderMenuList>(*renderer))
             downcast<RenderMenuList>(*renderer).setOptionsChanged(true);
         else
@@ -728,7 +736,7 @@ const Vector<HTMLElement*>& HTMLSelectElement::listItems() const
     if (m_shouldRecalcListItems)
         recalcListItems();
     else {
-#if !ASSERT_DISABLED
+#if ASSERT_ENABLED
         Vector<HTMLElement*> items = m_listItems;
         recalcListItems(false);
         ASSERT(items == m_listItems);
@@ -767,9 +775,9 @@ void HTMLSelectElement::recalcListItems(bool updateSelectedStates) const
 
     m_shouldRecalcListItems = false;
 
-    HTMLOptionElement* foundSelected = 0;
-    HTMLOptionElement* firstOption = 0;
-    for (Element* currentElement = ElementTraversal::firstWithin(*this); currentElement; ) {
+    RefPtr<HTMLOptionElement> foundSelected;
+    RefPtr<HTMLOptionElement> firstOption;
+    for (RefPtr<Element> currentElement = ElementTraversal::firstWithin(*this); currentElement; ) {
         if (!is<HTMLElement>(*currentElement)) {
             currentElement = ElementTraversal::nextSkippingChildren(*currentElement, this);
             continue;
@@ -779,7 +787,7 @@ void HTMLSelectElement::recalcListItems(bool updateSelectedStates) const
         // Only consider optgroup elements that are direct children of the select element.
         if (is<HTMLOptGroupElement>(current) && current.parentNode() == this) {
             m_listItems.append(&current);
-            if (Element* nextElement = ElementTraversal::firstWithin(current)) {
+            if (RefPtr<Element> nextElement = ElementTraversal::firstWithin(current)) {
                 currentElement = nextElement;
                 continue;
             }
@@ -858,12 +866,12 @@ void HTMLSelectElement::selectOption(int optionIndex, SelectOptionFlags flags)
     auto& items = listItems();
     int listIndex = optionToListIndex(optionIndex);
 
-    HTMLElement* element = nullptr;
+    RefPtr<HTMLElement> element;
     if (listIndex >= 0)
         element = items[listIndex];
 
     if (shouldDeselect)
-        deselectItemsWithoutValidation(element);
+        deselectItemsWithoutValidation(element.get());
 
     if (is<HTMLOptionElement>(element)) {
         if (m_activeSelectionAnchorIndex < 0 || shouldDeselect)
@@ -959,13 +967,15 @@ void HTMLSelectElement::deselectItemsWithoutValidation(HTMLElement* excludeEleme
 FormControlState HTMLSelectElement::saveFormControlState() const
 {
     FormControlState state;
-    for (auto& element : listItems()) {
+    auto& items = listItems();
+    state.reserveInitialCapacity(items.size());
+    for (auto& element : items) {
         if (!is<HTMLOptionElement>(*element))
             continue;
-        HTMLOptionElement& option = downcast<HTMLOptionElement>(*element);
+        auto& option = downcast<HTMLOptionElement>(*element);
         if (!option.selected())
             continue;
-        state.append(option.value());
+        state.uncheckedAppend(option.value());
         if (!multiple())
             break;
     }
@@ -1006,8 +1016,7 @@ void HTMLSelectElement::restoreFormControlState(const FormControlState& state)
             downcast<HTMLOptionElement>(*items[foundIndex]).setSelectedState(true);
     } else {
         size_t startIndex = 0;
-        for (size_t i = 0; i < state.valueSize(); ++i) {
-            const String& value = state[i];
+        for (auto& value : state) {
             size_t foundIndex = searchOptionsForValue(value, startIndex, itemsSize);
             if (foundIndex == notFound)
                 foundIndex = searchOptionsForValue(value, 0, startIndex);
@@ -1022,7 +1031,7 @@ void HTMLSelectElement::restoreFormControlState(const FormControlState& state)
     updateValidity();
 }
 
-void HTMLSelectElement::parseMultipleAttribute(const AtomicString& value)
+void HTMLSelectElement::parseMultipleAttribute(const AtomString& value)
 {
     bool oldUsesMenuList = usesMenuList();
     m_multiple = !value.isNull();
@@ -1031,16 +1040,16 @@ void HTMLSelectElement::parseMultipleAttribute(const AtomicString& value)
         invalidateStyleAndRenderersForSubtree();
 }
 
-bool HTMLSelectElement::appendFormData(FormDataList& list, bool)
+bool HTMLSelectElement::appendFormData(DOMFormData& formData, bool)
 {
-    const AtomicString& name = this->name();
+    const AtomString& name = this->name();
     if (name.isEmpty())
         return false;
 
     bool successful = false;
     for (auto& element : listItems()) {
         if (is<HTMLOptionElement>(*element) && downcast<HTMLOptionElement>(*element).selected() && !downcast<HTMLOptionElement>(*element).isDisabledFormControl()) {
-            list.appendData(name, downcast<HTMLOptionElement>(*element).value());
+            formData.append(name, downcast<HTMLOptionElement>(*element).value());
             successful = true;
         }
     }
@@ -1053,8 +1062,8 @@ bool HTMLSelectElement::appendFormData(FormDataList& list, bool)
 
 void HTMLSelectElement::reset()
 {
-    HTMLOptionElement* firstOption = nullptr;
-    HTMLOptionElement* selectedOption = nullptr;
+    RefPtr<HTMLOptionElement> firstOption;
+    RefPtr<HTMLOptionElement> selectedOption;
 
     for (auto& element : listItems()) {
         if (!is<HTMLOptionElement>(*element))
@@ -1091,6 +1100,7 @@ bool HTMLSelectElement::platformHandleKeydownEvent(KeyboardEvent* event)
     if (!isSpatialNavigationEnabled(document().frame())) {
         if (event->keyIdentifier() == "Down" || event->keyIdentifier() == "Up") {
             focus();
+            document().updateStyleIfNeeded();
             // Calling focus() may cause us to lose our renderer. Return true so
             // that our caller doesn't process the event further, but don't set
             // the event as handled.
@@ -1189,6 +1199,7 @@ void HTMLSelectElement::menuListDefaultEventHandler(Event& event)
         if (RenderTheme::singleton().popsMenuBySpaceOrReturn()) {
             if (keyCode == ' ' || keyCode == '\r') {
                 focus();
+                document().updateStyleIfNeeded();
 
                 // Calling focus() may remove the renderer or change the renderer type.
                 auto* renderer = this->renderer();
@@ -1206,6 +1217,7 @@ void HTMLSelectElement::menuListDefaultEventHandler(Event& event)
         } else if (RenderTheme::singleton().popsMenuByArrowKeys()) {
             if (keyCode == ' ') {
                 focus();
+                document().updateStyleIfNeeded();
 
                 // Calling focus() may remove the renderer or change the renderer type.
                 auto* renderer = this->renderer();
@@ -1233,7 +1245,9 @@ void HTMLSelectElement::menuListDefaultEventHandler(Event& event)
 
     if (event.type() == eventNames().mousedownEvent && is<MouseEvent>(event) && downcast<MouseEvent>(event).button() == LeftButton) {
         focus();
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
+        document().updateStyleIfNeeded();
+
         auto* renderer = this->renderer();
         if (is<RenderMenuList>(renderer)) {
             auto& menuList = downcast<RenderMenuList>(*renderer);
@@ -1250,7 +1264,7 @@ void HTMLSelectElement::menuListDefaultEventHandler(Event& event)
         event.setDefaultHandled();
     }
 
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     if (event.type() == eventNames().blurEvent && !focused()) {
         auto& menuList = downcast<RenderMenuList>(*renderer());
         if (menuList.popupIsVisible())
@@ -1317,6 +1331,7 @@ void HTMLSelectElement::listBoxDefaultEventHandler(Event& event)
 
     if (event.type() == eventNames().mousedownEvent && is<MouseEvent>(event) && downcast<MouseEvent>(event).button() == LeftButton) {
         focus();
+        document().updateStyleIfNeeded();
 
         // Calling focus() may remove or change our renderer, in which case we don't want to handle the event further.
         auto* renderer = this->renderer();
@@ -1336,7 +1351,7 @@ void HTMLSelectElement::listBoxDefaultEventHandler(Event& event)
                 updateSelectedState(listIndex, mouseEvent.ctrlKey(), mouseEvent.shiftKey());
 #endif
             }
-            if (Frame* frame = document().frame())
+            if (RefPtr<Frame> frame = document().frame())
                 frame->eventHandler().setMouseDownMayStartAutoscroll();
 
             mouseEvent.setDefaultHandled();
@@ -1494,7 +1509,7 @@ void HTMLSelectElement::defaultEventHandler(Event& event)
     if (!renderer)
         return;
 
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     if (isDisabledFormControl()) {
         HTMLFormControlElementWithState::defaultEventHandler(event);
         return;
@@ -1560,13 +1575,13 @@ void HTMLSelectElement::typeAheadFind(KeyboardEvent& event)
         listBoxOnChange();
 }
 
-Node::InsertionNotificationRequest HTMLSelectElement::insertedInto(ContainerNode& insertionPoint)
+Node::InsertedIntoAncestorResult HTMLSelectElement::insertedIntoAncestor(InsertionType insertionType, ContainerNode& parentOfInsertedTree)
 {
     // When the element is created during document parsing, it won't have any
     // items yet - but for innerHTML and related methods, this method is called
     // after the whole subtree is constructed.
     recalcListItems();
-    return HTMLFormControlElementWithState::insertedInto(insertionPoint);
+    return HTMLFormControlElementWithState::insertedIntoAncestor(insertionType, parentOfInsertedTree);
 }
 
 void HTMLSelectElement::accessKeySetSelectedIndex(int index)

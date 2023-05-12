@@ -30,18 +30,22 @@
 #include "config.h"
 #include "FloatPolygon.h"
 
+#include <wtf/HexNumber.h>
 #include <wtf/MathExtras.h>
+#include <wtf/text/StringConcatenateNumbers.h>
 
 namespace WebCore {
 
+namespace FloatPolygonInternal {
 static inline float determinant(const FloatSize& a, const FloatSize& b)
 {
     return a.width() * b.height() - a.height() * b.width();
 }
+}
 
 static inline bool areCollinearPoints(const FloatPoint& p0, const FloatPoint& p1, const FloatPoint& p2)
 {
-    return !determinant(p1 - p0, p2 - p0);
+    return !FloatPolygonInternal::determinant(p1 - p0, p2 - p0);
 }
 
 static inline bool areCoincidentPoints(const FloatPoint& p0, const FloatPoint& p1)
@@ -79,7 +83,7 @@ static unsigned findNextEdgeVertexIndex(const FloatPolygon& polygon, unsigned ve
     return vertexIndex2;
 }
 
-FloatPolygon::FloatPolygon(std::unique_ptr<Vector<FloatPoint>> vertices, WindRule fillRule)
+FloatPolygon::FloatPolygon(Vector<FloatPoint>&& vertices, WindRule fillRule)
     : m_vertices(WTFMove(vertices))
     , m_fillRule(fillRule)
 {
@@ -101,7 +105,7 @@ FloatPolygon::FloatPolygon(std::unique_ptr<Vector<FloatPoint>> vertices, WindRul
     }
     FloatPoint nextVertex = vertexAt((minVertexIndex + 1) % nVertices);
     FloatPoint prevVertex = vertexAt((minVertexIndex + nVertices - 1) % nVertices);
-    bool clockwise = determinant(vertexAt(minVertexIndex) - prevVertex, nextVertex - prevVertex) > 0;
+    bool clockwise = FloatPolygonInternal::determinant(vertexAt(minVertexIndex) - prevVertex, nextVertex - prevVertex) > 0;
 
     unsigned edgeIndex = 0;
     unsigned vertexIndex1 = 0;
@@ -131,24 +135,18 @@ FloatPolygon::FloatPolygon(std::unique_ptr<Vector<FloatPoint>> vertices, WindRul
     if (m_empty)
         return;
 
-    for (unsigned i = 0; i < m_edges.size(); ++i) {
-        FloatPolygonEdge* edge = &m_edges[i];
-        m_edgeTree.add(EdgeInterval(edge->minY(), edge->maxY(), edge));
-    }
+    for (auto& edge : m_edges)
+        m_edgeTree.add({ edge.minY(), edge.maxY(), &edge });
 }
 
-bool FloatPolygon::overlappingEdges(float minY, float maxY, Vector<const FloatPolygonEdge*>& result) const
+Vector<std::reference_wrapper<const FloatPolygonEdge>> FloatPolygon::overlappingEdges(float minY, float maxY) const
 {
-    Vector<FloatPolygon::EdgeInterval> overlappingEdgeIntervals;
-    m_edgeTree.allOverlaps(FloatPolygon::EdgeInterval(minY, maxY, 0), overlappingEdgeIntervals);
-    unsigned overlappingEdgeIntervalsSize = overlappingEdgeIntervals.size();
-    result.resize(overlappingEdgeIntervalsSize);
-    for (unsigned i = 0; i < overlappingEdgeIntervalsSize; ++i) {
-        const FloatPolygonEdge* edge = static_cast<const FloatPolygonEdge*>(overlappingEdgeIntervals[i].data());
-        ASSERT(edge);
-        result[i] = edge;
-    }
-    return overlappingEdgeIntervalsSize > 0;
+    auto overlappingEdgeIntervals = m_edgeTree.allOverlaps({ minY, maxY });
+    Vector<std::reference_wrapper<const FloatPolygonEdge>> result;
+    result.reserveInitialCapacity(overlappingEdgeIntervals.size());
+    for (auto& interval : overlappingEdgeIntervals)
+        result.uncheckedAppend(*interval.data());
+    return result;
 }
 
 static inline float leftSide(const FloatPoint& vertex1, const FloatPoint& vertex2, const FloatPoint& point)
@@ -196,7 +194,7 @@ bool FloatPolygon::contains(const FloatPoint& point) const
 {
     if (!m_boundingBox.contains(point))
         return false;
-    return fillRule() == RULE_NONZERO ? containsNonZero(point) : containsEvenOdd(point);
+    return fillRule() == WindRule::NonZero ? containsNonZero(point) : containsEvenOdd(point);
 }
 
 bool VertexPair::overlapsRect(const FloatRect& rect) const
@@ -232,7 +230,7 @@ bool VertexPair::intersection(const VertexPair& other, FloatPoint& point) const
 
     const FloatSize& thisDelta = vertex2() - vertex1();
     const FloatSize& otherDelta = other.vertex2() - other.vertex1();
-    float denominator = determinant(thisDelta, otherDelta);
+    float denominator = FloatPolygonInternal::determinant(thisDelta, otherDelta);
     if (!denominator)
         return false;
 
@@ -241,8 +239,8 @@ bool VertexPair::intersection(const VertexPair& other, FloatPoint& point) const
     // when 0 <= u <= 1. We're computing the values of u for each line at their intersection point.
 
     const FloatSize& vertex1Delta = vertex1() - other.vertex1();
-    float uThisLine = determinant(otherDelta, vertex1Delta) / denominator;
-    float uOtherLine = determinant(thisDelta, vertex1Delta) / denominator;
+    float uThisLine = FloatPolygonInternal::determinant(otherDelta, vertex1Delta) / denominator;
+    float uOtherLine = FloatPolygonInternal::determinant(thisDelta, vertex1Delta) / denominator;
 
     if (uThisLine < 0 || uOtherLine < 0 || uThisLine > 1 || uOtherLine > 1)
         return false;
@@ -250,5 +248,14 @@ bool VertexPair::intersection(const VertexPair& other, FloatPoint& point) const
     point = vertex1() + uThisLine * thisDelta;
     return true;
 }
+
+#ifndef NDEBUG
+
+TextStream& operator<<(TextStream& stream, const FloatPolygonEdge& edge)
+{
+    return stream << &edge << " (" << edge.vertex1().x() << ',' << edge.vertex1().y() << ' ' << edge.vertex2().x() << ',' << edge.vertex2().y() << ')';
+}
+
+#endif
 
 } // namespace WebCore

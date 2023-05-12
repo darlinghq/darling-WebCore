@@ -32,9 +32,11 @@
 #include "IDBCursorDirection.h"
 #include "IDBKeyPath.h"
 #include "IDBObjectStoreInfo.h"
+#include <wtf/IsoMalloc.h>
 
 namespace JSC {
-class ExecState;
+class CallFrame;
+class JSGlobalObject;
 class JSValue;
 class SlotVisitor;
 }
@@ -55,14 +57,15 @@ enum class ObjectStoreOverwriteMode;
 }
 
 class IDBObjectStore final : public ActiveDOMObject {
+    WTF_MAKE_ISO_ALLOCATED(IDBObjectStore);
 public:
     IDBObjectStore(ScriptExecutionContext&, const IDBObjectStoreInfo&, IDBTransaction&);
     ~IDBObjectStore();
 
     const String& name() const;
     ExceptionOr<void> setName(const String&);
-    const std::optional<IDBKeyPath>& keyPath() const;
-    RefPtr<DOMStringList> indexNames() const;
+    const Optional<IDBKeyPath>& keyPath() const;
+    Ref<DOMStringList> indexNames() const;
     IDBTransaction& transaction();
     bool autoIncrement() const;
 
@@ -71,30 +74,30 @@ public:
         bool multiEntry;
     };
 
-    ExceptionOr<Ref<IDBRequest>> openCursor(JSC::ExecState&, RefPtr<IDBKeyRange>, IDBCursorDirection);
-    ExceptionOr<Ref<IDBRequest>> openCursor(JSC::ExecState&, JSC::JSValue key, IDBCursorDirection);
-    ExceptionOr<Ref<IDBRequest>> openKeyCursor(JSC::ExecState&, RefPtr<IDBKeyRange>, IDBCursorDirection);
-    ExceptionOr<Ref<IDBRequest>> openKeyCursor(JSC::ExecState&, JSC::JSValue key, IDBCursorDirection);
-    ExceptionOr<Ref<IDBRequest>> get(JSC::ExecState&, JSC::JSValue key);
-    ExceptionOr<Ref<IDBRequest>> get(JSC::ExecState&, IDBKeyRange*);
-    ExceptionOr<Ref<IDBRequest>> getKey(JSC::ExecState&, JSC::JSValue key);
-    ExceptionOr<Ref<IDBRequest>> getKey(JSC::ExecState&, IDBKeyRange*);
-    ExceptionOr<Ref<IDBRequest>> add(JSC::ExecState&, JSC::JSValue, JSC::JSValue key);
-    ExceptionOr<Ref<IDBRequest>> put(JSC::ExecState&, JSC::JSValue, JSC::JSValue key);
-    ExceptionOr<Ref<IDBRequest>> deleteFunction(JSC::ExecState&, IDBKeyRange*);
-    ExceptionOr<Ref<IDBRequest>> deleteFunction(JSC::ExecState&, JSC::JSValue key);
-    ExceptionOr<Ref<IDBRequest>> clear(JSC::ExecState&);
-    ExceptionOr<Ref<IDBIndex>> createIndex(JSC::ExecState&, const String& name, IDBKeyPath&&, const IndexParameters&);
+    ExceptionOr<Ref<IDBRequest>> openCursor(JSC::JSGlobalObject&, RefPtr<IDBKeyRange>&&, IDBCursorDirection);
+    ExceptionOr<Ref<IDBRequest>> openCursor(JSC::JSGlobalObject&, JSC::JSValue key, IDBCursorDirection);
+    ExceptionOr<Ref<IDBRequest>> openKeyCursor(JSC::JSGlobalObject&, RefPtr<IDBKeyRange>&&, IDBCursorDirection);
+    ExceptionOr<Ref<IDBRequest>> openKeyCursor(JSC::JSGlobalObject&, JSC::JSValue key, IDBCursorDirection);
+    ExceptionOr<Ref<IDBRequest>> get(JSC::JSGlobalObject&, JSC::JSValue key);
+    ExceptionOr<Ref<IDBRequest>> get(JSC::JSGlobalObject&, IDBKeyRange*);
+    ExceptionOr<Ref<IDBRequest>> getKey(JSC::JSGlobalObject&, JSC::JSValue key);
+    ExceptionOr<Ref<IDBRequest>> getKey(JSC::JSGlobalObject&, IDBKeyRange*);
+    ExceptionOr<Ref<IDBRequest>> add(JSC::JSGlobalObject&, JSC::JSValue, JSC::JSValue key);
+    ExceptionOr<Ref<IDBRequest>> put(JSC::JSGlobalObject&, JSC::JSValue, JSC::JSValue key);
+    ExceptionOr<Ref<IDBRequest>> deleteFunction(JSC::JSGlobalObject&, IDBKeyRange*);
+    ExceptionOr<Ref<IDBRequest>> deleteFunction(JSC::JSGlobalObject&, JSC::JSValue key);
+    ExceptionOr<Ref<IDBRequest>> clear(JSC::JSGlobalObject&);
+    ExceptionOr<Ref<IDBIndex>> createIndex(JSC::JSGlobalObject&, const String& name, IDBKeyPath&&, const IndexParameters&);
     ExceptionOr<Ref<IDBIndex>> index(const String& name);
     ExceptionOr<void> deleteIndex(const String& name);
-    ExceptionOr<Ref<IDBRequest>> count(JSC::ExecState&, IDBKeyRange*);
-    ExceptionOr<Ref<IDBRequest>> count(JSC::ExecState&, JSC::JSValue key);
-    ExceptionOr<Ref<IDBRequest>> getAll(JSC::ExecState&, RefPtr<IDBKeyRange>, std::optional<uint32_t> count);
-    ExceptionOr<Ref<IDBRequest>> getAll(JSC::ExecState&, JSC::JSValue key, std::optional<uint32_t> count);
-    ExceptionOr<Ref<IDBRequest>> getAllKeys(JSC::ExecState&, RefPtr<IDBKeyRange>, std::optional<uint32_t> count);
-    ExceptionOr<Ref<IDBRequest>> getAllKeys(JSC::ExecState&, JSC::JSValue key, std::optional<uint32_t> count);
+    ExceptionOr<Ref<IDBRequest>> count(JSC::JSGlobalObject&, IDBKeyRange*);
+    ExceptionOr<Ref<IDBRequest>> count(JSC::JSGlobalObject&, JSC::JSValue key);
+    ExceptionOr<Ref<IDBRequest>> getAll(JSC::JSGlobalObject&, RefPtr<IDBKeyRange>&&, Optional<uint32_t> count);
+    ExceptionOr<Ref<IDBRequest>> getAll(JSC::JSGlobalObject&, JSC::JSValue key, Optional<uint32_t> count);
+    ExceptionOr<Ref<IDBRequest>> getAllKeys(JSC::JSGlobalObject&, RefPtr<IDBKeyRange>&&, Optional<uint32_t> count);
+    ExceptionOr<Ref<IDBRequest>> getAllKeys(JSC::JSGlobalObject&, JSC::JSValue key, Optional<uint32_t> count);
 
-    ExceptionOr<Ref<IDBRequest>> putForCursorUpdate(JSC::ExecState&, JSC::JSValue, JSC::JSValue key);
+    ExceptionOr<Ref<IDBRequest>> putForCursorUpdate(JSC::JSGlobalObject&, JSC::JSValue, RefPtr<IDBKey>);
 
     void markAsDeleted();
     bool isDeleted() const { return m_deleted; }
@@ -111,13 +114,17 @@ public:
 
 private:
     enum class InlineKeyCheck { Perform, DoNotPerform };
-    ExceptionOr<Ref<IDBRequest>> putOrAdd(JSC::ExecState&, JSC::JSValue, RefPtr<IDBKey>, IndexedDB::ObjectStoreOverwriteMode, InlineKeyCheck);
-    ExceptionOr<Ref<IDBRequest>> doCount(JSC::ExecState&, const IDBKeyRangeData&);
-    ExceptionOr<Ref<IDBRequest>> doDelete(JSC::ExecState&, IDBKeyRange*);
+    ExceptionOr<Ref<IDBRequest>> putOrAdd(JSC::JSGlobalObject&, JSC::JSValue, RefPtr<IDBKey>, IndexedDB::ObjectStoreOverwriteMode, InlineKeyCheck);
+    ExceptionOr<Ref<IDBRequest>> doCount(JSC::JSGlobalObject&, const IDBKeyRangeData&);
+    ExceptionOr<Ref<IDBRequest>> doDelete(JSC::JSGlobalObject&, WTF::Function<ExceptionOr<RefPtr<IDBKeyRange>>()> &&);
+    ExceptionOr<Ref<IDBRequest>> doOpenCursor(JSC::JSGlobalObject&, IDBCursorDirection, WTF::Function<ExceptionOr<RefPtr<IDBKeyRange>>()>&&);
+    ExceptionOr<Ref<IDBRequest>> doOpenKeyCursor(JSC::JSGlobalObject&, IDBCursorDirection, WTF::Function<ExceptionOr<RefPtr<IDBKeyRange>>()>&&);
+    ExceptionOr<Ref<IDBRequest>> doGetAll(JSC::JSGlobalObject&, Optional<uint32_t> count, WTF::Function<ExceptionOr<RefPtr<IDBKeyRange>>()> &&);
+    ExceptionOr<Ref<IDBRequest>> doGetAllKeys(JSC::JSGlobalObject&, Optional<uint32_t> count, WTF::Function<ExceptionOr<RefPtr<IDBKeyRange>>()> &&);
 
+    // ActiveDOMObject.
     const char* activeDOMObjectName() const final;
-    bool canSuspendForDocumentSuspension() const final;
-    bool hasPendingActivity() const final;
+    bool virtualHasPendingActivity() const final;
 
     IDBObjectStoreInfo m_info;
     IDBObjectStoreInfo m_originalInfo;

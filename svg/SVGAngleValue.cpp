@@ -22,10 +22,10 @@
 #include "config.h"
 #include "SVGAngleValue.h"
 
-#include "ExceptionCode.h"
 #include "SVGParserUtilities.h"
 #include <wtf/MathExtras.h>
-#include <wtf/text/StringView.h>
+#include <wtf/text/StringConcatenateNumbers.h>
+#include <wtf/text/StringParsingBuffer.h>
 
 namespace WebCore {
 
@@ -67,11 +67,11 @@ String SVGAngleValue::valueAsString() const
 {
     switch (m_unitType) {
     case SVG_ANGLETYPE_DEG:
-        return String::number(m_valueInSpecifiedUnits) + "deg";
+        return makeString(m_valueInSpecifiedUnits, "deg");
     case SVG_ANGLETYPE_RAD:
-        return String::number(m_valueInSpecifiedUnits) + "rad";
+        return makeString(m_valueInSpecifiedUnits, "rad");
     case SVG_ANGLETYPE_GRAD:
-        return String::number(m_valueInSpecifiedUnits) + "grad";
+        return makeString(m_valueInSpecifiedUnits, "grad");
     case SVG_ANGLETYPE_UNSPECIFIED:
     case SVG_ANGLETYPE_UNKNOWN:
         return String::number(m_valueInSpecifiedUnits);
@@ -81,19 +81,19 @@ String SVGAngleValue::valueAsString() const
     return String();
 }
 
-static inline SVGAngleValue::Type parseAngleType(const UChar* ptr, const UChar* end)
+template<typename CharacterType> static inline SVGAngleValue::Type parseAngleType(StringParsingBuffer<CharacterType> buffer)
 {
-    switch (end - ptr) {
+    switch (buffer.lengthRemaining()) {
     case 0:
         return SVGAngleValue::SVG_ANGLETYPE_UNSPECIFIED;
     case 3:
-        if (ptr[0] == 'd' && ptr[1] == 'e' && ptr[2] == 'g')
+        if (buffer[0] == 'd' && buffer[1] == 'e' && buffer[2] == 'g')
             return SVGAngleValue::SVG_ANGLETYPE_DEG;
-        if (ptr[0] == 'r' && ptr[1] == 'a' && ptr[2] == 'd')
+        if (buffer[0] == 'r' && buffer[1] == 'a' && buffer[2] == 'd')
             return SVGAngleValue::SVG_ANGLETYPE_RAD;
         break;
     case 4:
-        if (ptr[0] == 'g' && ptr[1] == 'r' && ptr[2] == 'a' && ptr[3] == 'd')
+        if (buffer[0] == 'g' && buffer[1] == 'r' && buffer[2] == 'a' && buffer[3] == 'd')
             return SVGAngleValue::SVG_ANGLETYPE_GRAD;
         break;
     }
@@ -107,27 +107,25 @@ ExceptionOr<void> SVGAngleValue::setValueAsString(const String& value)
         return { };
     }
 
-    auto upconvertedCharacters = StringView(value).upconvertedCharacters();
-    const UChar* ptr = upconvertedCharacters;
-    const UChar* end = ptr + value.length();
+    return readCharactersForParsing(value, [&](auto buffer) -> ExceptionOr<void> {
+        auto valueInSpecifiedUnits = parseNumber(buffer, SuffixSkippingPolicy::DontSkip);
+        if (!valueInSpecifiedUnits)
+            return Exception { SyntaxError };
 
-    float valueInSpecifiedUnits = 0;
-    if (!parseNumber(ptr, end, valueInSpecifiedUnits, false))
-        return Exception { SYNTAX_ERR };
+        auto unitType = parseAngleType(buffer);
+        if (unitType == SVGAngleValue::SVG_ANGLETYPE_UNKNOWN)
+            return Exception { SyntaxError };
 
-    auto unitType = parseAngleType(ptr, end);
-    if (unitType == SVG_ANGLETYPE_UNKNOWN)
-        return Exception { SYNTAX_ERR };
-
-    m_unitType = unitType;
-    m_valueInSpecifiedUnits = valueInSpecifiedUnits;
-    return { };
+        m_unitType = unitType;
+        m_valueInSpecifiedUnits = *valueInSpecifiedUnits;
+        return { };
+    });
 }
 
 ExceptionOr<void> SVGAngleValue::newValueSpecifiedUnits(unsigned short unitType, float valueInSpecifiedUnits)
 {
     if (unitType == SVG_ANGLETYPE_UNKNOWN || unitType > SVG_ANGLETYPE_GRAD)
-        return Exception { NOT_SUPPORTED_ERR };
+        return Exception { NotSupportedError };
 
     m_unitType = static_cast<Type>(unitType);
     m_valueInSpecifiedUnits = valueInSpecifiedUnits;
@@ -137,7 +135,7 @@ ExceptionOr<void> SVGAngleValue::newValueSpecifiedUnits(unsigned short unitType,
 ExceptionOr<void> SVGAngleValue::convertToSpecifiedUnits(unsigned short unitType)
 {
     if (unitType == SVG_ANGLETYPE_UNKNOWN || m_unitType == SVG_ANGLETYPE_UNKNOWN || unitType > SVG_ANGLETYPE_GRAD)
-        return Exception { NOT_SUPPORTED_ERR };
+        return Exception { NotSupportedError };
 
     if (unitType == m_unitType)
         return { };

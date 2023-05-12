@@ -27,136 +27,136 @@
 #pragma once
 
 #include "Base64Utilities.h"
-#include "EventTarget.h"
+#include "CacheStorageConnection.h"
+#include "ImageBitmap.h"
 #include "ScriptExecutionContext.h"
 #include "Supplementable.h"
-#include "URL.h"
-#include "WorkerEventQueue.h"
-#include "WorkerScriptController.h"
-#include <inspector/ConsoleMessage.h>
+#include "WorkerOrWorkletGlobalScope.h"
+#include "WorkerOrWorkletScriptController.h"
+#include <wtf/URL.h>
+#include "WorkerCacheStorageConnection.h"
+#include "WorkerMessagePortChannelProvider.h"
+#include "WorkerThread.h"
+#include <JavaScriptCore/ConsoleMessage.h>
 #include <memory>
 
 namespace WebCore {
 
+class CSSValuePool;
 class ContentSecurityPolicyResponseHeaders;
 class Crypto;
 class Performance;
 class ScheduledAction;
-class WorkerInspectorController;
 class WorkerLocation;
 class WorkerNavigator;
-class WorkerThread;
+class WorkerSWClientConnection;
+struct WorkerParameters;
 
 namespace IDBClient {
 class IDBConnectionProxy;
 }
 
-class WorkerGlobalScope : public RefCounted<WorkerGlobalScope>, public Supplementable<WorkerGlobalScope>, public ScriptExecutionContext, public EventTargetWithInlineData, public Base64Utilities {
+class WorkerGlobalScope : public Supplementable<WorkerGlobalScope>, public Base64Utilities, public WorkerOrWorkletGlobalScope {
+    WTF_MAKE_ISO_ALLOCATED(WorkerGlobalScope);
 public:
     virtual ~WorkerGlobalScope();
 
     virtual bool isDedicatedWorkerGlobalScope() const { return false; }
+    virtual bool isServiceWorkerGlobalScope() const { return false; }
 
     const URL& url() const final { return m_url; }
     String origin() const;
+    const String& identifier() const { return m_identifier; }
 
 #if ENABLE(INDEXED_DATABASE)
     IDBClient::IDBConnectionProxy* idbConnectionProxy() final;
-    void stopIndexedDatabase();
+    void suspend() final;
+    void resume() final;
 #endif
 
-    WorkerScriptController* script() { return m_script.get(); }
-    void clearScript() { m_script = nullptr; }
+    WorkerCacheStorageConnection& cacheStorageConnection();
+    MessagePortChannelProvider& messagePortChannelProvider();
+#if ENABLE(SERVICE_WORKER)
+    WorkerSWClientConnection& swClientConnection();
+#endif
 
-    WorkerInspectorController& inspectorController() const { return *m_inspectorController; }
-
-    WorkerThread& thread() const { return m_thread; }
+    WorkerThread& thread() const;
 
     using ScriptExecutionContext::hasPendingActivity;
-
-    void postTask(Task&&) final; // Executes the task on context's thread asynchronously.
 
     WorkerGlobalScope& self() { return *this; }
     WorkerLocation& location() const;
     void close();
 
     virtual ExceptionOr<void> importScripts(const Vector<String>& urls);
-    WorkerNavigator& navigator() const;
+    WorkerNavigator& navigator();
 
-    int setTimeout(std::unique_ptr<ScheduledAction>, int timeout);
+    void setIsOnline(bool);
+
+    ExceptionOr<int> setTimeout(JSC::JSGlobalObject&, std::unique_ptr<ScheduledAction>, int timeout, Vector<JSC::Strong<JSC::Unknown>>&& arguments);
     void clearTimeout(int timeoutId);
-    int setInterval(std::unique_ptr<ScheduledAction>, int timeout);
+    ExceptionOr<int> setInterval(JSC::JSGlobalObject&, std::unique_ptr<ScheduledAction>, int timeout, Vector<JSC::Strong<JSC::Unknown>>&& arguments);
     void clearInterval(int timeoutId);
 
-    bool isContextThread() const final;
     bool isSecureContext() const final;
 
     WorkerNavigator* optionalNavigator() const { return m_navigator.get(); }
     WorkerLocation* optionalLocation() const { return m_location.get(); }
 
-    using RefCounted::ref;
-    using RefCounted::deref;
-
-    bool isClosing() { return m_closing; }
-
     void addConsoleMessage(std::unique_ptr<Inspector::ConsoleMessage>&&) final;
 
-    Crypto& crypto();
+    SecurityOrigin& topOrigin() const final { return m_topOrigin.get(); }
 
-#if ENABLE(WEB_TIMING)
+    Crypto& crypto();
     Performance& performance() const;
-#endif
+
+    void prepareForDestruction() override;
 
     void removeAllEventListeners() final;
 
+    void createImageBitmap(ImageBitmap::Source&&, ImageBitmapOptions&&, ImageBitmap::Promise&&);
+    void createImageBitmap(ImageBitmap::Source&&, int sx, int sy, int sw, int sh, ImageBitmapOptions&&, ImageBitmap::Promise&&);
+
+    CSSValuePool& cssValuePool();
+
+    ReferrerPolicy referrerPolicy() const final;
+
+    bool requestAnimationFrameEnabled() const { return m_settingsValues.requestAnimationFrameEnabled; }
+    bool acceleratedCompositingEnabled() const { return m_settingsValues.acceleratedCompositingEnabled; }
+    bool webGLEnabled() const { return m_settingsValues.webGLEnabled; }
+
 protected:
-    WorkerGlobalScope(const URL&, const String& identifier, const String& userAgent, WorkerThread&, bool shouldBypassMainWorldContentSecurityPolicy, Ref<SecurityOrigin>&& topOrigin, MonotonicTime timeOrigin, IDBClient::IDBConnectionProxy*, SocketProvider*);
+    WorkerGlobalScope(WorkerThreadType, const WorkerParameters&, Ref<SecurityOrigin>&&, WorkerThread&, Ref<SecurityOrigin>&& topOrigin, IDBClient::IDBConnectionProxy*, SocketProvider*);
 
     void applyContentSecurityPolicyResponseHeaders(const ContentSecurityPolicyResponseHeaders&);
 
 private:
-    void refScriptExecutionContext() final { ref(); }
-    void derefScriptExecutionContext() final { deref(); }
-
-    void refEventTarget() final { ref(); }
-    void derefEventTarget() final { deref(); }
-
     void logExceptionToConsole(const String& errorMessage, const String& sourceURL, int lineNumber, int columnNumber, RefPtr<Inspector::ScriptCallStack>&&) final;
 
     // The following addMessage and addConsoleMessage functions are deprecated.
     // Callers should try to create the ConsoleMessage themselves.
-    void addMessage(MessageSource, MessageLevel, const String& message, const String& sourceURL, unsigned lineNumber, unsigned columnNumber, RefPtr<Inspector::ScriptCallStack>&&, JSC::ExecState*, unsigned long requestIdentifier) final;
+    void addMessage(MessageSource, MessageLevel, const String& message, const String& sourceURL, unsigned lineNumber, unsigned columnNumber, RefPtr<Inspector::ScriptCallStack>&&, JSC::JSGlobalObject*, unsigned long requestIdentifier) final;
     void addConsoleMessage(MessageSource, MessageLevel, const String& message, unsigned long requestIdentifier) final;
 
     bool isWorkerGlobalScope() const final { return true; }
 
-    ScriptExecutionContext* scriptExecutionContext() const final { return const_cast<WorkerGlobalScope*>(this); }
-    URL completeURL(const String&) const final;
+    URL completeURL(const String&, ForceUTF8 = ForceUTF8::No) const final;
     String userAgent(const URL&) const final;
-    void disableEval(const String& errorMessage) final;
-    void disableWebAssembly(const String& errorMessage) final;
-    EventTarget* errorEventTarget() final;
-    WorkerEventQueue& eventQueue() const final;
-    String resourceRequestIdentifier() const final { return m_identifier; }
+    const Settings::Values& settingsValues() const final { return m_settingsValues; }
 
-#if ENABLE(WEB_SOCKETS)
+    EventTarget* errorEventTarget() final;
+    String resourceRequestIdentifier() const final { return m_identifier; }
     SocketProvider* socketProvider() final;
-#endif
 
     bool shouldBypassMainWorldContentSecurityPolicy() const final { return m_shouldBypassMainWorldContentSecurityPolicy; }
-    bool isJSExecutionForbidden() const final;
-    SecurityOrigin& topOrigin() const final { return m_topOrigin.get(); }
 
-#if ENABLE(SUBTLE_CRYPTO)
-    // The following two functions are side effects of providing extra protection to serialized
-    // CryptoKey data that went through the structured clone algorithm to local storage such as
-    // IndexedDB. They don't provide any proctection against communications between mainThread
-    // and workerThreads. In fact, they cause extra expense as workerThreads cannot talk to clients
-    // to unwrap/wrap crypto keys. Hence, workerThreads must always ask mainThread to unwrap/wrap
-    // keys, which results in a second communication and plain keys being transferred between
-    // workerThreads and the mainThread.
+#if ENABLE(WEB_CRYPTO)
     bool wrapCryptoKey(const Vector<uint8_t>& key, Vector<uint8_t>& wrappedKey) final;
     bool unwrapCryptoKey(const Vector<uint8_t>& wrappedKey, Vector<uint8_t>& key) final;
+#endif
+
+#if ENABLE(INDEXED_DATABASE)
+    void stopIndexedDatabase();
 #endif
 
     URL m_url;
@@ -166,14 +166,10 @@ private:
     mutable RefPtr<WorkerLocation> m_location;
     mutable RefPtr<WorkerNavigator> m_navigator;
 
-    WorkerThread& m_thread;
-    std::unique_ptr<WorkerScriptController> m_script;
-    std::unique_ptr<WorkerInspectorController> m_inspectorController;
+    std::unique_ptr<WorkerOrWorkletScriptController> m_script;
 
-    bool m_closing { false };
+    bool m_isOnline;
     bool m_shouldBypassMainWorldContentSecurityPolicy;
-
-    mutable WorkerEventQueue m_eventQueue;
 
     Ref<SecurityOrigin> m_topOrigin;
 
@@ -181,15 +177,19 @@ private:
     RefPtr<IDBClient::IDBConnectionProxy> m_connectionProxy;
 #endif
 
-#if ENABLE(WEB_SOCKETS)
     RefPtr<SocketProvider> m_socketProvider;
-#endif
 
-#if ENABLE(WEB_TIMING)
     RefPtr<Performance> m_performance;
-#endif
-
     mutable RefPtr<Crypto> m_crypto;
+
+    RefPtr<WorkerCacheStorageConnection> m_cacheStorageConnection;
+    std::unique_ptr<WorkerMessagePortChannelProvider> m_messagePortChannelProvider;
+#if ENABLE(SERVICE_WORKER)
+    RefPtr<WorkerSWClientConnection> m_swClientConnection;
+#endif
+    std::unique_ptr<CSSValuePool> m_cssValuePool;
+    ReferrerPolicy m_referrerPolicy;
+    Settings::Values m_settingsValues;
 };
 
 } // namespace WebCore

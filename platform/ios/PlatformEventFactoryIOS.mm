@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2004, 2006, 2007, 2008, 2009, 2010, 2011, 2014 Apple Inc. All rights reserved.
+ * Copyright (C) 2004, 2006-2011, 2014, 2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,13 +26,17 @@
 #import "config.h"
 #import "PlatformEventFactoryIOS.h"
 
+#if PLATFORM(IOS_FAMILY)
+
 #import "IntPoint.h"
 #import "KeyEventCocoa.h"
+#import "KeyEventCodesIOS.h"
 #import "Logging.h"
 #import "WAKAppKitStubs.h"
 #import "WebEvent.h"
 #import "WindowsKeyboardCodes.h"
-#import <wtf/CurrentTime.h>
+#import <wtf/Optional.h>
+#import <wtf/WallTime.h>
 
 namespace WebCore {
 
@@ -40,16 +44,16 @@ static OptionSet<PlatformEvent::Modifier> modifiersForEvent(WebEvent *event)
 {
     OptionSet<PlatformEvent::Modifier> modifiers;
 
-    if (event.modifierFlags & WebEventFlagMaskShift)
-        modifiers |= PlatformEvent::Modifier::ShiftKey;
-    if (event.modifierFlags & WebEventFlagMaskControl)
-        modifiers |= PlatformEvent::Modifier::CtrlKey;
-    if (event.modifierFlags & WebEventFlagMaskAlternate)
-        modifiers |= PlatformEvent::Modifier::AltKey;
-    if (event.modifierFlags & WebEventFlagMaskCommand)
-        modifiers |= PlatformEvent::Modifier::MetaKey;
-    if (event.modifierFlags & WebEventFlagMaskAlphaShift)
-        modifiers |= PlatformEvent::Modifier::CapsLockKey;
+    if (event.modifierFlags & WebEventFlagMaskShiftKey)
+        modifiers.add(PlatformEvent::Modifier::ShiftKey);
+    if (event.modifierFlags & WebEventFlagMaskControlKey)
+        modifiers.add(PlatformEvent::Modifier::ControlKey);
+    if (event.modifierFlags & WebEventFlagMaskOptionKey)
+        modifiers.add(PlatformEvent::Modifier::AltKey);
+    if (event.modifierFlags & WebEventFlagMaskCommandKey)
+        modifiers.add(PlatformEvent::Modifier::MetaKey);
+    if (event.modifierFlags & WebEventFlagMaskLeftCapsLockKey)
+        modifiers.add(PlatformEvent::Modifier::CapsLockKey);
 
     return modifiers;
 }
@@ -85,12 +89,13 @@ public:
     PlatformMouseEventBuilder(WebEvent *event)
     {
         m_type = mouseEventType(event);
-        m_timestamp = currentTime();
+        m_timestamp = WallTime::now();
 
         m_position = pointForEvent(event);
         m_globalPosition = globalPointForEvent(event);
         m_button = LeftButton; // This has always been the LeftButton on iOS.
         m_clickCount = 1; // This has always been 1 on iOS.
+        m_modifiers = modifiersForEvent(event);
     }
 };
 
@@ -106,7 +111,7 @@ public:
         ASSERT(event.type == WebEventScrollWheel);
 
         m_type = PlatformEvent::Wheel;
-        m_timestamp = currentTime();
+        m_timestamp = WallTime::now();
 
         m_position = pointForEvent(event);
         m_globalPosition = globalPointForEvent(event);
@@ -123,29 +128,84 @@ PlatformWheelEvent PlatformEventFactory::createPlatformWheelEvent(WebEvent *even
 
 String keyIdentifierForKeyEvent(WebEvent *event)
 {
-    NSString *s = event.charactersIgnoringModifiers;
-    if ([s length] != 1) {
-        LOG(Events, "received an unexpected number of characters in key event: %u", [s length]);
-        return "Unidentified";
-    }
+    if (event.keyboardFlags & WebEventKeyboardInputModifierFlagsChanged) {
+        switch (event.keyCode) {
+        case VK_LWIN: // Left Command
+        case VK_APPS: // Right Command
+            return "Meta"_s;
 
-    return keyIdentifierForCharCode(CFStringGetCharacterAtIndex((CFStringRef)s, 0));
+        case VK_CAPITAL: // Caps Lock
+            return "CapsLock"_s;
+
+        case VK_LSHIFT: // Left Shift
+        case VK_RSHIFT: // Right Shift
+            return "Shift"_s;
+
+        case VK_LMENU: // Left Alt
+        case VK_RMENU: // Right Alt
+            return "Alt"_s;
+
+        case VK_LCONTROL: // Left Ctrl
+        case VK_RCONTROL: // Right Ctrl
+            return "Control"_s;
+
+        default:
+            ASSERT_NOT_REACHED();
+            return emptyString();
+        }
+    }
+    NSString *characters = event.charactersIgnoringModifiers;
+    if ([characters length] != 1) {
+        LOG(Events, "received an unexpected number of characters in key event: %u", [characters length]);
+        return "Unidentified"_s;
+    }
+    return keyIdentifierForCharCode([characters characterAtIndex:0]);
 }
 
 String keyForKeyEvent(WebEvent *event)
 {
-    NSString *characters = event.characters;
-    auto length = [characters length];
+    if (event.keyboardFlags & WebEventKeyboardInputModifierFlagsChanged) {
+        switch (event.keyCode) {
+        case VK_LWIN: // Left Command
+        case VK_APPS: // Right Command
+            return "Meta"_s;
 
+        case VK_CAPITAL: // Caps Lock
+            return "CapsLock"_s;
+
+        case VK_LSHIFT: // Left Shift
+        case VK_RSHIFT: // Right Shift
+            return "Shift"_s;
+
+        case VK_LMENU: // Left Alt
+        case VK_RMENU: // Right Alt
+            return "Alt"_s;
+
+        case VK_LCONTROL: // Left Ctrl
+        case VK_RCONTROL: // Right Ctrl
+            return "Control"_s;
+
+        default:
+            ASSERT_NOT_REACHED();
+            return "Unidentified"_s;
+        }
+    }
+
+    // If more than one key is being pressed and the key combination includes one or more modifier keys
+    // that result in the key no longer producing a printable character (e.g., Control + a), then the
+    // key value should be the printable key value that would have been produced if the key had been
+    // typed with the default keyboard layout with no modifier keys except for Shift and AltGr applied.
+    // See <https://www.w3.org/TR/2015/WD-uievents-20151215/#keys-guidelines>.
+    bool isControlDown = event.modifierFlags & WebEventFlagMaskControlKey;
+    NSString *characters = isControlDown ? event.charactersIgnoringModifiers : event.characters;
+    auto length = [characters length];
     // characters return an empty string for dead keys.
     // https://developer.apple.com/reference/appkit/nsevent/1534183-characters
     // "Dead" is defined here https://w3c.github.io/uievents-key/#keys-composition.
     if (!length)
-        return ASCIILiteral("Dead");
-
+        return "Dead"_s;
     if (length > 1)
         return characters;
-
     return keyForCharCode([characters characterAtIndex:0]);
 }
 
@@ -154,76 +214,76 @@ String codeForKeyEvent(WebEvent *event)
 {
     switch (event.keyCode) {
     // Keys in the alphanumeric section.
-    case VK_OEM_3: return ASCIILiteral("Backquote");
-    case VK_OEM_5: return ASCIILiteral("Backslash");
-    case VK_BACK: return ASCIILiteral("Backspace");
-    case VK_OEM_4: return ASCIILiteral("BracketLeft");
-    case VK_OEM_6: return ASCIILiteral("BracketRight");
-    case VK_OEM_COMMA: return ASCIILiteral("Comma");
-    case VK_0: return ASCIILiteral("Digit0");
-    case VK_1: return ASCIILiteral("Digit1");
-    case VK_2: return ASCIILiteral("Digit2");
-    case VK_3: return ASCIILiteral("Digit3");
-    case VK_4: return ASCIILiteral("Digit4");
-    case VK_5: return ASCIILiteral("Digit5");
-    case VK_6: return ASCIILiteral("Digit6");
-    case VK_7: return ASCIILiteral("Digit7");
-    case VK_8: return ASCIILiteral("Digit8");
-    case VK_9: return ASCIILiteral("Digit9");
-    case VK_OEM_PLUS: return ASCIILiteral("Equal");
-    case VK_OEM_102: return ASCIILiteral("IntlBackslash");
+    case VK_OEM_3: return "Backquote"_s;
+    case VK_OEM_5: return "Backslash"_s;
+    case VK_BACK: return "Backspace"_s;
+    case VK_OEM_4: return "BracketLeft"_s;
+    case VK_OEM_6: return "BracketRight"_s;
+    case VK_OEM_COMMA: return "Comma"_s;
+    case VK_0: return "Digit0"_s;
+    case VK_1: return "Digit1"_s;
+    case VK_2: return "Digit2"_s;
+    case VK_3: return "Digit3"_s;
+    case VK_4: return "Digit4"_s;
+    case VK_5: return "Digit5"_s;
+    case VK_6: return "Digit6"_s;
+    case VK_7: return "Digit7"_s;
+    case VK_8: return "Digit8"_s;
+    case VK_9: return "Digit9"_s;
+    case VK_OEM_PLUS: return "Equal"_s;
+    case VK_OEM_102: return "IntlBackslash"_s;
     // IntlRo.
     // IntlYen.
-    case VK_A: return ASCIILiteral("KeyA");
-    case VK_B: return ASCIILiteral("KeyB");
-    case VK_C: return ASCIILiteral("KeyC");
-    case VK_D: return ASCIILiteral("KeyD");
-    case VK_E: return ASCIILiteral("KeyE");
-    case VK_F: return ASCIILiteral("KeyF");
-    case VK_G: return ASCIILiteral("KeyG");
-    case VK_H: return ASCIILiteral("KeyH");
-    case VK_I: return ASCIILiteral("KeyI");
-    case VK_J: return ASCIILiteral("KeyJ");
-    case VK_K: return ASCIILiteral("KeyK");
-    case VK_L: return ASCIILiteral("KeyL");
-    case VK_M: return ASCIILiteral("KeyM");
-    case VK_N: return ASCIILiteral("KeyN");
-    case VK_O: return ASCIILiteral("KeyO");
-    case VK_P: return ASCIILiteral("KeyP");
-    case VK_Q: return ASCIILiteral("KeyQ");
-    case VK_R: return ASCIILiteral("KeyR");
-    case VK_S: return ASCIILiteral("KeyS");
-    case VK_T: return ASCIILiteral("KeyT");
-    case VK_U: return ASCIILiteral("KeyU");
-    case VK_V: return ASCIILiteral("KeyV");
-    case VK_W: return ASCIILiteral("KeyW");
-    case VK_X: return ASCIILiteral("KeyX");
-    case VK_Y: return ASCIILiteral("KeyY");
-    case VK_Z: return ASCIILiteral("KeyZ");
-    case VK_OEM_MINUS: return ASCIILiteral("Minus");
-    case VK_OEM_PERIOD: return ASCIILiteral("Period");
-    case VK_OEM_7: return ASCIILiteral("Quote");
-    case VK_OEM_1: return ASCIILiteral("Semicolon");
-    case VK_OEM_2: return ASCIILiteral("Slash");
+    case VK_A: return "KeyA"_s;
+    case VK_B: return "KeyB"_s;
+    case VK_C: return "KeyC"_s;
+    case VK_D: return "KeyD"_s;
+    case VK_E: return "KeyE"_s;
+    case VK_F: return "KeyF"_s;
+    case VK_G: return "KeyG"_s;
+    case VK_H: return "KeyH"_s;
+    case VK_I: return "KeyI"_s;
+    case VK_J: return "KeyJ"_s;
+    case VK_K: return "KeyK"_s;
+    case VK_L: return "KeyL"_s;
+    case VK_M: return "KeyM"_s;
+    case VK_N: return "KeyN"_s;
+    case VK_O: return "KeyO"_s;
+    case VK_P: return "KeyP"_s;
+    case VK_Q: return "KeyQ"_s;
+    case VK_R: return "KeyR"_s;
+    case VK_S: return "KeyS"_s;
+    case VK_T: return "KeyT"_s;
+    case VK_U: return "KeyU"_s;
+    case VK_V: return "KeyV"_s;
+    case VK_W: return "KeyW"_s;
+    case VK_X: return "KeyX"_s;
+    case VK_Y: return "KeyY"_s;
+    case VK_Z: return "KeyZ"_s;
+    case VK_OEM_MINUS: return "Minus"_s;
+    case VK_OEM_PERIOD: return "Period"_s;
+    case VK_OEM_7: return "Quote"_s;
+    case VK_OEM_1: return "Semicolon"_s;
+    case VK_OEM_2: return "Slash"_s;
 
     // Functional keys in alphanumeric section.
-    case VK_MENU: return ASCIILiteral("AltLeft");
-    // AltRight.
-    case VK_CAPITAL: return ASCIILiteral("CapsLock");
+    case VK_LMENU: return "AltLeft"_s;
+    case VK_RMENU: return "AltRight"_s;
+    case VK_CAPITAL: return "CapsLock"_s;
     // ContextMenu.
-    case VK_LCONTROL: return ASCIILiteral("ControlLeft");
-    case VK_RCONTROL: return ASCIILiteral("ControlRight");
-    case VK_RETURN: return ASCIILiteral("Enter"); //  Labeled Return on Apple keyboards.
-    case VK_LWIN: return ASCIILiteral("MetaLeft");
-    case VK_RWIN: return ASCIILiteral("MetaRight");
-    case VK_LSHIFT: return ASCIILiteral("ShiftLeft");
-    case VK_RSHIFT: return ASCIILiteral("ShiftRight");
-    case VK_SPACE: return ASCIILiteral("Space");
-    case VK_TAB: return ASCIILiteral("Tab");
+    case VK_LCONTROL: return "ControlLeft"_s;
+    case VK_RCONTROL: return "ControlRight"_s;
+    case VK_RETURN: return "Enter"_s; //  Labeled Return on Apple keyboards.
+    case VK_LWIN: return "MetaLeft"_s;
+    case VK_APPS: return "MetaRight"_s;
+    case VK_LSHIFT: return "ShiftLeft"_s;
+    case VK_RSHIFT: return "ShiftRight"_s;
+    case VK_SPACE: return "Space"_s;
+    case VK_TAB: return "Tab"_s;
 
     // Functional keys found on Japanese and Korean keyboards.
     // Convert.
-    case VK_KANA: return ASCIILiteral("KanaMode");
+    case VK_KANA: return "KanaMode"_s;
     // Lang1.
     // Lang2.
     // Lang3.
@@ -233,74 +293,74 @@ String codeForKeyEvent(WebEvent *event)
 
     // Keys in the ControlPad section.
     // Delete
-    case VK_END: return ASCIILiteral("End");
-    case VK_HELP: return ASCIILiteral("Help");
-    case VK_HOME: return ASCIILiteral("Home");
+    case VK_END: return "End"_s;
+    case VK_HELP: return "Help"_s;
+    case VK_HOME: return "Home"_s;
     // Insert: Not present on Apple keyboards.
-    case VK_NEXT: return ASCIILiteral("PageDown");
-    case VK_PRIOR: return ASCIILiteral("PageUp");
+    case VK_NEXT: return "PageDown"_s;
+    case VK_PRIOR: return "PageUp"_s;
 
     // Keys in the ArrowPad section.
-    case VK_DOWN: return ASCIILiteral("ArrowDown");
-    case VK_LEFT: return ASCIILiteral("ArrowLeft");
-    case VK_RIGHT: return ASCIILiteral("ArrowRight");
-    case VK_UP: return ASCIILiteral("ArrowUp");
+    case VK_DOWN: return "ArrowDown"_s;
+    case VK_LEFT: return "ArrowLeft"_s;
+    case VK_RIGHT: return "ArrowRight"_s;
+    case VK_UP: return "ArrowUp"_s;
 
     // Keys in the Numpad section.
-    case VK_NUMLOCK: return ASCIILiteral("NumLock");
-    case VK_NUMPAD0: return ASCIILiteral("Numpad0");
-    case VK_NUMPAD1: return ASCIILiteral("Numpad1");
-    case VK_NUMPAD2: return ASCIILiteral("Numpad2");
-    case VK_NUMPAD3: return ASCIILiteral("Numpad3");
-    case VK_NUMPAD4: return ASCIILiteral("Numpad4");
-    case VK_NUMPAD5: return ASCIILiteral("Numpad5");
-    case VK_NUMPAD6: return ASCIILiteral("Numpad6");
-    case VK_NUMPAD7: return ASCIILiteral("Numpad7");
-    case VK_NUMPAD8: return ASCIILiteral("Numpad8");
-    case VK_NUMPAD9: return ASCIILiteral("Numpad9");
-    case VK_ADD: return ASCIILiteral("NumpadAdd");
+    case VK_NUMLOCK: return "NumLock"_s;
+    case VK_NUMPAD0: return "Numpad0"_s;
+    case VK_NUMPAD1: return "Numpad1"_s;
+    case VK_NUMPAD2: return "Numpad2"_s;
+    case VK_NUMPAD3: return "Numpad3"_s;
+    case VK_NUMPAD4: return "Numpad4"_s;
+    case VK_NUMPAD5: return "Numpad5"_s;
+    case VK_NUMPAD6: return "Numpad6"_s;
+    case VK_NUMPAD7: return "Numpad7"_s;
+    case VK_NUMPAD8: return "Numpad8"_s;
+    case VK_NUMPAD9: return "Numpad9"_s;
+    case VK_ADD: return "NumpadAdd"_s;
     // NumpadBackspace.
     // NumpadClear.
     // NumpadClearEntry.
-    case VK_SEPARATOR: return ASCIILiteral("NumpadComma");
-    case VK_DECIMAL: return ASCIILiteral("NumpadDecimal");
-    case VK_DIVIDE: return ASCIILiteral("NumpadDivide");
+    case VK_SEPARATOR: return "NumpadComma"_s; // On JIS keyboard
+    case VK_DECIMAL: return "NumpadDecimal"_s;
+    case VK_DIVIDE: return "NumpadDivide"_s;
     // NumpadEnter.
-    case VK_CLEAR: return ASCIILiteral("NumpadEqual");
+    case VK_CLEAR: return "NumpadEqual"_s;
     // NumpadHash.
     // NumpadMemoryAdd.
     // NumpadMemoryClear.
     // NumpadMemoryRecall.
     // NumpadMemoryStore.
     // NumpadMemorySubtract.
-    case VK_MULTIPLY: return ASCIILiteral("NumpadMultiply");
+    case VK_MULTIPLY: return "NumpadMultiply"_s;
     // NumpadParenLeft.
     // NumpadParenRight.
     // NumpadStar: The specification says to use "NumpadMultiply" for the * key on numeric keypads.
-    case VK_SUBTRACT: return ASCIILiteral("NumpadSubtract");
+    case VK_SUBTRACT: return "NumpadSubtract"_s;
 
     // Keys in the Function section.
-    case VK_ESCAPE: return ASCIILiteral("Escape");
-    case VK_F1: return ASCIILiteral("F1");
-    case VK_F2: return ASCIILiteral("F2");
-    case VK_F3: return ASCIILiteral("F3");
-    case VK_F4: return ASCIILiteral("F4");
-    case VK_F5: return ASCIILiteral("F5");
-    case VK_F6: return ASCIILiteral("F6");
-    case VK_F7: return ASCIILiteral("F7");
-    case VK_F8: return ASCIILiteral("F8");
-    case VK_F9: return ASCIILiteral("F9");
-    case VK_F10: return ASCIILiteral("F10");
-    case VK_F11: return ASCIILiteral("F11");
-    case VK_F12: return ASCIILiteral("F12");
-    case VK_F13: return ASCIILiteral("F13");
-    case VK_F14: return ASCIILiteral("F14");
-    case VK_F15: return ASCIILiteral("F15");
-    case VK_F16: return ASCIILiteral("F16");
-    case VK_F17: return ASCIILiteral("F17");
-    case VK_F18: return ASCIILiteral("F18");
-    case VK_F19: return ASCIILiteral("F19");
-    case VK_F20: return ASCIILiteral("F20");
+    case VK_ESCAPE: return "Escape"_s;
+    case VK_F1: return "F1"_s;
+    case VK_F2: return "F2"_s;
+    case VK_F3: return "F3"_s;
+    case VK_F4: return "F4"_s;
+    case VK_F5: return "F5"_s;
+    case VK_F6: return "F6"_s;
+    case VK_F7: return "F7"_s;
+    case VK_F8: return "F8"_s;
+    case VK_F9: return "F9"_s;
+    case VK_F10: return "F10"_s;
+    case VK_F11: return "F11"_s;
+    case VK_F12: return "F12"_s;
+    case VK_F13: return "F13"_s;
+    case VK_F14: return "F14"_s;
+    case VK_F15: return "F15"_s;
+    case VK_F16: return "F16"_s;
+    case VK_F17: return "F17"_s;
+    case VK_F18: return "F18"_s;
+    case VK_F19: return "F19"_s;
+    case VK_F20: return "F20"_s;
     // Fn: This is typically a hardware key that does not generate a separate code.
     // FnLock.
     // PrintScreen.
@@ -326,9 +386,9 @@ String codeForKeyEvent(WebEvent *event)
     // MediaTrackPrevious.
     // Power.
     // Sleep.
-    case VK_VOLUME_DOWN: return ASCIILiteral("AudioVolumeDown");
-    case VK_VOLUME_MUTE: return ASCIILiteral("AudioVolumeMute");
-    case VK_VOLUME_UP: return ASCIILiteral("AudioVolumeUp");
+    case VK_VOLUME_DOWN: return "AudioVolumeDown"_s;
+    case VK_VOLUME_MUTE: return "AudioVolumeMute"_s;
+    case VK_VOLUME_UP: return "AudioVolumeUp"_s;
     // WakeUp.
 
     // Legacy modifier keys.
@@ -357,8 +417,70 @@ String codeForKeyEvent(WebEvent *event)
     // Katakana.
 
     default:
-        return ASCIILiteral("Unidentified");
+        return "Unidentified"_s;
     }
+}
+
+static bool isKeypadEvent(WebEvent* event)
+{
+    // Check that this is the type of event that has a keyCode.
+    if (event.type != WebEventKeyDown && event.type != WebEventKeyUp)
+        return false;
+
+    switch (event.keyCode) {
+    case VK_CLEAR: // Num Pad Clear
+    case VK_OEM_PLUS: // Num Pad =
+    case VK_DIVIDE:
+    case VK_MULTIPLY:
+    case VK_SUBTRACT:
+    case VK_ADD:
+    case VK_RETURN: // Num Pad Enter
+    case VK_DECIMAL: // Num Pad .
+    case VK_SEPARATOR: // Num Pad , (on JIS keyboard)
+    case VK_NUMPAD0:
+    case VK_NUMPAD1:
+    case VK_NUMPAD2:
+    case VK_NUMPAD3:
+    case VK_NUMPAD4:
+    case VK_NUMPAD5:
+    case VK_NUMPAD6:
+    case VK_NUMPAD7:
+    case VK_NUMPAD8:
+    case VK_NUMPAD9:
+        return true;
+    }
+    return false;
+}
+
+int windowsKeyCodeForKeyEvent(WebEvent* event)
+{
+    if (event.keyboardFlags & WebEventKeyboardInputModifierFlagsChanged)
+        return event.keyCode;
+
+    // There are several kinds of characters for which we produce key code from char code:
+    // 1. Roman letters. Windows keyboard layouts affect both virtual key codes and character codes for these,
+    //    so e.g. 'A' gets the same keyCode on QWERTY, AZERTY or Dvorak layouts.
+    // 2. Keys for which there is no known iOS virtual key codes, like PrintScreen.
+    // 3. Certain punctuation keys. On Windows, these are also remapped depending on current keyboard layout,
+    //    but see comment in windowsKeyCodeForCharCode().
+    if (!isKeypadEvent(event) && (event.type == WebEventKeyDown || event.type == WebEventKeyUp)) {
+        // Cmd switches Roman letters for Dvorak-QWERTY layout, so try modified characters first.
+        NSString *string = event.characters;
+        int code = string.length > 0 ? windowsKeyCodeForCharCode([string characterAtIndex:0]) : 0;
+        if (code)
+            return code;
+
+        // Ctrl+A on an AZERTY keyboard would get VK_Q keyCode if we relied on -[WebEvent keyCode] below.
+        string = event.charactersIgnoringModifiers;
+        code = string.length > 0 ? windowsKeyCodeForCharCode([string characterAtIndex:0]) : 0;
+        if (code)
+            return code;
+    }
+
+    // Use iOS virtual key code directly for any keys not handled above.
+    // E.g. the key next to Caps Lock has the same Event.keyCode on U.S. keyboard ('A') and on
+    // Russian keyboard (CYRILLIC LETTER EF).
+    return event.keyCode;
 }
 
 class PlatformKeyboardEventBuilder : public PlatformKeyboardEvent {
@@ -369,15 +491,21 @@ public:
 
         m_type = (event.type == WebEventKeyUp ? PlatformEvent::KeyUp : PlatformEvent::KeyDown);
         m_modifiers = modifiersForEvent(event);
-        m_timestamp = currentTime();
+        m_timestamp = WallTime::now();
 
-        m_text = event.characters;
-        m_unmodifiedText = event.charactersIgnoringModifiers;
+        if (event.keyboardFlags & WebEventKeyboardInputModifierFlagsChanged) {
+            m_text = emptyString();
+            m_unmodifiedText = emptyString();
+            m_autoRepeat = false;
+        } else {
+            m_text = event.characters;
+            m_unmodifiedText = event.charactersIgnoringModifiers;
+            m_autoRepeat = event.isKeyRepeating;
+        }
         m_key = keyForKeyEvent(event);
         m_code = codeForKeyEvent(event);
         m_keyIdentifier = keyIdentifierForKeyEvent(event);
-        m_windowsVirtualKeyCode = event.keyCode;
-        m_autoRepeat = event.isKeyRepeating;
+        m_windowsVirtualKeyCode = windowsKeyCodeForKeyEvent(event);
         m_isKeypad = false; // iOS does not distinguish the numpad. See <rdar://problem/7190835>.
         m_isSystemKey = false;
         m_Event = event;
@@ -475,7 +603,7 @@ public:
     {
         m_type = touchEventType(event);
         m_modifiers = modifiersForEvent(event);
-        m_timestamp = event.timestamp;
+        m_timestamp = WallTime::fromRawSeconds(event.timestamp);
 
         m_gestureScale = event.gestureScale;
         m_gestureRotation = event.gestureRotation;
@@ -496,7 +624,7 @@ public:
     PlatformTouchEventBuilder(PlatformEvent::Type type, IntPoint location)
     {
         m_type = type;
-        m_timestamp = currentTime();
+        m_timestamp = WallTime::now();
         
         m_gestureScale = 1;
         m_gestureRotation = 0;
@@ -525,3 +653,5 @@ PlatformTouchEvent PlatformEventFactory::createPlatformSimulatedTouchEvent(Platf
 #endif // ENABLE(TOUCH_EVENTS)
 
 } // namespace WebCore
+
+#endif // PLATFORM(IOS_FAMILY)

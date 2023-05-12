@@ -92,7 +92,7 @@ float computedFontSizeFromSpecifiedSize(float specifiedSize, bool isAbsoluteSize
     if (!useSVGZoomRules) {
         zoomFactor = style->effectiveZoom();
         Frame* frame = document.frame();
-        if (frame && style->textZoom() != TextZoomReset)
+        if (frame && style->textZoom() != TextZoom::Reset)
             zoomFactor *= frame->textZoomFactor();
     }
     return computedFontSizeFromSpecifiedSize(specifiedSize, isAbsoluteSize, zoomFactor, useSVGZoomRules ? MinimumFontSizeRule::None : MinimumFontSizeRule::AbsoluteAndRelative, document.settings());
@@ -157,7 +157,7 @@ float fontSizeForKeyword(unsigned keywordID, bool shouldUseFixedDefaultSize, con
     }
 
     // Value is outside the range of the table. Apply the scale factor instead.
-    float minLogicalSize = std::max(document.settings().minimumLogicalFontSize(), 1);
+    float minLogicalSize = std::max<float>(document.settings().minimumLogicalFontSize(), 1);
     return std::max(fontSizeFactors[keywordID - CSSValueXxSmall] * mediumSize, minLogicalSize);
 }
 

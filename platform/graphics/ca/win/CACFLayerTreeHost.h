@@ -40,7 +40,6 @@
 #include <CoreGraphics/CGGeometry.h>
 
 interface IDirect3DDevice9;
-struct WKCACFContext;
 
 typedef struct CGImage* CGImageRef;
 
@@ -121,7 +120,7 @@ private:
     bool m_shouldFlushPendingGraphicsLayerChanges { false };
     bool m_isFlushingLayerChanges { false };
 
-#if !ASSERT_DISABLED
+#if ASSERT_ENABLED
     enum { WindowNotSet, WindowSet, WindowCleared } m_state { WindowNotSet };
 #endif
 };

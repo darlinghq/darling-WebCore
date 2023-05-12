@@ -33,14 +33,13 @@
 #include "config.h"
 #include "PerformanceResourceTiming.h"
 
-#if ENABLE(WEB_TIMING)
-
 #include "Document.h"
 #include "DocumentLoader.h"
 #include "LoadTiming.h"
+#include "PerformanceServerTiming.h"
 #include "ResourceResponse.h"
 #include "ResourceTiming.h"
-#include "URL.h"
+#include <wtf/URL.h>
 
 namespace WebCore {
 
@@ -56,11 +55,17 @@ static double monotonicTimeToDOMHighResTimeStamp(MonotonicTime timeOrigin, Monot
 
 static double entryStartTime(MonotonicTime timeOrigin, const ResourceTiming& resourceTiming)
 {
+    if (!resourceTiming.allowTimingDetails())
+        return monotonicTimeToDOMHighResTimeStamp(timeOrigin, resourceTiming.loadTiming().fetchStart());
+
     return monotonicTimeToDOMHighResTimeStamp(timeOrigin, resourceTiming.loadTiming().startTime());
 }
 
 static double entryEndTime(MonotonicTime timeOrigin, const ResourceTiming& resourceTiming)
 {
+    if (!resourceTiming.allowTimingDetails())
+        return entryStartTime(timeOrigin, resourceTiming);
+
     if (resourceTiming.networkLoadMetrics().isComplete()) {
         Seconds endTime = (resourceTiming.loadTiming().fetchStart() + resourceTiming.networkLoadMetrics().responseEnd) - timeOrigin;
         return Performance::reduceTimeResolution(endTime).milliseconds();
@@ -75,26 +80,26 @@ Ref<PerformanceResourceTiming> PerformanceResourceTiming::create(MonotonicTime t
 }
 
 PerformanceResourceTiming::PerformanceResourceTiming(MonotonicTime timeOrigin, ResourceTiming&& resourceTiming)
-    : PerformanceEntry(PerformanceEntry::Type::Resource, resourceTiming.url().string(), ASCIILiteral("resource"), entryStartTime(timeOrigin, resourceTiming), entryEndTime(timeOrigin, resourceTiming))
+    : PerformanceEntry(resourceTiming.url().string(), entryStartTime(timeOrigin, resourceTiming), entryEndTime(timeOrigin, resourceTiming))
     , m_initiatorType(resourceTiming.initiator())
     , m_timeOrigin(timeOrigin)
     , m_loadTiming(resourceTiming.loadTiming())
     , m_networkLoadMetrics(resourceTiming.networkLoadMetrics())
     , m_shouldReportDetails(resourceTiming.allowTimingDetails())
+    , m_serverTiming(resourceTiming.populateServerTiming())
 {
 }
 
-PerformanceResourceTiming::~PerformanceResourceTiming()
-{
-}
+PerformanceResourceTiming::~PerformanceResourceTiming() = default;
 
-String PerformanceResourceTiming::nextHopProtocol() const
+const String& PerformanceResourceTiming::nextHopProtocol() const
 {
     return m_networkLoadMetrics.protocol;
 }
 
 double PerformanceResourceTiming::workerStart() const
 {
+    // FIXME: <https://webkit.org/b/179377> Implement PerformanceResourceTiming.workerStart in ServiceWorkers
     return 0.0;
 }
 
@@ -235,5 +240,3 @@ double PerformanceResourceTiming::networkLoadTimeToDOMHighResTimeStamp(Seconds d
 }
 
 } // namespace WebCore
-
-#endif // ENABLE(WEB_TIMING)

@@ -33,11 +33,14 @@
 #include "FrameSelection.h"
 #include "HTMLAttachmentElement.h"
 #include "RenderTheme.h"
-#include "URL.h"
+#include <wtf/IsoMallocInlines.h>
+#include <wtf/URL.h>
 
 namespace WebCore {
 
 using namespace HTMLNames;
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(RenderAttachment);
 
 RenderAttachment::RenderAttachment(HTMLAttachmentElement& element, RenderStyle&& style)
     : RenderReplaced(element, WTFMove(style), LayoutSize())
@@ -52,8 +55,12 @@ HTMLAttachmentElement& RenderAttachment::attachmentElement() const
 void RenderAttachment::layout()
 {
     LayoutSize newIntrinsicSize = theme().attachmentIntrinsicSize(*this);
-    m_minimumIntrinsicWidth = std::max(m_minimumIntrinsicWidth, newIntrinsicSize.width());
-    newIntrinsicSize.setWidth(m_minimumIntrinsicWidth);
+
+    if (!theme().attachmentShouldAllowWidthToShrink(*this)) {
+        m_minimumIntrinsicWidth = std::max(m_minimumIntrinsicWidth, newIntrinsicSize.width());
+        newIntrinsicSize.setWidth(m_minimumIntrinsicWidth);
+    }
+
     setIntrinsicSize(newIntrinsicSize);
 
     RenderReplaced::layout();
@@ -75,6 +82,18 @@ bool RenderAttachment::shouldDrawBorder() const
     if (style().appearance() == BorderlessAttachmentPart)
         return false;
     return m_shouldDrawBorder;
+}
+
+void RenderAttachment::paintReplaced(PaintInfo& paintInfo, const LayoutPoint& offset)
+{
+    if (paintInfo.phase != PaintPhase::Selection || !hasVisibleBoxDecorations() || !style().hasAppearance())
+        return;
+
+    auto paintRect = borderBoxRect();
+    paintRect.moveBy(offset);
+
+    ControlStates controlStates;
+    theme().paint(*this, controlStates, paintInfo, paintRect);
 }
 
 } // namespace WebCore

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc.  All rights reserved.
+ * Copyright (C) 2016-2020 Apple Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,70 +28,36 @@
 
 #if USE(CAIRO)
 
+#include "CairoOperations.h"
 #include "CairoUtilities.h"
 #include "PlatformContextCairo.h"
 #include <cairo.h>
 
 namespace WebCore {
 
-IntSize nativeImageSize(const NativeImagePtr& image)
+IntSize NativeImage::size() const
 {
-    return image ? cairoSurfaceSize(image.get()) : IntSize();
+    return cairoSurfaceSize(m_platformImage.get());
 }
 
-bool nativeImageHasAlpha(const NativeImagePtr& image)
+bool NativeImage::hasAlpha() const
 {
-    return !image || cairo_surface_get_content(image.get()) != CAIRO_CONTENT_COLOR;
+    return cairo_surface_get_content(m_platformImage.get()) != CAIRO_CONTENT_COLOR;
 }
 
-Color nativeImageSinglePixelSolidColor(const NativeImagePtr& image)
+Color NativeImage::singlePixelSolidColor() const
 {
-    if (!image || nativeImageSize(image) != IntSize(1, 1))
+    if (size() != IntSize(1, 1))
         return Color();
 
-    if (cairo_surface_get_type(image.get()) != CAIRO_SURFACE_TYPE_IMAGE)
+    if (cairo_surface_get_type(m_platformImage.get()) != CAIRO_SURFACE_TYPE_IMAGE)
         return Color();
 
-    RGBA32* pixel = reinterpret_cast_ptr<RGBA32*>(cairo_image_surface_get_data(image.get()));
-    return colorFromPremultipliedARGB(*pixel);
+    unsigned* pixel = reinterpret_cast_ptr<unsigned*>(cairo_image_surface_get_data(m_platformImage.get()));
+    return unpremultiplied(asSRGBA(PackedColor::ARGB { *pixel }));
 }
 
-void drawNativeImage(const NativeImagePtr& image, GraphicsContext& context, const FloatRect& destRect, const FloatRect& srcRect, const IntSize&, CompositeOperator op, BlendMode mode, const ImageOrientation& orientation)
-{
-    context.save();
-    
-    // Set the compositing operation.
-    if (op == CompositeSourceOver && mode == BlendModeNormal && !nativeImageHasAlpha(image))
-        context.setCompositeOperation(CompositeCopy);
-    else
-        context.setCompositeOperation(op, mode);
-        
-#if ENABLE(IMAGE_DECODER_DOWN_SAMPLING)
-    IntSize scaledSize = nativeImageSize(image);
-    FloatRect adjustedSrcRect = adjustSourceRectForDownSampling(srcRect, scaledSize);
-#else
-    FloatRect adjustedSrcRect(srcRect);
-#endif
-        
-    FloatRect adjustedDestRect = destRect;
-        
-    if (orientation != DefaultImageOrientation) {
-        // ImageOrientation expects the origin to be at (0, 0).
-        context.translate(destRect.x(), destRect.y());
-        adjustedDestRect.setLocation(FloatPoint());
-        context.concatCTM(orientation.transformFromDefault(adjustedDestRect.size()));
-        if (orientation.usesWidthAsHeight()) {
-            // The destination rectangle will have it's width and height already reversed for the orientation of
-            // the image, as it was needed for page layout, so we need to reverse it back here.
-            adjustedDestRect.setSize(adjustedDestRect.size().transposedSize());
-        }
-    }
-
-    context.platformContext()->drawSurfaceToContext(image.get(), adjustedDestRect, adjustedSrcRect, context);
-    context.restore();
-}
-
-void clearNativeImageSubimages(const NativeImagePtr&)
+void NativeImage::clearSubimages()
 {
 }
 

@@ -29,36 +29,34 @@
 #include "SVGFilterBuilder.h"
 #include "SVGFilterElement.h"
 #include "SVGUnitTypes.h"
+#include <wtf/IsoMalloc.h>
 #include <wtf/RefPtr.h>
 
 namespace WebCore {
 
 struct FilterData {
-    WTF_MAKE_FAST_ALLOCATED;
+    WTF_MAKE_ISO_ALLOCATED(FilterData);
     WTF_MAKE_NONCOPYABLE(FilterData);
 public:
     enum FilterDataState { PaintingSource, Applying, Built, CycleDetected, MarkedForRemoval };
 
-    FilterData()
-        : savedContext(0)
-        , state(PaintingSource)
-    {
-    }
+    FilterData() = default;
 
     RefPtr<SVGFilter> filter;
     std::unique_ptr<SVGFilterBuilder> builder;
-    std::unique_ptr<ImageBuffer> sourceGraphicBuffer;
-    GraphicsContext* savedContext;
+    RefPtr<ImageBuffer> sourceGraphicBuffer;
+    GraphicsContext* savedContext { nullptr };
     AffineTransform shearFreeAbsoluteTransform;
     FloatRect boundaries;
     FloatRect drawingRegion;
     FloatSize scale;
-    FilterDataState state;
+    FilterDataState state { PaintingSource };
 };
 
 class GraphicsContext;
 
 class RenderSVGResourceFilter final : public RenderSVGResourceContainer {
+    WTF_MAKE_ISO_ALLOCATED(RenderSVGResourceFilter);
 public:
     RenderSVGResourceFilter(SVGFilterElement&, RenderStyle&&);
     virtual ~RenderSVGResourceFilter();
@@ -89,8 +87,10 @@ private:
     const char* renderName() const override { return "RenderSVGResourceFilter"; }
     bool isSVGResourceFilter() const override { return true; }
 
-    HashMap<RenderObject*, std::unique_ptr<FilterData>> m_filter;
+    HashMap<RenderObject*, std::unique_ptr<FilterData>> m_rendererFilterDataMap;
 };
+
+WTF::TextStream& operator<<(WTF::TextStream&, FilterData::FilterDataState);
 
 } // namespace WebCore
 

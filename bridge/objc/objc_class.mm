@@ -23,12 +23,13 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "objc_class.h"
+#import "config.h"
+#import "objc_class.h"
 
-#include "objc_instance.h"
-#include "WebScriptObject.h"
-#include "WebScriptObjectProtocol.h"
+#import "WebScriptObject.h"
+#import "WebScriptObjectProtocol.h"
+#import "objc_instance.h"
+#import <JavaScriptCore/JSGlobalObjectInlines.h>
 
 namespace JSC {
 namespace Bindings {
@@ -50,10 +51,10 @@ ObjcClass* ObjcClass::classForIsA(ClassStructPtr isa)
 {
     _createClassesByIsAIfNecessary();
 
-    ObjcClass* aClass = (ObjcClass*)CFDictionaryGetValue(classesByIsA, isa);
+    auto aClass = reinterpret_cast<ObjcClass*>(const_cast<void*>(CFDictionaryGetValue(classesByIsA, (__bridge CFTypeRef)isa)));
     if (!aClass) {
         aClass = new ObjcClass(isa);
-        CFDictionaryAddValue(classesByIsA, isa, aClass);
+        CFDictionaryAddValue(classesByIsA, (__bridge CFTypeRef)isa, aClass);
     }
 
     return aClass;
@@ -133,8 +134,8 @@ Method* ObjcClass::methodNamed(PropertyName propertyName, Instance*) const
             if ([thisClass respondsToSelector:@selector(webScriptNameForSelector:)])
                 mappedName = [thisClass webScriptNameForSelector:objcMethodSelector];
 
-            if ((mappedName && [mappedName isEqual:(NSString*)methodName.get()]) || strcmp(objcMethodSelectorName, buffer.data()) == 0) {
-                auto method = std::make_unique<ObjcMethod>(thisClass, objcMethodSelector);
+            if ((mappedName && [mappedName isEqual:(__bridge NSString*)methodName.get()]) || !strcmp(objcMethodSelectorName, buffer.data())) {
+                auto method = makeUnique<ObjcMethod>(thisClass, objcMethodSelector);
                 methodPtr = method.get();
                 m_methodCache.add(name.impl(), WTFMove(method));
                 break;
@@ -162,11 +163,10 @@ Field* ObjcClass::fieldNamed(PropertyName propertyName, Instance* instance) cons
     CString jsName = name.ascii();
     RetainPtr<CFStringRef> fieldName = adoptCF(CFStringCreateWithCString(NULL, jsName.data(), kCFStringEncodingASCII));
     id targetObject = (static_cast<ObjcInstance*>(instance))->getObject();
-#if PLATFORM(IOS)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wundeclared-selector"
+#if PLATFORM(IOS_FAMILY)
+    IGNORE_WARNINGS_BEGIN("undeclared-selector")
     id attributes = [targetObject respondsToSelector:@selector(attributeKeys)] ? [targetObject performSelector:@selector(attributeKeys)] : nil;
-#pragma clang diagnostic pop
+    IGNORE_WARNINGS_END
 #else
     id attributes = [targetObject attributeKeys];
 #endif
@@ -189,8 +189,8 @@ Field* ObjcClass::fieldNamed(PropertyName propertyName, Instance* instance) cons
             if ([thisClass respondsToSelector:@selector(webScriptNameForKey:)])
                 mappedName = [thisClass webScriptNameForKey:UTF8KeyName];
 
-            if ((mappedName && [mappedName isEqual:(NSString*)fieldName.get()]) || [keyName isEqual:(NSString*)fieldName.get()]) {
-                auto newField = std::make_unique<ObjcField>((CFStringRef)keyName);
+            if ((mappedName && [mappedName isEqual:(__bridge NSString *)fieldName.get()]) || [keyName isEqual:(__bridge NSString *)fieldName.get()]) {
+                auto newField = makeUnique<ObjcField>((__bridge CFStringRef)keyName);
                 field = newField.get();
                 m_fieldCache.add(name.impl(), WTFMove(newField));
                 break;
@@ -220,8 +220,8 @@ Field* ObjcClass::fieldNamed(PropertyName propertyName, Instance* instance) cons
                 if ([thisClass respondsToSelector:@selector(webScriptNameForKey:)])
                     mappedName = [thisClass webScriptNameForKey:objcIvarName];
 
-                if ((mappedName && [mappedName isEqual:(NSString*)fieldName.get()]) || strcmp(objcIvarName, jsName.data()) == 0) {
-                    auto newField = std::make_unique<ObjcField>(objcIVar);
+                if ((mappedName && [mappedName isEqual:(__bridge NSString *)fieldName.get()]) || !strcmp(objcIvarName, jsName.data())) {
+                    auto newField = makeUnique<ObjcField>(objcIVar);
                     field = newField.get();
                     m_fieldCache.add(name.impl(), WTFMove(newField));
                     break;
@@ -236,7 +236,7 @@ Field* ObjcClass::fieldNamed(PropertyName propertyName, Instance* instance) cons
     return field;
 }
 
-JSValue ObjcClass::fallbackObject(ExecState* exec, Instance* instance, PropertyName propertyName)
+JSValue ObjcClass::fallbackObject(JSGlobalObject* lexicalGlobalObject, Instance* instance, PropertyName propertyName)
 {
     ObjcInstance* objcInstance = static_cast<ObjcInstance*>(instance);
     id targetObject = objcInstance->getObject();
@@ -247,7 +247,7 @@ JSValue ObjcClass::fallbackObject(ExecState* exec, Instance* instance, PropertyN
     if (!propertyName.publicName())
         return jsUndefined();
 
-    return ObjcFallbackObjectImp::create(exec, exec->lexicalGlobalObject(), objcInstance, propertyName.publicName());
+    return ObjcFallbackObjectImp::create(lexicalGlobalObject, lexicalGlobalObject, objcInstance, propertyName.publicName());
 }
 
 }

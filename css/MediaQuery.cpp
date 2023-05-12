@@ -30,6 +30,7 @@
 #include "MediaQuery.h"
 
 #include <wtf/text/StringBuilder.h>
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -38,7 +39,7 @@ String MediaQuery::serialize() const
 {
     if (m_ignored) {
         // If query is invalid, serialized text should turn into "not all".
-        return ASCIILiteral("not all");
+        return "not all"_s;
     }
 
     bool shouldOmitMediaType = false;
@@ -69,27 +70,10 @@ String MediaQuery::serialize() const
 }
 
 MediaQuery::MediaQuery(Restrictor restrictor, const String& mediaType, Vector<MediaQueryExpression>&& expressions)
-    : m_restrictor(restrictor)
-    , m_mediaType(mediaType.convertToASCIILowercase())
+    : m_mediaType(mediaType.convertToASCIILowercase())
     , m_expressions(WTFMove(expressions))
+    , m_restrictor(restrictor)
 {
-    std::sort(m_expressions.begin(), m_expressions.end(), [](auto& a, auto& b) {
-        return codePointCompare(a.serialize(), b.serialize()) < 0;
-    });
-
-    // Remove all duplicated expressions.
-    String key;
-    for (int i = m_expressions.size() - 1; i >= 0; --i) {
-
-        // If any expression is invalid the media query must be ignored.
-        if (!m_ignored)
-            m_ignored = !m_expressions[i].isValid();
-
-        if (m_expressions[i].serialize() == key)
-            m_expressions.remove(i);
-        else
-            key = m_expressions[i].serialize();
-    }
 }
 
 // http://dev.w3.org/csswg/cssom/#compare-media-queries
@@ -104,6 +88,12 @@ const String& MediaQuery::cssText() const
     if (m_serializationCache.isNull())
         m_serializationCache = serialize();
     return m_serializationCache;
+}
+
+TextStream& operator<<(TextStream& ts, const MediaQuery& query)
+{
+    ts << query.cssText();
+    return ts;
 }
 
 } //namespace

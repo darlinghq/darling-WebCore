@@ -25,8 +25,11 @@
 
 #include "SVGNames.h"
 #include "SVGTransformable.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(SVGAnimateTransformElement);
 
 inline SVGAnimateTransformElement::SVGAnimateTransformElement(const QualifiedName& tagName, Document& document)
     : SVGAnimateElementBase(tagName, document)
@@ -40,28 +43,32 @@ Ref<SVGAnimateTransformElement> SVGAnimateTransformElement::create(const Qualifi
     return adoptRef(*new SVGAnimateTransformElement(tagName, document));
 }
 
-bool SVGAnimateTransformElement::hasValidAttributeType()
+bool SVGAnimateTransformElement::hasValidAttributeType() const
 {
-    SVGElement* targetElement = this->targetElement();
-    if (!targetElement)
+    if (!this->targetElement())
         return false;
 
     if (attributeType() == AttributeType::CSS)
         return false;
 
-    return m_animatedPropertyType == AnimatedTransformList;
+    return SVGAnimateElementBase::hasValidAttributeType();
 }
 
-void SVGAnimateTransformElement::parseAttribute(const QualifiedName& name, const AtomicString& value)
+void SVGAnimateTransformElement::parseAttribute(const QualifiedName& name, const AtomString& value)
 {
     if (name == SVGNames::typeAttr) {
-        m_type = SVGTransformable::parseTransformType(value);
+        m_type = SVGTransformable::parseTransformType(value).valueOr(SVGTransformValue::SVG_TRANSFORM_UNKNOWN);
         if (m_type == SVGTransformValue::SVG_TRANSFORM_MATRIX)
             m_type = SVGTransformValue::SVG_TRANSFORM_UNKNOWN;
         return;
     }
 
     SVGAnimateElementBase::parseAttribute(name, value);
+}
+
+String SVGAnimateTransformElement::animateRangeString(const String& string) const
+{
+    return SVGTransformValue::prefixForTransfromType(m_type) + string + ')';
 }
 
 }

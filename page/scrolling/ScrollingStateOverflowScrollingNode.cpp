@@ -26,10 +26,10 @@
 #include "config.h"
 #include "ScrollingStateOverflowScrollingNode.h"
 
-#if ENABLE(ASYNC_SCROLLING) || USE(COORDINATED_GRAPHICS)
+#if ENABLE(ASYNC_SCROLLING)
 
 #include "ScrollingStateTree.h"
-#include "TextStream.h"
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -39,7 +39,7 @@ Ref<ScrollingStateOverflowScrollingNode> ScrollingStateOverflowScrollingNode::cr
 }
 
 ScrollingStateOverflowScrollingNode::ScrollingStateOverflowScrollingNode(ScrollingStateTree& stateTree, ScrollingNodeID nodeID)
-    : ScrollingStateScrollingNode(stateTree, OverflowScrollingNode, nodeID)
+    : ScrollingStateScrollingNode(stateTree, ScrollingNodeType::Overflow, nodeID)
 {
 }
 
@@ -48,15 +48,13 @@ ScrollingStateOverflowScrollingNode::ScrollingStateOverflowScrollingNode(const S
 {
 }
 
-ScrollingStateOverflowScrollingNode::~ScrollingStateOverflowScrollingNode()
-{
-}
+ScrollingStateOverflowScrollingNode::~ScrollingStateOverflowScrollingNode() = default;
 
 Ref<ScrollingStateNode> ScrollingStateOverflowScrollingNode::clone(ScrollingStateTree& adoptiveTree)
 {
     return adoptRef(*new ScrollingStateOverflowScrollingNode(*this, adoptiveTree));
 }
-    
+
 void ScrollingStateOverflowScrollingNode::dumpProperties(TextStream& ts, ScrollingStateTreeAsTextBehavior behavior) const
 {
     ts << "Overflow scrolling node";
@@ -66,4 +64,4 @@ void ScrollingStateOverflowScrollingNode::dumpProperties(TextStream& ts, Scrolli
 
 } // namespace WebCore
 
-#endif // ENABLE(ASYNC_SCROLLING) || USE(COORDINATED_GRAPHICS)
+#endif // ENABLE(ASYNC_SCROLLING)

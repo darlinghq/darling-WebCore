@@ -38,9 +38,11 @@ struct ApplePayPaymentContact {
     String emailAddress;
     String givenName;
     String familyName;
+    String localizedName;
     String phoneticGivenName;
     String phoneticFamilyName;
-    std::optional<Vector<String>> addressLines;
+    String localizedPhoneticName;
+    Optional<Vector<String>> addressLines;
     String subLocality;
     String locality;
     String postalCode;

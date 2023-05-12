@@ -23,8 +23,8 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "RemoteCommandListenerMac.h"
+#import "config.h"
+#import "RemoteCommandListenerMac.h"
 
 #if PLATFORM(MAC)
 
@@ -37,12 +37,11 @@ namespace WebCore {
 
 std::unique_ptr<RemoteCommandListener> RemoteCommandListener::create(RemoteCommandListenerClient& client)
 {
-    return std::make_unique<RemoteCommandListenerMac>(client);
+    return makeUnique<RemoteCommandListenerMac>(client);
 }
 
 void RemoteCommandListenerMac::updateSupportedCommands()
 {
-#if USE(MEDIAREMOTE)
     if (!isMediaRemoteFrameworkAvailable())
         return;
 
@@ -72,19 +71,17 @@ void RemoteCommandListenerMac::updateSupportedCommands()
     CFArrayAppendValue(commandInfoArray.get(), seekCommandInfo.get());
 
     MRMediaRemoteSetSupportedCommands(commandInfoArray.get(), MRMediaRemoteGetLocalOrigin(), nullptr, nullptr);
-#endif // USE(MEDIAREMOTE)
 }
 
 RemoteCommandListenerMac::RemoteCommandListenerMac(RemoteCommandListenerClient& client)
     : RemoteCommandListener(client)
 {
-#if USE(MEDIAREMOTE)
     if (!isMediaRemoteFrameworkAvailable())
         return;
 
     updateSupportedCommands();
 
-    auto weakThis = createWeakPtr();
+    auto weakThis = makeWeakPtr(*this);
     m_commandHandler = MRMediaRemoteAddAsyncCommandHandlerBlock(^(MRMediaRemoteCommand command, CFDictionaryRef options, void(^completion)(CFArrayRef)) {
 
         LOG(Media, "RemoteCommandListenerMac::RemoteCommandListenerMac - received command %u", command);
@@ -137,23 +134,19 @@ RemoteCommandListenerMac::RemoteCommandListenerMac(RemoteCommandListenerClient& 
         default:
             LOG(Media, "RemoteCommandListenerMac::RemoteCommandListenerMac - command %u not supported!", command);
             status = MRMediaRemoteCommandHandlerStatusCommandFailed;
-            return;
         };
 
-        if (!weakThis)
-            return;
-        weakThis->m_client.didReceiveRemoteControlCommand(platformCommand, &argument);
-        completion(static_cast<CFArrayRef>(@[@(status)]));
+        if (weakThis && status != MRMediaRemoteCommandHandlerStatusCommandFailed)
+            weakThis->m_client.didReceiveRemoteControlCommand(platformCommand, &argument);
+
+        completion((__bridge CFArrayRef)@[@(status)]);
     });
-#endif // USE(MEDIAREMOTE)
 }
 
 RemoteCommandListenerMac::~RemoteCommandListenerMac()
 {
-#if USE(MEDIAREMOTE)
     if (m_commandHandler)
         MRMediaRemoteRemoveCommandHandlerBlock(m_commandHandler);
-#endif
 }
 
 }

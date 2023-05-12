@@ -61,13 +61,13 @@ public:
         return adoptRef(*new DictationMarkerSupplier(alternatives));
     }
 
-    void addMarkersToTextNode(Text* textNode, unsigned offsetOfInsertion, const String& textToBeInserted) override
+    void addMarkersToTextNode(Text& textNode, unsigned offsetOfInsertion, const String& textToBeInserted) override
     {
-        auto& markerController = textNode->document().markers();
+        auto& markerController = textNode.document().markers();
         for (auto& alternative : m_alternatives) {
-            DocumentMarker::DictationData data { alternative.dictationContext, textToBeInserted.substring(alternative.rangeStart, alternative.rangeLength) };
-            markerController.addMarkerToNode(textNode, alternative.rangeStart + offsetOfInsertion, alternative.rangeLength, DocumentMarker::DictationAlternatives, WTFMove(data));
-            markerController.addMarkerToNode(textNode, alternative.rangeStart + offsetOfInsertion, alternative.rangeLength, DocumentMarker::SpellCheckingExemption);
+            DocumentMarker::DictationData data { alternative.context, textToBeInserted.substring(alternative.range.location, alternative.range.length) };
+            markerController.addMarker(textNode, alternative.range.location + offsetOfInsertion, alternative.range.length, DocumentMarker::DictationAlternatives, WTFMove(data));
+            markerController.addMarker(textNode, alternative.range.location + offsetOfInsertion, alternative.range.length, DocumentMarker::SpellCheckingExemption);
         }
     }
 
@@ -117,7 +117,7 @@ void DictationCommand::insertTextRunWithoutNewlines(size_t lineStart, size_t lin
 {
     Vector<DictationAlternative> alternativesInLine;
     collectDictationAlternativesInRange(lineStart, lineLength, alternativesInLine);
-    auto command = InsertTextCommand::createWithMarkerSupplier(document(), m_textToInsert.substring(lineStart, lineLength), DictationMarkerSupplier::create(alternativesInLine), EditActionDictation);
+    auto command = InsertTextCommand::createWithMarkerSupplier(document(), m_textToInsert.substring(lineStart, lineLength), DictationMarkerSupplier::create(alternativesInLine), EditAction::Dictation);
     applyCommandToComposite(WTFMove(command), endingSelection());
 }
 
@@ -126,14 +126,14 @@ void DictationCommand::insertParagraphSeparator()
     if (!canAppendNewLineFeedToSelection(endingSelection()))
         return;
 
-    applyCommandToComposite(InsertParagraphSeparatorCommand::create(document(), false, false, EditActionDictation));
+    applyCommandToComposite(InsertParagraphSeparatorCommand::create(document(), false, false, EditAction::Dictation));
 }
 
 void DictationCommand::collectDictationAlternativesInRange(size_t rangeStart, size_t rangeLength, Vector<DictationAlternative>& alternatives)
 {
     for (auto& alternative : m_alternatives) {
-        if (alternative.rangeStart >= rangeStart && (alternative.rangeStart + alternative.rangeLength) <= rangeStart + rangeLength)
-            alternatives.append(DictationAlternative(alternative.rangeStart - rangeStart, alternative.rangeLength, alternative.dictationContext));
+        if (alternative.range.location >= rangeStart && (alternative.range.location + alternative.range.length) <= rangeStart + rangeLength)
+            alternatives.append({ { alternative.range.location - rangeStart, alternative.range.length }, alternative.context });
     }
 
 }

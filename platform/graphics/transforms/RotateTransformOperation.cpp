@@ -23,9 +23,9 @@
 #include "RotateTransformOperation.h"
 
 #include "AnimationUtilities.h"
-#include "TextStream.h"
 #include <algorithm>
 #include <wtf/MathExtras.h>
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -43,7 +43,7 @@ Ref<TransformOperation> RotateTransformOperation::blend(const TransformOperation
         return *this;
     
     if (blendToIdentity)
-        return RotateTransformOperation::create(m_x, m_y, m_z, m_angle - m_angle * progress, m_type);
+        return RotateTransformOperation::create(m_x, m_y, m_z, m_angle - m_angle * progress, type());
     
     const RotateTransformOperation* fromOp = downcast<RotateTransformOperation>(from);
     
@@ -55,7 +55,7 @@ Ref<TransformOperation> RotateTransformOperation::blend(const TransformOperation
         return RotateTransformOperation::create(fromOp ? fromOp->m_x : m_x, 
                                                 fromOp ? fromOp->m_y : m_y, 
                                                 fromOp ? fromOp->m_z : m_z, 
-                                                WebCore::blend(fromAngle, m_angle, progress), m_type);
+                                                WebCore::blend(fromAngle, m_angle, progress), type());
     }
 
     const RotateTransformOperation* toOp = this;
@@ -84,7 +84,7 @@ Ref<TransformOperation> RotateTransformOperation::blend(const TransformOperation
     double x = -decomp.quaternionX;
     double y = -decomp.quaternionY;
     double z = -decomp.quaternionZ;
-    double length = sqrt(x * x + y * y + z * z);
+    double length = std::hypot(x, y, z);
     double angle = 0;
     
     if (length > 0.00001) {

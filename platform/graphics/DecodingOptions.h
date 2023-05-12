@@ -26,25 +26,26 @@
 #pragma once
 
 #include "IntSize.h"
+#include <wtf/EnumTraits.h>
 #include <wtf/Optional.h>
 #include <wtf/Variant.h>
 
 namespace WebCore {
 
-enum class DecodingMode {
-    None,
+enum class DecodingMode : uint8_t {
+    Auto,
     Synchronous,
     Asynchronous
 };
 
 class DecodingOptions {
 public:
-    DecodingOptions(DecodingMode decodingMode = DecodingMode::None)
+    explicit DecodingOptions(DecodingMode decodingMode = DecodingMode::Auto)
         : m_decodingModeOrSize(decodingMode)
     {
     }
 
-    DecodingOptions(const std::optional<IntSize>& sizeForDrawing)
+    DecodingOptions(const Optional<IntSize>& sizeForDrawing)
         : m_decodingModeOrSize(sizeForDrawing)
     {
     }
@@ -54,9 +55,9 @@ public:
         return m_decodingModeOrSize == other.m_decodingModeOrSize;
     }
 
-    bool isNone() const
+    bool isAuto() const
     {
-        return hasDecodingMode() && WTF::get<DecodingMode>(m_decodingModeOrSize) == DecodingMode::None;
+        return hasDecodingMode() && WTF::get<DecodingMode>(m_decodingModeOrSize) == DecodingMode::Auto;
     }
     
     bool isSynchronous() const
@@ -71,7 +72,7 @@ public:
 
     bool isAsynchronousCompatibleWith(const DecodingOptions& decodingOptions) const
     {
-        if (isNone() || decodingOptions.isNone())
+        if (isAuto() || decodingOptions.isAuto())
             return false;
 
         // Comparing DecodingOptions with isAsynchronous() should not happen.
@@ -107,10 +108,10 @@ public:
         return hasSize() && sizeForDrawing();
     }
 
-    std::optional<IntSize> sizeForDrawing() const
+    Optional<IntSize> sizeForDrawing() const
     {
         ASSERT(hasSize());
-        return WTF::get<std::optional<IntSize>>(m_decodingModeOrSize);
+        return WTF::get<Optional<IntSize>>(m_decodingModeOrSize);
     }
 
     static int maxDimension(const IntSize& size)
@@ -132,16 +133,29 @@ private:
 
     bool hasSize() const
     {
-        return has<std::optional<IntSize>>();
+        return has<Optional<IntSize>>();
     }
 
     // Four states of the decoding:
     // - Synchronous: DecodingMode::Synchronous
     // - Asynchronous + anySize: DecodingMode::Asynchronous
-    // - Asynchronous + intrinsicSize: an empty std::optional<IntSize>>
-    // - Asynchronous + sizeForDrawing: a none empty std::optional<IntSize>>
-    using DecodingModeOrSize = Variant<DecodingMode, std::optional<IntSize>>;
+    // - Asynchronous + intrinsicSize: an empty Optional<IntSize>>
+    // - Asynchronous + sizeForDrawing: a none empty Optional<IntSize>>
+    using DecodingModeOrSize = Variant<DecodingMode, Optional<IntSize>>;
     DecodingModeOrSize m_decodingModeOrSize;
 };
 
-}
+} // namespace WebCore
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::DecodingMode> {
+    using values = EnumValues<
+    WebCore::DecodingMode,
+    WebCore::DecodingMode::Auto,
+    WebCore::DecodingMode::Synchronous,
+    WebCore::DecodingMode::Asynchronous
+    >;
+};
+
+} // namespace WTF

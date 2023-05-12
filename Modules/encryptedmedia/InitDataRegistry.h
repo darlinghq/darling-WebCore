@@ -29,14 +29,16 @@
 
 #include <wtf/Function.h>
 #include <wtf/HashMap.h>
+#include <wtf/Optional.h>
 #include <wtf/Ref.h>
 #include <wtf/RefPtr.h>
 #include <wtf/Vector.h>
-#include <wtf/text/AtomicString.h>
-#include <wtf/text/AtomicStringHash.h>
+#include <wtf/text/AtomString.h>
+#include <wtf/text/AtomStringHash.h>
 
 namespace WebCore {
 
+class ISOProtectionSystemSpecificHeaderBox;
 class SharedBuffer;
 
 class InitDataRegistry {
@@ -44,23 +46,31 @@ public:
     WEBCORE_EXPORT static InitDataRegistry& shared();
     friend class NeverDestroyed<InitDataRegistry>;
 
-    RefPtr<SharedBuffer> sanitizeInitData(const AtomicString& initDataType, const SharedBuffer&);
-    WEBCORE_EXPORT Vector<Ref<SharedBuffer>> extractKeyIDs(const AtomicString& initDataType, const SharedBuffer&);
+    RefPtr<SharedBuffer> sanitizeInitData(const AtomString& initDataType, const SharedBuffer&);
+    WEBCORE_EXPORT Optional<Vector<Ref<SharedBuffer>>> extractKeyIDs(const AtomString& initDataType, const SharedBuffer&);
 
     struct InitDataTypeCallbacks {
         using SanitizeInitDataCallback = Function<RefPtr<SharedBuffer>(const SharedBuffer&)>;
-        using ExtractKeyIDsCallback = Function<Vector<Ref<SharedBuffer>>(const SharedBuffer&)>;
+        using ExtractKeyIDsCallback = Function<Optional<Vector<Ref<SharedBuffer>>>(const SharedBuffer&)>;
 
         SanitizeInitDataCallback sanitizeInitData;
         ExtractKeyIDsCallback extractKeyIDs;
     };
-    void registerInitDataType(const AtomicString& initDataType, InitDataTypeCallbacks&&);
+    void registerInitDataType(const AtomString& initDataType, InitDataTypeCallbacks&&);
+
+    static const AtomString& cencName();
+    static const AtomString& keyidsName();
+    static const AtomString& webmName();
+
+    static Optional<Vector<std::unique_ptr<ISOProtectionSystemSpecificHeaderBox>>> extractPsshBoxesFromCenc(const SharedBuffer&);
+    static Optional<Vector<Ref<SharedBuffer>>> extractKeyIDsCenc(const SharedBuffer&);
+    static RefPtr<SharedBuffer> sanitizeCenc(const SharedBuffer&);
 
 private:
     InitDataRegistry();
     ~InitDataRegistry();
 
-    HashMap<AtomicString, InitDataTypeCallbacks> m_types;
+    HashMap<AtomString, InitDataTypeCallbacks> m_types;
 };
 
 }

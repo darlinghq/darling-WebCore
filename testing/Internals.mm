@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2015-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,39 +23,127 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "Internals.h"
+#import "config.h"
+#import "Internals.h"
 
-#include "DOMURL.h"
-#include "Document.h"
-#include "Editor.h"
-#include "EditorClient.h"
-#include "Frame.h"
-#include <wtf/SoftLinking.h>
+#import "AGXCompilerService.h"
+#import "DOMURL.h"
+#import "DictionaryLookup.h"
+#import "Document.h"
+#import "EventHandler.h"
+#import "HTMLMediaElement.h"
+#import "HitTestResult.h"
+#import "MediaPlayerPrivate.h"
+#import "Range.h"
+#import "SimpleRange.h"
+#import "UTIUtilities.h"
+#import <AVFoundation/AVPlayer.h>
+#import <pal/spi/cocoa/NSAccessibilitySPI.h>
+#import <wtf/cocoa/NSURLExtras.h>
+#import <wtf/spi/darwin/SandboxSPI.h>
 
-#if PLATFORM(IOS)
-SOFT_LINK_FRAMEWORK(UIKit)
-SOFT_LINK(UIKit, UIAccessibilityIsReduceMotionEnabled, BOOL, (void), ())
+#if PLATFORM(IOS_FAMILY)
+#import <pal/ios/UIKitSoftLink.h>
 #endif
 
 namespace WebCore {
 
 String Internals::userVisibleString(const DOMURL& url)
 {
-    return contextDocument()->frame()->editor().client()->userVisibleString(url.href());
+    return WTF::userVisibleString(url.href());
 }
 
-#if PLATFORM(COCOA)
+bool Internals::userPrefersContrast() const
+{
+#if PLATFORM(IOS_FAMILY)
+    return PAL::softLink_UIKit_UIAccessibilityDarkerSystemColorsEnabled();
+#else
+    return [[NSWorkspace sharedWorkspace] accessibilityDisplayShouldIncreaseContrast];
+#endif
+}
+
 bool Internals::userPrefersReducedMotion() const
 {
-#if PLATFORM(IOS)
-    return UIAccessibilityIsReduceMotionEnabled();
-#elif PLATFORM(MAC) && __MAC_OS_X_VERSION_MIN_REQUIRED >= 101200
+#if PLATFORM(IOS_FAMILY)
+    return PAL::softLink_UIKit_UIAccessibilityIsReduceMotionEnabled();
+#else
     return [[NSWorkspace sharedWorkspace] accessibilityDisplayShouldReduceMotion];
+#endif
+}
+
+#if PLATFORM(MAC)
+
+ExceptionOr<RefPtr<Range>> Internals::rangeForDictionaryLookupAtLocation(int x, int y)
+{
+    auto* document = contextDocument();
+    if (!document || !document->frame())
+        return Exception { InvalidAccessError };
+
+    document->updateLayoutIgnorePendingStylesheets();
+
+    constexpr OptionSet<HitTestRequest::RequestType> hitType { HitTestRequest::ReadOnly, HitTestRequest::Active, HitTestRequest::DisallowUserAgentShadowContent, HitTestRequest::AllowChildFrameContent };
+    auto result = document->frame()->mainFrame().eventHandler().hitTestResultAtPoint(IntPoint(x, y), hitType);
+    auto range = DictionaryLookup::rangeAtHitTestResult(result);
+    if (!range)
+        return nullptr;
+
+    return RefPtr<Range> { createLiveRange(std::get<SimpleRange>(*range)) };
+}
+
+#endif
+
+#if ENABLE(VIDEO)
+double Internals::privatePlayerVolume(const HTMLMediaElement& element)
+{
+    auto corePlayer = element.player();
+    if (!corePlayer)
+        return 0;
+    auto player = corePlayer->objCAVFoundationAVPlayer();
+    if (!player)
+        return 0;
+    return [player volume];
+}
+
+bool Internals::privatePlayerMuted(const HTMLMediaElement& element)
+{
+    auto corePlayer = element.player();
+    if (!corePlayer)
+        return false;
+    auto player = corePlayer->objCAVFoundationAVPlayer();
+    if (!player)
+        return false;
+    return [player isMuted];
+}
+#endif
+
+String Internals::encodedPreferenceValue(const String& domain, const String& key)
+{
+    auto userDefaults = adoptNS([[NSUserDefaults alloc] initWithSuiteName:domain]);
+    id value = [userDefaults objectForKey:key];
+    auto data = adoptNS([NSKeyedArchiver archivedDataWithRootObject:value requiringSecureCoding:YES error:nullptr]);
+    return [data base64EncodedStringWithOptions:0];
+}
+
+String Internals::getUTIFromTag(const String& tagClass, const String& tag, const String& conformingToUTI)
+{
+    return UTIFromTag(tagClass, tag, conformingToUTI);
+}
+
+bool Internals::isRemoteUIAppForAccessibility()
+{
+#if PLATFORM(MAC)
+    return [NSAccessibilityRemoteUIElement isRemoteUIApp];
 #else
     return false;
 #endif
 }
-#endif
+
+bool Internals::hasSandboxIOKitOpenAccessToClass(const String& process, const String& ioKitClass)
+{
+    UNUSED_PARAM(process); // TODO: add support for getting PID of other WebKit processes.
+    pid_t pid = getpid();
+
+    return !sandbox_check(pid, "iokit-open", static_cast<enum sandbox_filter_type>(SANDBOX_FILTER_IOKIT_CONNECTION | SANDBOX_CHECK_NO_REPORT), ioKitClass.utf8().data());
+}
 
 }

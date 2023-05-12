@@ -28,27 +28,29 @@
 
 #pragma once
 
-#if ENABLE(FETCH_API)
-
-#include "FetchBodyConsumer.h"
 #include "ThreadableLoader.h"
 #include "ThreadableLoaderClient.h"
+#include <wtf/URL.h>
 
 namespace WebCore {
 
 class Blob;
+class FetchBodyConsumer;
 class FetchLoaderClient;
 class FetchRequest;
 class ScriptExecutionContext;
+class SharedBuffer;
 
 class FetchLoader final : public ThreadableLoaderClient {
 public:
     FetchLoader(FetchLoaderClient&, FetchBodyConsumer*);
+    WEBCORE_EXPORT ~FetchLoader();
 
     RefPtr<SharedBuffer> startStreaming();
 
     void start(ScriptExecutionContext&, const FetchRequest&);
     void start(ScriptExecutionContext&, const Blob&);
+    void startLoadingBlobURL(ScriptExecutionContext&, const URL& blobURL);
     void stop();
 
     bool isStarted() const { return m_isStarted; }
@@ -65,8 +67,7 @@ private:
     RefPtr<ThreadableLoader> m_loader;
     FetchBodyConsumer* m_consumer;
     bool m_isStarted { false };
+    URL m_urlForReading;
 };
 
 } // namespace WebCore
-
-#endif // ENABLE(FETCH_API)

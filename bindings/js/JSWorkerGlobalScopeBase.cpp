@@ -29,20 +29,27 @@
 #include "JSWorkerGlobalScopeBase.h"
 
 #include "DOMWrapperWorld.h"
+#include "EventLoop.h"
 #include "JSDOMGlobalObjectTask.h"
+#include "JSDOMGuardedObject.h"
 #include "JSDedicatedWorkerGlobalScope.h"
-#include "JSDynamicDowncast.h"
+#include "JSMicrotaskCallback.h"
 #include "JSWorkerGlobalScope.h"
-#include "Language.h"
 #include "WorkerGlobalScope.h"
 #include "WorkerThread.h"
-#include <runtime/JSCInlines.h>
-#include <runtime/JSCJSValueInlines.h>
-#include <runtime/Microtask.h>
+#include <JavaScriptCore/JSCInlines.h>
+#include <JavaScriptCore/JSCJSValueInlines.h>
+#include <JavaScriptCore/JSProxy.h>
+#include <JavaScriptCore/Microtask.h>
+#include <wtf/Language.h>
 
-using namespace JSC;
+#if ENABLE(SERVICE_WORKER)
+#include "JSServiceWorkerGlobalScope.h"
+#endif
+
 
 namespace WebCore {
+using namespace JSC;
 
 const ClassInfo JSWorkerGlobalScopeBase::s_info = { "WorkerGlobalScope", &JSDOMGlobalObject::s_info, nullptr, nullptr, CREATE_METHOD_TABLE(JSWorkerGlobalScopeBase) };
 
@@ -50,15 +57,20 @@ const GlobalObjectMethodTable JSWorkerGlobalScopeBase::s_globalObjectMethodTable
     &supportsRichSourceInfo,
     &shouldInterruptScript,
     &javaScriptRuntimeFlags,
-    &queueTaskToEventLoop,
+    &queueMicrotaskToEventLoop,
     &shouldInterruptScriptBeforeTimeout,
     nullptr, // moduleLoaderImportModule
     nullptr, // moduleLoaderResolve
     nullptr, // moduleLoaderFetch
-    nullptr, // moduleLoaderInstantiate
+    nullptr, // moduleLoaderCreateImportMetaProperties
     nullptr, // moduleLoaderEvaluate
-    nullptr, // promiseRejectionTracker
-    &defaultLanguage
+    &promiseRejectionTracker,
+    &reportUncaughtExceptionAtEventLoop,
+    &currentScriptExecutionOwner,
+    &scriptExecutionStatus,
+    &defaultLanguage,
+    nullptr, // compileStreaming
+    nullptr, // instantiateStreaming
 };
 
 JSWorkerGlobalScopeBase::JSWorkerGlobalScopeBase(JSC::VM& vm, JSC::Structure* structure, RefPtr<WorkerGlobalScope>&& impl)
@@ -114,43 +126,81 @@ RuntimeFlags JSWorkerGlobalScopeBase::javaScriptRuntimeFlags(const JSGlobalObjec
     return thisObject->m_wrapped->thread().runtimeFlags();
 }
 
-void JSWorkerGlobalScopeBase::queueTaskToEventLoop(JSGlobalObject& object, Ref<JSC::Microtask>&& task)
+JSC::ScriptExecutionStatus JSWorkerGlobalScopeBase::scriptExecutionStatus(JSC::JSGlobalObject* globalObject, JSC::JSObject* owner)
+{
+    ASSERT_UNUSED(owner, globalObject == owner);
+    return jsCast<JSWorkerGlobalScopeBase*>(globalObject)->scriptExecutionContext()->jscScriptExecutionStatus();
+}
+
+void JSWorkerGlobalScopeBase::queueMicrotaskToEventLoop(JSGlobalObject& object, Ref<JSC::Microtask>&& task)
 {
     JSWorkerGlobalScopeBase& thisObject = static_cast<JSWorkerGlobalScopeBase&>(object);
-    thisObject.scriptExecutionContext()->postTask(JSGlobalObjectTask(thisObject, WTFMove(task)));
+
+    auto callback = JSMicrotaskCallback::create(thisObject, WTFMove(task));
+    auto& context = thisObject.wrapped();
+    context.eventLoop().queueMicrotask([callback = WTFMove(callback)]() mutable {
+        callback->call();
+    });
 }
 
-JSValue toJS(ExecState* exec, JSDOMGlobalObject*, WorkerGlobalScope& workerGlobalScope)
+JSValue toJS(JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject*, WorkerGlobalScope& workerGlobalScope)
 {
-    return toJS(exec, workerGlobalScope);
+    return toJS(lexicalGlobalObject, workerGlobalScope);
 }
 
-JSValue toJS(ExecState*, WorkerGlobalScope& workerGlobalScope)
+JSValue toJS(JSGlobalObject*, WorkerGlobalScope& workerGlobalScope)
 {
-    WorkerScriptController* script = workerGlobalScope.script();
+    auto* script = workerGlobalScope.script();
     if (!script)
         return jsNull();
-    JSWorkerGlobalScope* contextWrapper = script->workerGlobalScopeWrapper();
+    auto* contextWrapper = script->globalScopeWrapper();
     ASSERT(contextWrapper);
-    return contextWrapper->proxy();
+    return &contextWrapper->proxy();
 }
 
 JSDedicatedWorkerGlobalScope* toJSDedicatedWorkerGlobalScope(VM& vm, JSValue value)
 {
     if (!value.isObject())
-        return 0;
+        return nullptr;
     const ClassInfo* classInfo = asObject(value)->classInfo(vm);
     if (classInfo == JSDedicatedWorkerGlobalScope::info())
         return jsCast<JSDedicatedWorkerGlobalScope*>(asObject(value));
     if (classInfo == JSProxy::info())
-        return jsDynamicDowncast<JSDedicatedWorkerGlobalScope*>(vm, jsCast<JSProxy*>(asObject(value))->target());
-    return 0;
+        return jsDynamicCast<JSDedicatedWorkerGlobalScope*>(vm, jsCast<JSProxy*>(asObject(value))->target());
+    return nullptr;
 }
-
 
 JSWorkerGlobalScope* toJSWorkerGlobalScope(VM& vm, JSValue value)
 {
-    return toJSDedicatedWorkerGlobalScope(vm, value);
+    if (!value.isObject())
+        return nullptr;
+    const ClassInfo* classInfo = asObject(value)->classInfo(vm);
+    if (classInfo == JSDedicatedWorkerGlobalScope::info())
+        return jsCast<JSDedicatedWorkerGlobalScope*>(asObject(value));
+
+#if ENABLE(SERVICE_WORKER)
+    if (classInfo == JSServiceWorkerGlobalScope::info())
+        return jsCast<JSServiceWorkerGlobalScope*>(asObject(value));
+#endif
+
+    if (classInfo == JSProxy::info())
+        return jsDynamicCast<JSWorkerGlobalScope*>(vm, jsCast<JSProxy*>(asObject(value))->target());
+
+    return nullptr;
 }
+
+#if ENABLE(SERVICE_WORKER)
+JSServiceWorkerGlobalScope* toJSServiceWorkerGlobalScope(VM& vm, JSValue value)
+{
+    if (!value.isObject())
+        return nullptr;
+    const ClassInfo* classInfo = asObject(value)->classInfo(vm);
+    if (classInfo == JSServiceWorkerGlobalScope::info())
+        return jsCast<JSServiceWorkerGlobalScope*>(asObject(value));
+    if (classInfo == JSProxy::info())
+        return jsDynamicCast<JSServiceWorkerGlobalScope*>(vm, jsCast<JSProxy*>(asObject(value))->target());
+    return nullptr;
+}
+#endif
 
 } // namespace WebCore

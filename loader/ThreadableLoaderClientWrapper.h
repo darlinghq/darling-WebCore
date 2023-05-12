@@ -79,6 +79,12 @@ public:
             m_client->didFinishLoading(identifier);
     }
 
+    void notifyIsDone(bool isDone)
+    {
+        if (m_client)
+            m_client->notifyIsDone(isDone);
+    }
+
     void didFail(const ResourceError& error)
     {
         m_done = true;
@@ -104,7 +110,7 @@ protected:
 
 inline ThreadableLoaderClientWrapper::ThreadableLoaderClientWrapper(ThreadableLoaderClient& client, const String& initiator)
     : m_client(&client)
-    , m_initiator(initiator)
+    , m_initiator(initiator.isolatedCopy())
 {
 }
 

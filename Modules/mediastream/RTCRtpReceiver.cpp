@@ -33,22 +33,75 @@
 
 #if ENABLE(WEB_RTC)
 
-#include "RTCRtpParameters.h"
+#include "JSDOMPromiseDeferred.h"
+#include "PeerConnectionBackend.h"
+#include "RTCRtpCapabilities.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
-RTCRtpReceiver::RTCRtpReceiver(Ref<MediaStreamTrack>&& track, Backend* backend)
-    : RTCRtpSenderReceiverBase(WTFMove(track))
-    , m_backend(backend)
+WTF_MAKE_ISO_ALLOCATED_IMPL(RTCRtpReceiver);
+
+RTCRtpReceiver::RTCRtpReceiver(PeerConnectionBackend& connection, Ref<MediaStreamTrack>&& track, std::unique_ptr<RTCRtpReceiverBackend>&& backend)
+    : m_track(WTFMove(track))
+    , m_backend(WTFMove(backend))
+    , m_connection(makeWeakPtr(&connection))
 {
+}
+
+RTCRtpReceiver::~RTCRtpReceiver()
+{
+    if (m_transform)
+        m_transform->detachFromReceiver(*this);
 }
 
 void RTCRtpReceiver::stop()
 {
-    m_backend = nullptr;
+    if (!m_backend)
+        return;
 
-    if (m_track)
-        m_track->stopTrack(MediaStreamTrack::StopMode::PostEvent);
+    if (m_transform)
+        m_transform->detachFromReceiver(*this);
+
+    m_backend = nullptr;
+    m_track->stopTrack(MediaStreamTrack::StopMode::PostEvent);
+}
+
+void RTCRtpReceiver::getStats(Ref<DeferredPromise>&& promise)
+{
+    if (!m_connection) {
+        promise->reject(InvalidStateError);
+        return;
+    }
+    m_connection->getStats(*this, WTFMove(promise));
+}
+
+Optional<RTCRtpCapabilities> RTCRtpReceiver::getCapabilities(ScriptExecutionContext& context, const String& kind)
+{
+    return PeerConnectionBackend::receiverCapabilities(context, kind);
+}
+
+ExceptionOr<void> RTCRtpReceiver::setTransform(Optional<RTCRtpTransform>&& transform)
+{
+    if (transform && m_transform && *transform == *m_transform)
+        return { };
+    if (transform && transform->isAttached())
+        return Exception { InvalidStateError, "transform is already in use"_s };
+
+    if (m_transform)
+        m_transform->detachFromReceiver(*this);
+    m_transform = WTFMove(transform);
+    if (m_transform)
+        m_transform->attachToReceiver(*this);
+
+    return { };
+}
+
+Optional<RTCRtpTransform::Internal> RTCRtpReceiver::transform()
+{
+    if (!m_transform)
+        return { };
+    return m_transform->internalTransform();
 }
 
 } // namespace WebCore

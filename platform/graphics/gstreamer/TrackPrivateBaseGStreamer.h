@@ -23,13 +23,13 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef TrackPrivateBaseGStreamer_h
-#define TrackPrivateBaseGStreamer_h
+#pragma once
 
-#if ENABLE(VIDEO) && USE(GSTREAMER) && ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO) && USE(GSTREAMER)
 
-#include "GRefPtrGStreamer.h"
+#include "GStreamerCommon.h"
 #include "MainThreadNotifier.h"
+#include <gst/gst.h>
 #include <wtf/Lock.h>
 #include <wtf/text/WTFString.h>
 
@@ -41,7 +41,15 @@ class TrackPrivateBaseGStreamer {
 public:
     virtual ~TrackPrivateBaseGStreamer();
 
+    enum TrackType {
+        Audio,
+        Video,
+        Text,
+        Unknown
+    };
+
     GstPad* pad() const { return m_pad.get(); }
+    void setPad(GRefPtr<GstPad>&& pad) { m_pad = WTFMove(pad); }
 
     virtual void disconnect();
 
@@ -49,14 +57,18 @@ public:
 
     void setIndex(int index) { m_index =  index; }
 
+    GstStream* stream()
+    {
+        return m_stream.get();
+    }
+
 protected:
     TrackPrivateBaseGStreamer(TrackPrivateBase* owner, gint index, GRefPtr<GstPad>);
+    TrackPrivateBaseGStreamer(TrackPrivateBase* owner, gint index, GRefPtr<GstStream>);
 
-    void notifyTrackOfActiveChanged();
     void notifyTrackOfTagsChanged();
 
     enum MainThreadNotification {
-        ActiveChanged = 1 << 0,
         TagsChanged = 1 << 1,
         NewSample = 1 << 2,
         StreamChanged = 1 << 3
@@ -64,12 +76,13 @@ protected:
 
     Ref<MainThreadNotifier<MainThreadNotification>> m_notifier;
     gint m_index;
-    AtomicString m_label;
-    AtomicString m_language;
+    AtomString m_label;
+    AtomString m_language;
     GRefPtr<GstPad> m_pad;
+    GRefPtr<GstStream> m_stream;
 
 private:
-    bool getLanguageCode(GstTagList* tags, AtomicString& value);
+    bool getLanguageCode(GstTagList* tags, AtomString& value);
 
     template<class StringType>
     bool getTag(GstTagList* tags, const gchar* tagName, StringType& value);
@@ -86,6 +99,4 @@ private:
 
 } // namespace WebCore
 
-#endif // ENABLE(VIDEO) && USE(GSTREAMER) && ENABLE(VIDEO_TRACK)
-
-#endif // TrackPrivateBaseGStreamer_h
+#endif // ENABLE(VIDEO) && USE(GSTREAMER)

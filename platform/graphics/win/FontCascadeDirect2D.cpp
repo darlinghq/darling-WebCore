@@ -36,10 +36,10 @@
 #include "GraphicsContext.h"
 #include "GraphicsContextPlatformPrivateDirect2D.h"
 #include "IntRect.h"
-#include "UniscribeController.h"
+#include "PlatformContextDirect2D.h"
 #include "WebCoreTextRenderer.h"
 #include <d2d1.h>
-#include <dwrite.h>
+#include <dwrite_3.h>
 #include <wtf/MathExtras.h>
 
 namespace WebCore {
@@ -47,23 +47,23 @@ namespace WebCore {
 void FontCascade::drawGlyphs(GraphicsContext& graphicsContext, const Font& font, const GlyphBuffer& glyphBuffer,
     unsigned from, unsigned numGlyphs, const FloatPoint& point, FontSmoothingMode smoothingMode)
 {
-    auto context = graphicsContext.platformContext();
+    auto context = graphicsContext.platformContext()->renderTarget();
     bool shouldUseFontSmoothing = WebCoreShouldUseFontSmoothing();
 
     switch (smoothingMode) {
-    case Antialiased:
+    case FontSmoothingMode::Antialiased:
         graphicsContext.setShouldAntialias(true);
         shouldUseFontSmoothing = false;
         break;
-    case SubpixelAntialiased:
+    case FontSmoothingMode::SubpixelAntialiased:
         graphicsContext.setShouldAntialias(true);
         shouldUseFontSmoothing = true;
         break;
-    case NoSmoothing:
+    case FontSmoothingMode::NoSmoothing:
         graphicsContext.setShouldAntialias(false);
         shouldUseFontSmoothing = false;
         break;
-    case AutoSmoothing:
+    case FontSmoothingMode::AutoSmoothing:
         // For the AutoSmooth case, don't do anything! Keep the default settings.
         break;
     default:
@@ -82,9 +82,6 @@ void FontCascade::drawGlyphs(GraphicsContext& graphicsContext, const Font& font,
         auto skewMatrix = D2D1::Matrix3x2F::Skew(skew, 0);
         context->SetTransform(matrix * skewMatrix);
     }
-
-    // Uniscribe gives us offsets to help refine the positioning of combining glyphs.
-    FloatSize translation = glyphBuffer.offsetAt(from);
 
     RELEASE_ASSERT(platformData.dwFont());
     RELEASE_ASSERT(platformData.dwFontFace());
@@ -111,7 +108,7 @@ void FontCascade::drawGlyphs(GraphicsContext& graphicsContext, const Font& font,
     glyphRun.glyphIndices = glyphBuffer.glyphs(from);
     glyphRun.glyphAdvances = horizontalAdvances.data();
     glyphRun.glyphOffsets = nullptr;
-    glyphRun.isSideways = platformData.orientation() == Vertical;
+    glyphRun.isSideways = platformData.orientation() == FontOrientation::Vertical;
     glyphRun.bidiLevel = 0;
 
     FloatSize shadowOffset;
@@ -119,15 +116,15 @@ void FontCascade::drawGlyphs(GraphicsContext& graphicsContext, const Font& font,
     Color shadowColor;
     graphicsContext.getShadow(shadowOffset, shadowBlur, shadowColor);
 
-    bool hasSimpleShadow = graphicsContext.textDrawingMode() == TextModeFill && shadowColor.isValid() && !shadowBlur && (!graphicsContext.shadowsIgnoreTransforms() || graphicsContext.getCTM().isIdentityOrTranslationOrFlipped());
+    bool hasSimpleShadow = graphicsContext.textDrawingMode() == TextDrawingMode::Fill && shadowColor.isValid() && !shadowBlur && (!graphicsContext.shadowsIgnoreTransforms() || graphicsContext.getCTM().isIdentityOrTranslationOrFlipped());
     if (hasSimpleShadow) {
         // Paint simple shadows ourselves instead of relying on CG shadows, to avoid losing subpixel antialiasing.
         graphicsContext.clearShadow();
         Color fillColor = graphicsContext.fillColor();
-        Color shadowFillColor(shadowColor.red(), shadowColor.green(), shadowColor.blue(), shadowColor.alpha() * fillColor.alpha() / 255);
-        float shadowTextX = point.x() + translation.width() + shadowOffset.width();
+        Color shadowFillColor = shadowColor.colorWithAlphaMultipliedBy(fillColor.alphaAsFloat());
+        float shadowTextX = point.x() + shadowOffset.width();
         // If shadows are ignoring transforms, then we haven't applied the Y coordinate flip yet, so down is negative.
-        float shadowTextY = point.y() + translation.height() + shadowOffset.height() * (graphicsContext.shadowsIgnoreTransforms() ? -1 : 1);
+        float shadowTextY = point.y() + shadowOffset.height() * (graphicsContext.shadowsIgnoreTransforms() ? -1 : 1);
 
         auto shadowBrush = graphicsContext.brushWithColor(shadowFillColor);
         context->DrawGlyphRun(D2D1::Point2F(shadowTextX, shadowTextY), &glyphRun, shadowBrush);
@@ -135,9 +132,9 @@ void FontCascade::drawGlyphs(GraphicsContext& graphicsContext, const Font& font,
             context->DrawGlyphRun(D2D1::Point2F(shadowTextX + font.syntheticBoldOffset(), shadowTextY), &glyphRun, shadowBrush);
     }
 
-    context->DrawGlyphRun(D2D1::Point2F(point.x() + translation.width(), point.y() + translation.height()), &glyphRun, graphicsContext.solidFillBrush());
+    context->DrawGlyphRun(D2D1::Point2F(point.x(), point.y()), &glyphRun, graphicsContext.solidFillBrush());
     if (font.syntheticBoldOffset())
-        context->DrawGlyphRun(D2D1::Point2F(point.x() + translation.width() + font.syntheticBoldOffset(), point.y() + translation.height()), &glyphRun, graphicsContext.solidFillBrush());
+        context->DrawGlyphRun(D2D1::Point2F(point.x() + font.syntheticBoldOffset(), point.y()), &glyphRun, graphicsContext.solidFillBrush());
 
     if (hasSimpleShadow)
         graphicsContext.setShadow(shadowOffset, shadowBlur, shadowColor);

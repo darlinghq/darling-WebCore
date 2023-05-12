@@ -27,40 +27,45 @@
 #pragma once
 
 #include "ContextDestructionObserver.h"
+#include "TaskSource.h"
 #include <wtf/Assertions.h>
 #include <wtf/Forward.h>
+#include <wtf/Function.h>
+#include <wtf/RefCounted.h>
+#include <wtf/Threading.h>
 
 namespace WebCore {
 
-class ActiveDOMObject : public ContextDestructionObserver {
+class Document;
+class Event;
+class EventLoopTaskGroup;
+class EventTarget;
+
+enum class ReasonForSuspension {
+    JavaScriptDebuggerPaused,
+    WillDeferLoading,
+    BackForwardCache,
+    PageWillBeSuspended,
+};
+
+class WEBCORE_EXPORT ActiveDOMObject : public ContextDestructionObserver {
 public:
     // The suspendIfNeeded must be called exactly once after object construction to update
     // the suspended state to match that of the ScriptExecutionContext.
     void suspendIfNeeded();
     void assertSuspendIfNeededWasCalled() const;
 
-    virtual bool hasPendingActivity() const;
-
-    // The canSuspendForDocumentSuspension() function is used by the caller if there is a choice between suspending
-    // and stopping. For example, a page won't be suspended and placed in the back/forward
-    // cache if it contains any objects that cannot be suspended.
+    // This function is used by JS bindings to determine if the JS wrapper should be kept alive or not.
+    bool hasPendingActivity() const { return m_pendingActivityInstanceCount || virtualHasPendingActivity(); }
 
     // However, the suspend function will sometimes be called even if canSuspendForDocumentSuspension() returns false.
     // That happens in step-by-step JS debugging for example - in this case it would be incorrect
     // to stop the object. Exact semantics of suspend is up to the object in cases like that.
 
-    enum ReasonForSuspension {
-        JavaScriptDebuggerPaused,
-        WillDeferLoading,
-        PageCache,
-        PageWillBeSuspended,
-    };
-
     virtual const char* activeDOMObjectName() const = 0;
 
-    // These three functions must not have a side effect of creating or destroying
+    // These functions must not have a side effect of creating or destroying
     // any ActiveDOMObject. That means they must not result in calls to arbitrary JavaScript.
-    virtual bool canSuspendForDocumentSuspension() const = 0; // Returning false in canSuspendForDocumentSuspension() will prevent the page from entering the PageCache.
     virtual void suspend(ReasonForSuspension);
     virtual void resume();
 
@@ -69,32 +74,93 @@ public:
     // It can, however, have a side effect of deleting an ActiveDOMObject.
     virtual void stop();
 
-    template<class T> void setPendingActivity(T* thisObject)
+    // FIXME: Drop this function.
+    // Call sites should be using makePendingActivity() or overriding virtualHasPendingActivity() instead.
+    template<typename T> void setPendingActivity(T& thisObject)
     {
-        ASSERT(thisObject == this);
-        thisObject->ref();
-        ++m_pendingActivityCount;
+        ASSERT(&thisObject == this);
+        thisObject.ref();
+        ++m_pendingActivityInstanceCount;
     }
 
-    template<class T> void unsetPendingActivity(T* thisObject)
+    // FIXME: Drop this function.
+    // Call sites should be using makePendingActivity() or overriding virtualHasPendingActivity() instead.
+    template<typename T> void unsetPendingActivity(T& thisObject)
     {
-        ASSERT(m_pendingActivityCount > 0);
-        --m_pendingActivityCount;
-        thisObject->deref();
+        ASSERT(m_pendingActivityInstanceCount > 0);
+        --m_pendingActivityInstanceCount;
+        thisObject.deref();
+    }
+
+    template<class T>
+    class PendingActivity : public RefCounted<PendingActivity<T>> {
+    public:
+        explicit PendingActivity(T& thisObject)
+            : m_thisObject(thisObject)
+        {
+            ++(m_thisObject->m_pendingActivityInstanceCount);
+        }
+
+        ~PendingActivity()
+        {
+            ASSERT(m_thisObject->m_pendingActivityInstanceCount > 0);
+            --(m_thisObject->m_pendingActivityInstanceCount);
+        }
+
+    private:
+        Ref<T> m_thisObject;
+    };
+
+    template<class T> Ref<PendingActivity<T>> makePendingActivity(T& thisObject)
+    {
+        ASSERT(&thisObject == this);
+        return adoptRef(*new PendingActivity<T>(thisObject));
+    }
+
+    bool isContextStopped() const;
+    bool isAllowedToRunScript() const;
+
+    template<typename T>
+    static void queueTaskKeepingObjectAlive(T& object, TaskSource source, Function<void ()>&& task)
+    {
+        object.queueTaskInEventLoop(source, [protectedObject = makeRef(object), activity = object.ActiveDOMObject::makePendingActivity(object), task = WTFMove(task)] () {
+            task();
+        });
+    }
+
+    template<typename EventTargetType, typename EventType>
+    static void queueTaskToDispatchEvent(EventTargetType& target, TaskSource source, Ref<EventType>&& event)
+    {
+        target.queueTaskToDispatchEventInternal(target, source, WTFMove(event));
     }
 
 protected:
     explicit ActiveDOMObject(ScriptExecutionContext*);
+    explicit ActiveDOMObject(Document*);
+    explicit ActiveDOMObject(Document&);
     virtual ~ActiveDOMObject();
 
 private:
-    unsigned m_pendingActivityCount;
-#if !ASSERT_DISABLED
-    bool m_suspendIfNeededWasCalled;
+    enum CheckedScriptExecutionContextType { CheckedScriptExecutionContext };
+    ActiveDOMObject(ScriptExecutionContext*, CheckedScriptExecutionContextType);
+
+    // This is used by subclasses to indicate that they have pending activity, meaning that they would
+    // like the JS wrapper to stay alive (because they may still fire JS events).
+    virtual bool virtualHasPendingActivity() const { return false; }
+
+    void queueTaskInEventLoop(TaskSource, Function<void ()>&&);
+    void queueTaskToDispatchEventInternal(EventTarget&, TaskSource, Ref<Event>&&);
+
+    unsigned m_pendingActivityInstanceCount { 0 };
+#if ASSERT_ENABLED
+    bool m_suspendIfNeededWasCalled { false };
+    Ref<Thread> m_creationThread { Thread::current() };
 #endif
+
+    friend class ActiveDOMObjectEventDispatchTask;
 };
 
-#if ASSERT_DISABLED
+#if !ASSERT_ENABLED
 
 inline void ActiveDOMObject::assertSuspendIfNeededWasCalled() const
 {

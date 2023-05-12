@@ -2,7 +2,7 @@
  * Copyright (C) 1999 Lars Knoll (knoll@kde.org)
  *           (C) 1999 Antti Koivisto (koivisto@kde.org)
  *           (C) 2000 Stefan Schimanski (1Stein@gmx.de)
- * Copyright (C) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2004-2019 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -41,15 +41,14 @@
 #include "PluginViewBase.h"
 #include "RenderEmbeddedObject.h"
 #include "RenderLayer.h"
-#include "RenderSnapshottedPlugIn.h"
 #include "RenderView.h"
 #include "RenderWidget.h"
-#include "RuntimeEnabledFeatures.h"
 #include "ScriptController.h"
 #include "Settings.h"
 #include "ShadowRoot.h"
 #include "SubframeLoader.h"
 #include "Widget.h"
+#include <wtf/IsoMallocInlines.h>
 
 #if ENABLE(NETSCAPE_PLUGIN_API)
 #include "npruntime_impl.h"
@@ -62,14 +61,13 @@
 
 namespace WebCore {
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(HTMLPlugInElement);
+
 using namespace HTMLNames;
 
 HTMLPlugInElement::HTMLPlugInElement(const QualifiedName& tagName, Document& document)
     : HTMLFrameOwnerElement(tagName, document)
-    , m_inBeforeLoadEventHandler(false)
     , m_swapRendererTimer(*this, &HTMLPlugInElement::swapRendererTimerFired)
-    , m_isCapturingMouseEvents(false)
-    , m_displayState(Playing)
 {
     setHasCustomStyleResolveCallbacks();
 }
@@ -77,12 +75,6 @@ HTMLPlugInElement::HTMLPlugInElement(const QualifiedName& tagName, Document& doc
 HTMLPlugInElement::~HTMLPlugInElement()
 {
     ASSERT(!m_instance); // cleared in detach()
-}
-
-bool HTMLPlugInElement::canProcessDrag() const
-{
-    const PluginViewBase* plugin = is<PluginViewBase>(pluginWidget()) ? downcast<PluginViewBase>(pluginWidget()) : nullptr;
-    return plugin ? plugin->canProcessDrag() : false;
 }
 
 bool HTMLPlugInElement::willRespondToMouseClickEvents()
@@ -98,7 +90,7 @@ void HTMLPlugInElement::willDetachRenderers()
     m_instance = nullptr;
 
     if (m_isCapturingMouseEvents) {
-        if (Frame* frame = document().frame())
+        if (RefPtr<Frame> frame = document().frame())
             frame->eventHandler().setCapturingMouseEventsElement(nullptr);
         m_isCapturingMouseEvents = false;
     }
@@ -111,7 +103,7 @@ void HTMLPlugInElement::resetInstance()
 
 JSC::Bindings::Instance* HTMLPlugInElement::bindingsInstance()
 {
-    auto* frame = document().frame();
+    auto frame = makeRefPtr(document().frame());
     if (!frame)
         return nullptr;
 
@@ -119,8 +111,8 @@ JSC::Bindings::Instance* HTMLPlugInElement::bindingsInstance()
     // the cached allocated Bindings::Instance.  Not supporting this edge-case is OK.
 
     if (!m_instance) {
-        if (auto* widget = pluginWidget())
-            m_instance = frame->script().createScriptInstanceForWidget(widget);
+        if (auto widget = makeRefPtr(pluginWidget()))
+            m_instance = frame->script().createScriptInstanceForWidget(widget.get());
     }
     return m_instance.get();
 }
@@ -155,6 +147,18 @@ Widget* HTMLPlugInElement::pluginWidget(PluginLoadingPolicy loadPolicy) const
     return renderWidget->widget();
 }
 
+RenderWidget* HTMLPlugInElement::renderWidgetLoadingPlugin() const
+{
+    RefPtr<FrameView> view = document().view();
+    if (!view || (!view->inUpdateEmbeddedObjects() && !view->layoutContext().isInLayout() && !view->isPainting())) {
+        // Needs to load the plugin immediatedly because this function is called
+        // when JavaScript code accesses the plugin.
+        // FIXME: <rdar://16893708> Check if dispatching events here is safe.
+        document().updateLayoutIgnorePendingStylesheets(Document::RunPostLayoutTasks::Synchronously);
+    }
+    return renderWidget(); // This will return nullptr if the renderer is not a RenderWidget.
+}
+
 bool HTMLPlugInElement::isPresentationAttribute(const QualifiedName& name) const
 {
     if (name == widthAttr || name == heightAttr || name == vspaceAttr || name == hspaceAttr || name == alignAttr)
@@ -162,7 +166,7 @@ bool HTMLPlugInElement::isPresentationAttribute(const QualifiedName& name) const
     return HTMLFrameOwnerElement::isPresentationAttribute(name);
 }
 
-void HTMLPlugInElement::collectStyleForPresentationAttribute(const QualifiedName& name, const AtomicString& value, MutableStyleProperties& style)
+void HTMLPlugInElement::collectStyleForPresentationAttribute(const QualifiedName& name, const AtomString& value, MutableStyleProperties& style)
 {
     if (name == widthAttr)
         addHTMLLengthToStyle(style, CSSPropertyWidth, value);
@@ -192,41 +196,28 @@ void HTMLPlugInElement::defaultEventHandler(Event& event)
     if (!is<RenderWidget>(renderer))
         return;
 
-    if (is<RenderEmbeddedObject>(*renderer)) {
-        if (downcast<RenderEmbeddedObject>(*renderer).isPluginUnavailable()) {
-            downcast<RenderEmbeddedObject>(*renderer).handleUnavailablePluginIndicatorEvent(&event);
-            return;
-        }
-
-        if (is<RenderSnapshottedPlugIn>(*renderer) && displayState() < Restarting) {
-            downcast<RenderSnapshottedPlugIn>(*renderer).handleEvent(event);
-            HTMLFrameOwnerElement::defaultEventHandler(event);
-            return;
-        }
-
-        if (displayState() < Playing)
-            return;
-    }
+    if (is<RenderEmbeddedObject>(*renderer) && downcast<RenderEmbeddedObject>(*renderer).isPluginUnavailable())
+        downcast<RenderEmbeddedObject>(*renderer).handleUnavailablePluginIndicatorEvent(&event);
 
     // Don't keep the widget alive over the defaultEventHandler call, since that can do things like navigate.
     {
         RefPtr<Widget> widget = downcast<RenderWidget>(*renderer).widget();
         if (!widget)
             return;
-        widget->handleEvent(&event);
+        widget->handleEvent(event);
         if (event.defaultHandled())
             return;
     }
     HTMLFrameOwnerElement::defaultEventHandler(event);
 }
 
-bool HTMLPlugInElement::isKeyboardFocusable(KeyboardEvent&) const
+bool HTMLPlugInElement::isKeyboardFocusable(KeyboardEvent*) const
 {
     // FIXME: Why is this check needed?
     if (!document().page())
         return false;
 
-    Widget* widget = pluginWidget();
+    RefPtr<Widget> widget = pluginWidget();
     if (!is<PluginViewBase>(widget))
         return false;
 
@@ -241,7 +232,7 @@ bool HTMLPlugInElement::isPluginElement() const
 bool HTMLPlugInElement::isUserObservable() const
 {
     // No widget - can't be anything to see or hear here.
-    Widget* widget = pluginWidget(PluginLoadingPolicy::DoNotLoad);
+    RefPtr<Widget> widget = pluginWidget(PluginLoadingPolicy::DoNotLoad);
     if (!is<PluginViewBase>(widget))
         return false;
 
@@ -275,30 +266,42 @@ RenderPtr<RenderElement> HTMLPlugInElement::createElementRenderer(RenderStyle&& 
 
 void HTMLPlugInElement::swapRendererTimerFired()
 {
-    ASSERT(displayState() == PreparingPluginReplacement || displayState() == DisplayingSnapshot);
+    ASSERT(displayState() == PreparingPluginReplacement);
     if (userAgentShadowRoot())
         return;
     
     // Create a shadow root, which will trigger the code to add a snapshot container
     // and reattach, thus making a new Renderer.
+    Ref<HTMLPlugInElement> protectedThis(*this);
     ensureUserAgentShadowRoot();
 }
 
 void HTMLPlugInElement::setDisplayState(DisplayState state)
 {
+    if (state == m_displayState)
+        return;
+
     m_displayState = state;
-    
-    if ((state == DisplayingSnapshot || displayState() == PreparingPluginReplacement) && !m_swapRendererTimer.isActive())
+
+    m_swapRendererTimer.stop();
+    if (displayState() == PreparingPluginReplacement)
         m_swapRendererTimer.startOneShot(0_s);
 }
 
-void HTMLPlugInElement::didAddUserAgentShadowRoot(ShadowRoot* root)
+void HTMLPlugInElement::didAddUserAgentShadowRoot(ShadowRoot& root)
 {
     if (!m_pluginReplacement || !document().page() || displayState() != PreparingPluginReplacement)
         return;
     
-    root->setResetStyleInheritance(true);
-    if (m_pluginReplacement->installReplacement(*root)) {
+    root.setResetStyleInheritance(true);
+    auto result = m_pluginReplacement->installReplacement(root);
+
+#if PLATFORM(COCOA)
+    RELEASE_ASSERT(result.success || !result.scriptObject);
+    m_pluginReplacementScriptObject = result.scriptObject;
+#endif
+
+    if (result.success) {
         setDisplayState(DisplayingPluginReplacement);
         invalidateStyleAndRenderersForSubtree();
     }
@@ -339,10 +342,10 @@ static ReplacementPlugin* pluginReplacementForType(const URL& url, const String&
         return nullptr;
 
     String extension;
-    String lastPathComponent = url.lastPathComponent();
+    auto lastPathComponent = url.lastPathComponent();
     size_t dotOffset = lastPathComponent.reverseFind('.');
     if (dotOffset != notFound)
-        extension = lastPathComponent.substring(dotOffset + 1);
+        extension = lastPathComponent.substring(dotOffset + 1).toString();
 
     String type = mimeType;
     if (type.isEmpty() && url.protocolIsData())
@@ -358,7 +361,7 @@ static ReplacementPlugin* pluginReplacementForType(const URL& url, const String&
     if (type.isEmpty()) {
         if (extension.isEmpty())
             return nullptr;
-        type = MIMETypeRegistry::getMediaMIMETypeForExtension(extension);
+        type = MIMETypeRegistry::mediaMIMETypeForExtension(extension);
     }
 
     if (type.isEmpty())
@@ -372,14 +375,14 @@ static ReplacementPlugin* pluginReplacementForType(const URL& url, const String&
     return nullptr;
 }
 
-bool HTMLPlugInElement::requestObject(const String& url, const String& mimeType, const Vector<String>& paramNames, const Vector<String>& paramValues)
+bool HTMLPlugInElement::requestObject(const String& relativeURL, const String& mimeType, const Vector<String>& paramNames, const Vector<String>& paramValues)
 {
     if (m_pluginReplacement)
         return true;
 
     URL completedURL;
-    if (!url.isEmpty())
-        completedURL = document().completeURL(url);
+    if (!relativeURL.isEmpty())
+        completedURL = document().completeURL(relativeURL);
 
     ReplacementPlugin* replacement = pluginReplacementForType(completedURL, mimeType);
     if (!replacement || !replacement->isEnabledBySettings(document().settings()))
@@ -394,18 +397,35 @@ bool HTMLPlugInElement::requestObject(const String& url, const String& mimeType,
 
 JSC::JSObject* HTMLPlugInElement::scriptObjectForPluginReplacement()
 {
-    if (m_pluginReplacement)
-        return m_pluginReplacement->scriptObject();
+#if PLATFORM(COCOA)
+    JSC::JSValue value = m_pluginReplacementScriptObject;
+    if (!value)
+        return nullptr;
+    return value.getObject();
+#else
     return nullptr;
+#endif
 }
 
-// Return whether or not the replacement content for blocked plugins is accessible to the user.
-bool HTMLPlugInElement::isReplacementObscured(const String& unavailabilityDescription)
+bool HTMLPlugInElement::isBelowSizeThreshold() const
+{
+    auto* renderObject = renderer();
+    if (!is<RenderEmbeddedObject>(renderObject))
+        return true;
+    auto& renderEmbeddedObject = downcast<RenderEmbeddedObject>(*renderObject);
+    return renderEmbeddedObject.isPluginUnavailable() && renderEmbeddedObject.pluginUnavailabilityReason() == RenderEmbeddedObject::PluginTooSmall;
+}
+
+bool HTMLPlugInElement::setReplacement(RenderEmbeddedObject::PluginUnavailabilityReason reason, const String& unavailabilityDescription)
 {
     if (!is<RenderEmbeddedObject>(renderer()))
         return false;
+
+    if (reason == RenderEmbeddedObject::UnsupportedPlugin)
+        document().addConsoleMessage(MessageSource::JS, MessageLevel::Warning, "Tried to use an unsupported plug-in."_s);
+
     Ref<HTMLPlugInElement> protectedThis(*this);
-    downcast<RenderEmbeddedObject>(*renderer()).setPluginUnavailabilityReasonWithDescription(RenderEmbeddedObject::InsecurePluginVersion, unavailabilityDescription);
+    downcast<RenderEmbeddedObject>(*renderer()).setPluginUnavailabilityReasonWithDescription(reason, unavailabilityDescription);
     bool replacementIsObscured = isReplacementObscured();
     // hittest in isReplacementObscured() method could destroy the renderer. Let's refetch it.
     if (is<RenderEmbeddedObject>(renderer()))
@@ -415,13 +435,18 @@ bool HTMLPlugInElement::isReplacementObscured(const String& unavailabilityDescri
 
 bool HTMLPlugInElement::isReplacementObscured()
 {
-    // We should always start hit testing a clean tree.
-    if (document().view())
-        document().view()->updateLayoutAndStyleIfNeededRecursive();
-    // Check if style recalc/layout destroyed the associated renderer.
-    auto* renderView = document().topDocument().renderView();
-    if (!document().view() || !renderView)
+    auto topDocument = makeRef(document().topDocument());
+    auto topFrameView = makeRefPtr(topDocument->view());
+    if (!topFrameView)
         return false;
+
+    topFrameView->updateLayoutAndStyleIfNeededRecursive();
+
+    // Updating the layout may have detached this document from the top document.
+    auto* renderView = topDocument->renderView();
+    if (!renderView || !document().view() || &document().topDocument() != topDocument.ptr())
+        return false;
+
     if (!renderer() || !is<RenderEmbeddedObject>(*renderer()))
         return false;
     auto& pluginRenderer = downcast<RenderEmbeddedObject>(*renderer());
@@ -444,33 +469,41 @@ bool HTMLPlugInElement::isReplacementObscured()
     auto height = viewRect.height();
     // Hit test the center and near the corners of the replacement text to ensure
     // it is visible and is not masked by other elements.
-    HitTestRequest request(HitTestRequest::ReadOnly | HitTestRequest::Active | HitTestRequest::IgnoreClipping | HitTestRequest::DisallowUserAgentShadowContent | HitTestRequest::AllowChildFrameContent);
+    constexpr OptionSet<HitTestRequest::RequestType> hitType { HitTestRequest::ReadOnly, HitTestRequest::Active, HitTestRequest::IgnoreClipping, HitTestRequest::DisallowUserAgentShadowContent, HitTestRequest::AllowChildFrameContent };
     HitTestResult result;
-    HitTestLocation location = LayoutPoint(x + width / 2, y + height / 2);
-    bool hit = renderView->hitTest(request, location, result);
+    HitTestLocation location { LayoutPoint { viewRect.center() } };
+    ASSERT(!renderView->needsLayout());
+    ASSERT(!renderView->document().needsStyleRecalc());
+    bool hit = topDocument->hitTest(hitType, location, result);
     if (!hit || result.innerNode() != &pluginRenderer.frameOwnerElement())
         return true;
 
     location = LayoutPoint(x, y);
-    hit = renderView->hitTest(request, location, result);
+    hit = topDocument->hitTest(hitType, location, result);
     if (!hit || result.innerNode() != &pluginRenderer.frameOwnerElement())
         return true;
 
     location = LayoutPoint(x + width, y);
-    hit = renderView->hitTest(request, location, result);
+    hit = topDocument->hitTest(hitType, location, result);
     if (!hit || result.innerNode() != &pluginRenderer.frameOwnerElement())
         return true;
 
     location = LayoutPoint(x + width, y + height);
-    hit = renderView->hitTest(request, location, result);
+    hit = topDocument->hitTest(hitType, location, result);
     if (!hit || result.innerNode() != &pluginRenderer.frameOwnerElement())
         return true;
 
     location = LayoutPoint(x, y + height);
-    hit = renderView->hitTest(request, location, result);
+    hit = topDocument->hitTest(hitType, location, result);
     if (!hit || result.innerNode() != &pluginRenderer.frameOwnerElement())
         return true;
     return false;
+}
+
+bool HTMLPlugInElement::canLoadScriptURL(const URL&) const
+{
+    // FIXME: Probably want to at least check canAddSubframe.
+    return true;
 }
 
 }

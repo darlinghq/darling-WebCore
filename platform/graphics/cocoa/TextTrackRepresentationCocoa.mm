@@ -23,33 +23,32 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
+#import "config.h"
 
-#if (PLATFORM(IOS) || (PLATFORM(MAC) && ENABLE(VIDEO_PRESENTATION_MODE))) && ENABLE(VIDEO_TRACK)
-#include "TextTrackRepresentationCocoa.h"
+#if (PLATFORM(IOS_FAMILY) || (PLATFORM(MAC) && ENABLE(VIDEO_PRESENTATION_MODE))) && ENABLE(VIDEO)
+#import "TextTrackRepresentationCocoa.h"
 
-#include "FloatRect.h"
-#include "GraphicsContextCG.h"
-#include "IntRect.h"
+#import "FloatRect.h"
+#import "GraphicsContextCG.h"
+#import "IntRect.h"
 
-#import "QuartzCoreSPI.h"
-
-#if PLATFORM(IOS)
-#include "WebCoreThread.h"
-#include "WebCoreThreadRun.h"
+#if PLATFORM(IOS_FAMILY)
+#import "WebCoreThread.h"
+#import "WebCoreThreadRun.h"
 #endif
 
-using namespace WebCore;
+#import <pal/spi/cocoa/QuartzCoreSPI.h>
+
 
 @interface WebCoreTextTrackRepresentationCocoaHelper : NSObject <CALayerDelegate> {
-    TextTrackRepresentationCocoa* _parent;
+    WebCore::TextTrackRepresentationCocoa* _parent;
 }
-- (id)initWithParent:(TextTrackRepresentationCocoa*)parent;
-@property (assign) TextTrackRepresentationCocoa* parent;
+- (id)initWithParent:(WebCore::TextTrackRepresentationCocoa*)parent;
+@property (assign) WebCore::TextTrackRepresentationCocoa* parent;
 @end
 
 @implementation WebCoreTextTrackRepresentationCocoaHelper
-- (id)initWithParent:(TextTrackRepresentationCocoa*)parent
+- (id)initWithParent:(WebCore::TextTrackRepresentationCocoa*)parent
 {
     if (!(self = [super init]))
         return nil;
@@ -65,7 +64,7 @@ using namespace WebCore;
     [super dealloc];
 }
 
-- (void)setParent:(TextTrackRepresentationCocoa*)parent
+- (void)setParent:(WebCore::TextTrackRepresentationCocoa*)parent
 {
     if (_parent)
         [_parent->platformLayer() removeObserver:self forKeyPath:@"bounds"];
@@ -76,7 +75,7 @@ using namespace WebCore;
         [_parent->platformLayer() addObserver:self forKeyPath:@"bounds" options:0 context:0];
 }
 
-- (TextTrackRepresentationCocoa*)parent
+- (WebCore::TextTrackRepresentationCocoa*)parent
 {
     return _parent;
 }
@@ -85,14 +84,14 @@ using namespace WebCore;
 {
     UNUSED_PARAM(change);
     UNUSED_PARAM(context);
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     WebThreadRun(^{
         if (_parent && [keyPath isEqual:@"bounds"] && object == _parent->platformLayer())
             _parent->client().textTrackRepresentationBoundsChanged(_parent->bounds());
     });
 #else
     if (_parent && [keyPath isEqual:@"bounds"] && object == _parent->platformLayer())
-        _parent->client().textTrackRepresentationBoundsChanged(_parent->bounds());
+        _parent->boundsChanged();
 #endif
 }
 
@@ -106,9 +105,11 @@ using namespace WebCore;
 
 @end
 
+namespace WebCore {
+
 std::unique_ptr<TextTrackRepresentation> TextTrackRepresentation::create(TextTrackRepresentationClient& client)
 {
-    return std::make_unique<TextTrackRepresentationCocoa>(client);
+    return makeUnique<TextTrackRepresentationCocoa>(client);
 }
 
 TextTrackRepresentationCocoa::TextTrackRepresentationCocoa(TextTrackRepresentationClient& client)
@@ -129,7 +130,7 @@ TextTrackRepresentationCocoa::~TextTrackRepresentationCocoa()
 void TextTrackRepresentationCocoa::update()
 {
     if (auto representation = m_client.createTextTrackRepresentationImage())
-        [m_layer.get() setContents:(id)representation->nativeImage().get()];
+        [m_layer.get() setContents:(__bridge id)representation->nativeImage()->platformImage().get()];
 }
 
 void TextTrackRepresentationCocoa::setContentScale(float scale)
@@ -137,9 +138,23 @@ void TextTrackRepresentationCocoa::setContentScale(float scale)
     [m_layer.get() setContentsScale:scale];
 }
 
+void TextTrackRepresentationCocoa::setHidden(bool hidden) const
+{
+    [m_layer.get() setHidden:hidden];
+}
+
 IntRect TextTrackRepresentationCocoa::bounds() const
 {
     return enclosingIntRect(FloatRect([m_layer.get() bounds]));
 }
 
-#endif // (PLATFORM(IOS) || (PLATFORM(MAC) && ENABLE(VIDEO_PRESENTATION_MODE))) && ENABLE(VIDEO_TRACK)
+void TextTrackRepresentationCocoa::boundsChanged()
+{
+    m_taskQueue.enqueueTask([this] () {
+        client().textTrackRepresentationBoundsChanged(bounds());
+    });
+}
+
+} // namespace WebCore
+
+#endif // (PLATFORM(IOS_FAMILY) || (PLATFORM(MAC) && ENABLE(VIDEO_PRESENTATION_MODE))) && ENABLE(VIDEO)

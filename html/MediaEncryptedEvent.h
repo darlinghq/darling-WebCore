@@ -40,24 +40,28 @@ class ArrayBuffer;
 namespace WebCore {
 
 class MediaEncryptedEvent final : public Event {
+    WTF_MAKE_ISO_ALLOCATED(MediaEncryptedEvent);
 public:
     using Init = MediaEncryptedEventInit;
 
-    static Ref<MediaEncryptedEvent> create(const AtomicString& type, const MediaEncryptedEventInit& initializer, IsTrusted isTrusted = IsTrusted::No)
+    static Ref<MediaEncryptedEvent> create(const AtomString& type, const MediaEncryptedEventInit& initializer, IsTrusted isTrusted = IsTrusted::No)
     {
         return adoptRef(*new MediaEncryptedEvent(type, initializer, isTrusted));
     }
 
     virtual ~MediaEncryptedEvent();
 
-    String initDataType();
-    JSC::ArrayBuffer* initData();
+    String initDataType() { return m_initDataType; }
+    JSC::ArrayBuffer* initData() { return m_initData.get(); }
 
 private:
-    MediaEncryptedEvent(const AtomicString&, const MediaEncryptedEventInit&, IsTrusted);
+    MediaEncryptedEvent(const AtomString&, const MediaEncryptedEventInit&, IsTrusted);
 
     // Event
     EventInterface eventInterface() const override;
+
+    String m_initDataType;
+    RefPtr<JSC::ArrayBuffer> m_initData;
 };
 
 } // namespace WebCore

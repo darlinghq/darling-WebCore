@@ -27,12 +27,16 @@
 
 #if ENABLE(INDEXED_DATABASE)
 
-#include "ActiveDOMObject.h"
 #include "ExceptionOr.h"
 #include "IDBCursorDirection.h"
 #include "IDBCursorInfo.h"
-#include <heap/Strong.h>
+#include "IDBKeyPath.h"
+#include "IDBRequest.h"
+#include "IDBValue.h"
+#include "JSValueInWrappedObject.h"
+#include <JavaScriptCore/Strong.h>
 #include <wtf/Variant.h>
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
@@ -41,10 +45,11 @@ class IDBIndex;
 class IDBObjectStore;
 class IDBTransaction;
 
-class IDBCursor : public ScriptWrappable, public RefCounted<IDBCursor>, public ActiveDOMObject {
+class IDBCursor : public ScriptWrappable, public RefCounted<IDBCursor> {
+    WTF_MAKE_ISO_ALLOCATED(IDBCursor);
 public:
-    static Ref<IDBCursor> create(IDBTransaction&, IDBObjectStore&, const IDBCursorInfo&);
-    static Ref<IDBCursor> create(IDBTransaction&, IDBIndex&, const IDBCursorInfo&);
+    static Ref<IDBCursor> create(IDBObjectStore&, const IDBCursorInfo&);
+    static Ref<IDBCursor> create(IDBIndex&, const IDBCursorInfo&);
     
     virtual ~IDBCursor();
 
@@ -52,40 +57,42 @@ public:
 
     const Source& source() const;
     IDBCursorDirection direction() const;
-    JSC::JSValue key() const;
-    JSC::JSValue primaryKey() const;
-    JSC::JSValue value() const;
 
-    ExceptionOr<Ref<IDBRequest>> update(JSC::ExecState&, JSC::JSValue);
+    IDBKey* key() { return m_key.get(); };
+    IDBKey* primaryKey() { return m_primaryKey.get(); };
+    IDBValue value() { return m_value; };
+    const Optional<IDBKeyPath>& primaryKeyPath() { return m_keyPath; };
+    JSValueInWrappedObject& keyWrapper() { return m_keyWrapper; }
+    JSValueInWrappedObject& primaryKeyWrapper() { return m_primaryKeyWrapper; }
+    JSValueInWrappedObject& valueWrapper() { return m_valueWrapper; }
+
+    ExceptionOr<Ref<IDBRequest>> update(JSC::JSGlobalObject&, JSC::JSValue);
     ExceptionOr<void> advance(unsigned);
-    ExceptionOr<void> continueFunction(JSC::ExecState&, JSC::JSValue key);
-    ExceptionOr<void> continuePrimaryKey(JSC::ExecState&, JSC::JSValue key, JSC::JSValue primaryKey);
-    ExceptionOr<Ref<IDBRequest>> deleteFunction(JSC::ExecState&);
+    ExceptionOr<void> continueFunction(JSC::JSGlobalObject&, JSC::JSValue key);
+    ExceptionOr<void> continuePrimaryKey(JSC::JSGlobalObject&, JSC::JSValue key, JSC::JSValue primaryKey);
+    ExceptionOr<Ref<IDBRequest>> deleteFunction(JSC::JSGlobalObject&);
 
     ExceptionOr<void> continueFunction(const IDBKeyData&);
 
     const IDBCursorInfo& info() const { return m_info; }
 
-    void setRequest(IDBRequest& request) { m_request = &request; }
-    void clearRequest() { m_request = nullptr; }
-    IDBRequest* request() { return m_request; }
+    void setRequest(IDBRequest& request) { m_request = makeWeakPtr(&request); }
+    void clearRequest() { m_request.clear(); }
+    void clearWrappers();
+    IDBRequest* request() { return m_request.get(); }
 
-    void setGetResult(IDBRequest&, const IDBGetResult&);
+    bool setGetResult(IDBRequest&, const IDBGetResult&, uint64_t operationID);
 
     virtual bool isKeyCursorWithValue() const { return false; }
 
-    void decrementOutstandingRequestCount();
-
-    bool hasPendingActivity() const final;
+    Optional<IDBGetResult> iterateWithPrefetchedRecords(unsigned count, uint64_t lastWriteOperationID);
+    void clearPrefetchedRecords();
 
 protected:
-    IDBCursor(IDBTransaction&, IDBObjectStore&, const IDBCursorInfo&);
-    IDBCursor(IDBTransaction&, IDBIndex&, const IDBCursorInfo&);
+    IDBCursor(IDBObjectStore&, const IDBCursorInfo&);
+    IDBCursor(IDBIndex&, const IDBCursorInfo&);
 
 private:
-    const char* activeDOMObjectName() const final;
-    bool canSuspendForDocumentSuspension() const final;
-
     bool sourcesDeleted() const;
     IDBObjectStore& effectiveObjectStore() const;
     IDBTransaction& transaction() const;
@@ -93,21 +100,25 @@ private:
     void uncheckedIterateCursor(const IDBKeyData&, unsigned count);
     void uncheckedIterateCursor(const IDBKeyData&, const IDBKeyData&);
 
-    // Cursors are created with an outstanding iteration request.
-    unsigned m_outstandingRequestCount { 1 };
-
     IDBCursorInfo m_info;
     Source m_source;
-    IDBRequest* m_request { nullptr };
+    WeakPtr<IDBRequest> m_request;
 
     bool m_gotValue { false };
 
-    IDBKeyData m_currentKeyData;
-    IDBKeyData m_currentPrimaryKeyData;
+    RefPtr<IDBKey> m_key;
+    RefPtr<IDBKey> m_primaryKey;
+    IDBKeyData m_keyData;
+    IDBKeyData m_primaryKeyData;
+    IDBValue m_value;
+    Optional<IDBKeyPath> m_keyPath;
 
-    JSC::Strong<JSC::Unknown> m_currentKey;
-    JSC::Strong<JSC::Unknown> m_currentPrimaryKey;
-    JSC::Strong<JSC::Unknown> m_currentValue;
+    JSValueInWrappedObject m_keyWrapper;
+    JSValueInWrappedObject m_primaryKeyWrapper;
+    JSValueInWrappedObject m_valueWrapper;
+
+    Deque<IDBCursorRecord> m_prefetchedRecords;
+    uint64_t m_prefetchOperationID { 0 };
 };
 
 
@@ -119,21 +130,6 @@ inline const IDBCursor::Source& IDBCursor::source() const
 inline IDBCursorDirection IDBCursor::direction() const
 {
     return m_info.cursorDirection();
-}
-
-inline JSC::JSValue IDBCursor::key() const
-{
-    return m_currentKey.get();
-}
-
-inline JSC::JSValue IDBCursor::primaryKey() const
-{
-    return m_currentPrimaryKey.get();
-}
-
-inline JSC::JSValue IDBCursor::value() const
-{
-    return m_currentValue.get();
 }
 
 } // namespace WebCore

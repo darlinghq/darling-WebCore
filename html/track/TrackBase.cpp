@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2011-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,10 +26,11 @@
 #include "config.h"
 #include "TrackBase.h"
 
-#include "Language.h"
+#include "Logging.h"
+#include <wtf/Language.h>
 #include <wtf/text/StringBuilder.h>
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "HTMLMediaElement.h"
 
@@ -37,24 +38,46 @@ namespace WebCore {
 
 static int s_uniqueId = 0;
 
-TrackBase::TrackBase(Type type, const AtomicString& id, const AtomicString& label, const AtomicString& language)
+static bool isValidBCP47LanguageTag(const String&);
+
+#if !RELEASE_LOG_DISABLED
+static RefPtr<Logger>& nullLogger()
+{
+    static NeverDestroyed<RefPtr<Logger>> logger;
+    return logger;
+}
+#endif
+
+TrackBase::TrackBase(Type type, const AtomString& id, const AtomString& label, const AtomString& language)
     : m_uniqueId(++s_uniqueId)
     , m_id(id)
     , m_label(label)
     , m_language(language)
-    , m_validBCP47Language(language)
 {
     ASSERT(type != BaseTrack);
-    m_type = type;
-}
+    if (isValidBCP47LanguageTag(language))
+        m_validBCP47Language = language;
 
-TrackBase::~TrackBase()
-{
+    m_type = type;
+
+#if !RELEASE_LOG_DISABLED
+    if (!nullLogger().get()) {
+        nullLogger() = Logger::create(this);
+        nullLogger()->setEnabled(this, false);
+    }
+
+    m_logger = nullLogger().get();
+#endif
 }
 
 Element* TrackBase::element()
 {
-    return m_mediaElement;
+    return m_mediaElement.get();
+}
+
+void TrackBase::setMediaElement(WeakPtr<HTMLMediaElement> element)
+{
+    m_mediaElement = element;
 }
 
 // See: https://tools.ietf.org/html/bcp47#section-2.1
@@ -108,43 +131,53 @@ static bool isValidBCP47LanguageTag(const String& languageTag)
     return true;
 }
     
-void TrackBase::setLanguage(const AtomicString& language)
+void TrackBase::setLanguage(const AtomString& language)
 {
-    if (!language.isEmpty() && !isValidBCP47LanguageTag(language)) {
-        String message;
-        if (language.contains((UChar)'\0'))
-            message = WTF::ASCIILiteral("The language contains a null character and is not a valid BCP 47 language tag.");
-        else {
-            StringBuilder stringBuilder;
-            stringBuilder.appendLiteral("The language '");
-            stringBuilder.append(language);
-            stringBuilder.appendLiteral("' is not a valid BCP 47 language tag.");
-            message = stringBuilder.toString();
-        }
-        if (auto element = this->element())
-            element->document().addConsoleMessage(MessageSource::Rendering, MessageLevel::Warning, message);
-    } else
-        m_validBCP47Language = language;
-    
     m_language = language;
+    if (language.isEmpty() || isValidBCP47LanguageTag(language)) {
+        m_validBCP47Language = language;
+        return;
+    }
+
+    m_validBCP47Language = emptyAtom();
+
+    auto element = this->element();
+    if (!element)
+        return;
+
+    String message;
+    if (language.contains((UChar)'\0'))
+        message = "The language contains a null character and is not a valid BCP 47 language tag."_s;
+    else
+        message = makeString("The language '", language, "' is not a valid BCP 47 language tag.");
+
+    element->document().addConsoleMessage(MessageSource::Rendering, MessageLevel::Warning, message);
 }
 
-AtomicString TrackBase::validBCP47Language() const
+#if !RELEASE_LOG_DISABLED
+void TrackBase::setLogger(const Logger& logger, const void* logIdentifier)
 {
-    return m_validBCP47Language;
+    m_logger = &logger;
+    m_logIdentifier = childLogIdentifier(logIdentifier, m_uniqueId);
 }
 
-MediaTrackBase::MediaTrackBase(Type type, const AtomicString& id, const AtomicString& label, const AtomicString& language)
+WTFLogChannel& TrackBase::logChannel() const
+{
+    return LogMedia;
+}
+#endif
+
+MediaTrackBase::MediaTrackBase(Type type, const AtomString& id, const AtomString& label, const AtomString& language)
     : TrackBase(type, id, label, language)
 {
 }
 
-void MediaTrackBase::setKind(const AtomicString& kind)
+void MediaTrackBase::setKind(const AtomString& kind)
 {
     setKindInternal(kind);
 }
 
-void MediaTrackBase::setKindInternal(const AtomicString& kind)
+void MediaTrackBase::setKindInternal(const AtomString& kind)
 {
     if (isValidKind(kind))
         m_kind = kind;

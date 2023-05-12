@@ -23,12 +23,12 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "IntSize.h"
+#import "config.h"
+#import "IntSize.h"
 
 namespace WebCore {
 
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
 #ifndef NSGEOMETRY_TYPES_SAME_AS_CGGEOMETRY_TYPES
 
 IntSize::IntSize(const NSSize& s) : m_width(static_cast<int>(s.width)), m_height(static_cast<int>(s.height))
@@ -41,6 +41,6 @@ IntSize::operator NSSize() const
 }
 
 #endif
-#endif // !PLATFORM(IOS)
+#endif // !PLATFORM(IOS_FAMILY)
 
 }

@@ -29,16 +29,18 @@
 
 #include "OESElementIndexUint.h"
 
+#include <wtf/IsoMallocInlines.h>
+
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(OESElementIndexUint);
 
 OESElementIndexUint::OESElementIndexUint(WebGLRenderingContextBase& context)
     : WebGLExtension(context)
 {
 }
 
-OESElementIndexUint::~OESElementIndexUint()
-{
-}
+OESElementIndexUint::~OESElementIndexUint() = default;
 
 WebGLExtension::ExtensionName OESElementIndexUint::getName() const
 {

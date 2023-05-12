@@ -31,8 +31,8 @@
 #include "config.h"
 #include "LayoutRect.h"
 
-#include "TextStream.h"
 #include <algorithm>
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -71,6 +71,25 @@ void LayoutRect::intersect(const LayoutRect& other)
     m_size = newMaxPoint - newLocation;
 }
 
+bool LayoutRect::edgeInclusiveIntersect(const LayoutRect& other)
+{
+    LayoutPoint newLocation(std::max(x(), other.x()), std::max(y(), other.y()));
+    LayoutPoint newMaxPoint(std::min(maxX(), other.maxX()), std::min(maxY(), other.maxY()));
+
+    bool intersects = true;
+
+    // Return a clean empty rectangle for non-intersecting cases.
+    if (newLocation.x() > newMaxPoint.x() || newLocation.y() > newMaxPoint.y()) {
+        newLocation = { };
+        newMaxPoint = { };
+        intersects = false;
+    }
+
+    m_location = newLocation;
+    m_size = newMaxPoint - newLocation;
+    return intersects;
+}
+
 void LayoutRect::unite(const LayoutRect& other)
 {
     // Handle empty special cases first.
@@ -81,11 +100,17 @@ void LayoutRect::unite(const LayoutRect& other)
         return;
     }
 
-    LayoutPoint newLocation(std::min(x(), other.x()), std::min(y(), other.y()));
-    LayoutPoint newMaxPoint(std::max(maxX(), other.maxX()), std::max(maxY(), other.maxY()));
+    uniteEvenIfEmpty(other);
+}
 
-    m_location = newLocation;
-    m_size = newMaxPoint - newLocation;
+void LayoutRect::uniteEvenIfEmpty(const LayoutRect& other)
+{
+    auto minX = std::min(x(), other.x());
+    auto minY = std::min(y(), other.y());
+    auto maxX = std::max(this->maxX(), other.maxX());
+    auto maxY = std::max(this->maxY(), other.maxY());
+
+    setLocationAndSizeFromEdges(minX, minY, maxX, maxY);
 }
 
 bool LayoutRect::checkedUnite(const LayoutRect& other)

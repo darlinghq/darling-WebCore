@@ -26,7 +26,7 @@
 #include "config.h"
 #include "SerializedCryptoKeyWrap.h"
 
-#if ENABLE(SUBTLE_CRYPTO)
+#if ENABLE(WEB_CRYPTO)
 
 #include "NotImplemented.h"
 
@@ -40,26 +40,29 @@ bool getDefaultWebCryptoMasterKey(Vector<uint8_t>& masterKey)
     return false;
 }
 
+// Initially these helper functions were intended to perform KEK wrapping and unwrapping,
+// but this is not required anymore, despite the function names and the Mac implementation
+// still indicating otherwise.
+// See https://bugs.webkit.org/show_bug.cgi?id=173883 for more info.
+
 bool wrapSerializedCryptoKey(const Vector<uint8_t>& masterKey, const Vector<uint8_t>& key, Vector<uint8_t>& result)
 {
-    notImplemented();
     UNUSED_PARAM(masterKey);
-    UNUSED_PARAM(key);
-    UNUSED_PARAM(result);
 
-    return false;
+    // No wrapping performed -- the serialized key data is copied into the `result` variable.
+    result = Vector<uint8_t>(key);
+    return true;
 }
 
 bool unwrapSerializedCryptoKey(const Vector<uint8_t>& masterKey, const Vector<uint8_t>& wrappedKey, Vector<uint8_t>& key)
 {
-    notImplemented();
     UNUSED_PARAM(masterKey);
-    UNUSED_PARAM(wrappedKey);
-    UNUSED_PARAM(key);
 
-    return false;
+    // No unwrapping performed -- the serialized key data is copied into the `key` variable.
+    key = Vector<uint8_t>(wrappedKey);
+    return true;
 }
 
 }
 
-#endif // ENABLE(SUBTLE_CRYPTO)
+#endif // ENABLE(WEB_CRYPTO)

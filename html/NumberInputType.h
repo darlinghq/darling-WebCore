@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2010 Google Inc. All rights reserved.
+ * Copyright (C) 2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -35,11 +36,12 @@
 namespace WebCore {
 
 class NumberInputType final : public TextFieldInputType {
+    template<typename DowncastedType> friend bool isInvalidInputType(const InputType&, const String&);
 public:
-    explicit NumberInputType(HTMLInputElement& element) : TextFieldInputType(element) { }
+    explicit NumberInputType(HTMLInputElement& element) : TextFieldInputType(Type::Number, element) { }
 
 private:
-    const AtomicString& formControlType() const final;
+    const AtomString& formControlType() const final;
     void setValue(const String&, bool valueChanged, TextFieldEventBehavior) final;
     double valueAsDouble() const final;
     ExceptionOr<void> setValueAsDouble(double, TextFieldEventBehavior) const final;
@@ -48,9 +50,8 @@ private:
     bool typeMismatch() const final;
     bool sizeShouldIncludeDecoration(int defaultSize, int& preferredSize) const final;
     float decorationWidth() const final;
-    bool isSteppable() const final;
     StepRange createStepRange(AnyStepHandling) const final;
-    void handleKeydownEvent(KeyboardEvent&) final;
+    ShouldCallBaseEventHandler handleKeydownEvent(KeyboardEvent&) final;
     Decimal parseToNumber(const String&, const Decimal&) const final;
     String serialize(const Decimal&) const final;
     String localizeValue(const String&) const final;
@@ -60,9 +61,7 @@ private:
     bool hasBadInput() const final;
     String badInputText() const final;
     bool supportsPlaceholder() const final;
-    bool isNumberField() const final;
-    void minOrMaxAttributeChanged() final;
-    void stepAttributeChanged() final;
+    void attributeChanged(const QualifiedName&) final;
 };
 
 } // namespace WebCore

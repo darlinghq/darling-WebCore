@@ -29,9 +29,9 @@
 #include "DOMWrapperWorld.h"
 #include "UserScript.h"
 #include "UserStyleSheet.h"
-#include <heap/HeapInlines.h>
-#include <runtime/JSCellInlines.h>
-#include <runtime/StructureInlines.h>
+#include <JavaScriptCore/HeapInlines.h>
+#include <JavaScriptCore/JSCellInlines.h>
+#include <JavaScriptCore/StructureInlines.h>
 
 #if ENABLE(CONTENT_EXTENSIONS)
 #include "CompiledContentExtension.h"
@@ -44,13 +44,9 @@ Ref<UserContentController> UserContentController::create()
     return adoptRef(*new UserContentController);
 }
 
-UserContentController::UserContentController()
-{
-}
+UserContentController::UserContentController() = default;
 
-UserContentController::~UserContentController()
-{
-}
+UserContentController::~UserContentController() = default;
 
 void UserContentController::forEachUserScript(Function<void(DOMWrapperWorld&, const UserScript&)>&& functor) const
 {
@@ -77,7 +73,7 @@ void UserContentController::forEachUserMessageHandler(Function<void(const UserMe
 
 void UserContentController::addUserScript(DOMWrapperWorld& world, std::unique_ptr<UserScript> userScript)
 {
-    auto& scriptsInWorld = m_userScripts.ensure(&world, [&] { return std::make_unique<UserScriptVector>(); }).iterator->value;
+    auto& scriptsInWorld = m_userScripts.ensure(&world, [&] { return makeUnique<UserScriptVector>(); }).iterator->value;
     scriptsInWorld->append(WTFMove(userScript));
 }
 
@@ -104,7 +100,7 @@ void UserContentController::removeUserScripts(DOMWrapperWorld& world)
 
 void UserContentController::addUserStyleSheet(DOMWrapperWorld& world, std::unique_ptr<UserStyleSheet> userStyleSheet, UserStyleInjectionTime injectionTime)
 {
-    auto& styleSheetsInWorld = m_userStyleSheets.ensure(&world, [&] { return std::make_unique<UserStyleSheetVector>(); }).iterator->value;
+    auto& styleSheetsInWorld = m_userStyleSheets.ensure(&world, [&] { return makeUnique<UserStyleSheetVector>(); }).iterator->value;
     styleSheetsInWorld->append(WTFMove(userStyleSheet));
 
     if (injectionTime == InjectInExistingDocuments)

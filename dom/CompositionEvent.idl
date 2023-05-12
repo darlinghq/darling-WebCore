@@ -24,16 +24,16 @@
  */
 
 [
-    Constructor(DOMString type, optional CompositionEventInit eventInitDict),
+    Exposed=Window
 ] interface CompositionEvent : UIEvent {
+    constructor(DOMString type, optional CompositionEventInit eventInitDict);
 
     readonly attribute DOMString data;
 
-    // FIXME: Using "undefined" as default parameter value is wrong.
-    void initCompositionEvent(optional DOMString typeArg = "undefined",
+    undefined initCompositionEvent(DOMString typeArg,
                               optional boolean canBubbleArg = false,
                               optional boolean cancelableArg = false,
-                              optional DOMWindow? viewArg = null,
+                              optional WindowProxy? viewArg = null,
                               optional DOMString dataArg = "undefined");
 
 };

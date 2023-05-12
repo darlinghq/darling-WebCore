@@ -29,7 +29,9 @@
 #if ENABLE(ASYNC_SCROLLING)
 
 #include "ScrollingStateTree.h"
-#include "TextStream.h"
+#include "ScrollingTree.h"
+#include "ScrollingTreeFrameScrollingNode.h"
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -37,39 +39,49 @@ ScrollingTreeNode::ScrollingTreeNode(ScrollingTree& scrollingTree, ScrollingNode
     : m_scrollingTree(scrollingTree)
     , m_nodeType(nodeType)
     , m_nodeID(nodeID)
-    , m_parent(nullptr)
 {
 }
 
-ScrollingTreeNode::~ScrollingTreeNode()
-{
-}
+ScrollingTreeNode::~ScrollingTreeNode() = default;
 
 void ScrollingTreeNode::appendChild(Ref<ScrollingTreeNode>&& childNode)
 {
+    RELEASE_ASSERT(m_scrollingTree.inCommitTreeState());
+
     childNode->setParent(this);
 
-    if (!m_children)
-        m_children = std::make_unique<Vector<RefPtr<ScrollingTreeNode>>>();
-    m_children->append(WTFMove(childNode));
+    m_children.append(WTFMove(childNode));
 }
 
 void ScrollingTreeNode::removeChild(ScrollingTreeNode& node)
 {
-    if (!m_children)
-        return;
+    RELEASE_ASSERT(m_scrollingTree.inCommitTreeState());
 
-    size_t index = m_children->find(&node);
+    size_t index = m_children.findMatching([&](auto& child) {
+        return &node == child.ptr();
+    });
 
     // The index will be notFound if the node to remove is a deeper-than-1-level descendant or
     // if node is the root state node.
     if (index != notFound) {
-        m_children->remove(index);
+        m_children.remove(index);
         return;
     }
 
-    for (auto& child : *m_children)
+    for (auto& child : m_children)
         child->removeChild(node);
+}
+
+void ScrollingTreeNode::removeAllChildren()
+{
+    RELEASE_ASSERT(m_scrollingTree.inCommitTreeState());
+
+    m_children.clear();
+}
+
+bool ScrollingTreeNode::isRootNode() const
+{
+    return m_scrollingTree.rootNode() == this;
 }
 
 void ScrollingTreeNode::dumpProperties(TextStream& ts, ScrollingStateTreeAsTextBehavior behavior) const
@@ -78,15 +90,31 @@ void ScrollingTreeNode::dumpProperties(TextStream& ts, ScrollingStateTreeAsTextB
         ts.dumpProperty("nodeID", scrollingNodeID());
 }
 
+ScrollingTreeFrameScrollingNode* ScrollingTreeNode::enclosingFrameNodeIncludingSelf()
+{
+    auto* node = this;
+    while (node && !node->isFrameScrollingNode())
+        node = node->parent();
+
+    return downcast<ScrollingTreeFrameScrollingNode>(node);
+}
+
+ScrollingTreeScrollingNode* ScrollingTreeNode::enclosingScrollingNodeIncludingSelf()
+{
+    auto* node = this;
+    while (node && !node->isScrollingNode())
+        node = node->parent();
+
+    return downcast<ScrollingTreeScrollingNode>(node);
+}
+
 void ScrollingTreeNode::dump(TextStream& ts, ScrollingStateTreeAsTextBehavior behavior) const
 {
     dumpProperties(ts, behavior);
 
-    if (m_children) {
-        for (auto& child : *m_children) {
-            TextStream::GroupScope scope(ts);
-            child->dump(ts, behavior);
-        }
+    for (auto& child : m_children) {
+        TextStream::GroupScope scope(ts);
+        child->dump(ts, behavior);
     }
 }
 

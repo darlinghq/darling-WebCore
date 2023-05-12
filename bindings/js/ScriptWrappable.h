@@ -31,7 +31,8 @@
 
 #pragma once
 
-#include <heap/Weak.h>
+#include <JavaScriptCore/Weak.h>
+#include <wtf/IsoMalloc.h>
 
 namespace JSC {
 class WeakHandleOwner;
@@ -42,6 +43,7 @@ namespace WebCore {
 class JSDOMObject;
 
 class ScriptWrappable {
+    WTF_MAKE_ISO_ALLOCATED(ScriptWrappable);
 public:
     JSDOMObject* wrapper() const;
     void setWrapper(JSDOMObject*, JSC::WeakHandleOwner*, void*);
@@ -51,7 +53,7 @@ public:
     static ptrdiff_t offsetOfWrapper() { return CAST_OFFSET(Derived*, ScriptWrappable*) + OBJECT_OFFSETOF(ScriptWrappable, m_wrapper); }
 
 protected:
-    ~ScriptWrappable() { }
+    ~ScriptWrappable() = default;
 
 private:
     JSC::Weak<JSDOMObject> m_wrapper;

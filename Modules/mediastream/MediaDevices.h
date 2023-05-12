@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2015 Ericsson AB. All rights reserved.
- * Copyright (C) 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,12 +33,15 @@
 
 #if ENABLE(MEDIA_STREAM)
 
+#include "ActiveDOMObject.h"
+#include "EventNames.h"
 #include "EventTarget.h"
 #include "ExceptionOr.h"
-#include "JSDOMPromiseDeferred.h"
+#include "IDLTypes.h"
 #include "MediaTrackConstraints.h"
 #include "RealtimeMediaSourceCenter.h"
 #include "Timer.h"
+#include "UserMediaClient.h"
 #include <wtf/WeakPtr.h>
 
 namespace WebCore {
@@ -46,10 +49,14 @@ namespace WebCore {
 class Document;
 class MediaDeviceInfo;
 class MediaStream;
+class UserGestureToken;
 
 struct MediaTrackSupportedConstraints;
 
-class MediaDevices : public RefCounted<MediaDevices>, public ContextDestructionObserver, public EventTargetWithInlineData {
+template<typename IDLType> class DOMPromiseDeferred;
+
+class MediaDevices final : public RefCounted<MediaDevices>, public ActiveDOMObject, public EventTargetWithInlineData, public CanMakeWeakPtr<MediaDevices> {
+    WTF_MAKE_ISO_ALLOCATED(MediaDevices);
 public:
     static Ref<MediaDevices> create(Document&);
 
@@ -60,13 +67,29 @@ public:
     using Promise = DOMPromiseDeferred<IDLInterface<MediaStream>>;
     using EnumerateDevicesPromise = DOMPromiseDeferred<IDLSequence<IDLInterface<MediaDeviceInfo>>>;
 
+    enum class DisplayCaptureSurfaceType {
+        Monitor,
+        Window,
+        Application,
+        Browser,
+    };
+
     struct StreamConstraints {
         Variant<bool, MediaTrackConstraints> video;
         Variant<bool, MediaTrackConstraints> audio;
     };
-    ExceptionOr<void> getUserMedia(const StreamConstraints&, Promise&&) const;
-    void enumerateDevices(EnumerateDevicesPromise&&) const;
+    void getUserMedia(const StreamConstraints&, Promise&&);
+
+    struct DisplayMediaStreamConstraints {
+        Variant<bool, MediaTrackConstraints> video;
+        Variant<bool, MediaTrackConstraints> audio;
+    };
+    void getDisplayMedia(const DisplayMediaStreamConstraints&, Promise&&);
+
+    void enumerateDevices(EnumerateDevicesPromise&&);
     MediaTrackSupportedConstraints getSupportedConstraints();
+
+    String deviceIdToPersistentId(const String& deviceId) const { return m_audioOutputDeviceIdToPersistentId.get(deviceId); }
 
     using RefCounted<MediaDevices>::ref;
     using RefCounted<MediaDevices>::deref;
@@ -75,18 +98,43 @@ private:
     explicit MediaDevices(Document&);
 
     void scheduledEventTimerFired();
+    bool addEventListener(const AtomString& eventType, Ref<EventListener>&&, const AddEventListenerOptions&) override;
+
+    void exposeDevices(const Vector<CaptureDevice>&, const String&, EnumerateDevicesPromise&&);
+    void listenForDeviceChanges();
+
+    friend class JSMediaDevicesOwner;
+
+    // ActiveDOMObject
+    const char* activeDOMObjectName() const final;
+    void stop() final;
+    bool virtualHasPendingActivity() const final;
 
     // EventTargetWithInlineData.
-    EventTargetInterface eventTargetInterface() const override { return MediaDevicesEventTargetInterfaceType; }
-    ScriptExecutionContext* scriptExecutionContext() const final { return m_scriptExecutionContext; }
-    void refEventTarget() override { ref(); }
-    void derefEventTarget() override { deref(); }
+    EventTargetInterface eventTargetInterface() const final { return MediaDevicesEventTargetInterfaceType; }
+    ScriptExecutionContext* scriptExecutionContext() const final { return ActiveDOMObject::scriptExecutionContext(); }
+    void refEventTarget() final { ref(); }
+    void derefEventTarget() final { deref(); }
 
-    WeakPtr<MediaDevices> createWeakPtr() { return m_weakPtrFactory.createWeakPtr(); }
+    enum class GestureAllowedRequest {
+        Microphone = 1 << 0,
+        Camera = 1 << 1,
+        Display = 1 << 2,
+    };
+    bool computeUserGesturePriviledge(GestureAllowedRequest);
 
     Timer m_scheduledEventTimer;
-    std::optional<RealtimeMediaSourceCenter::DevicesChangedObserverToken> m_deviceChangedToken;
-    WeakPtrFactory<MediaDevices> m_weakPtrFactory;
+    UserMediaClient::DeviceChangeObserverToken m_deviceChangeToken;
+    const EventNames& m_eventNames; // Need to cache this so we can use it from GC threads.
+    bool m_listeningForDeviceChanges { false };
+
+    String m_groupIdHashSalt;
+
+    OptionSet<GestureAllowedRequest> m_requestTypesForCurrentGesture;
+    WeakPtr<UserGestureToken> m_currentGestureToken;
+
+    HashMap<String, String> m_audioOutputDeviceIdToPersistentId;
+    String m_audioOutputDeviceId;
 };
 
 } // namespace WebCore

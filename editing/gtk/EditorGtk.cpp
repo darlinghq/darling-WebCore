@@ -27,9 +27,7 @@
 #include "config.h"
 #include "Editor.h"
 
-#include "Blob.h"
 #include "CachedImage.h"
-#include "DOMURL.h"
 #include "DocumentFragment.h"
 #include "Frame.h"
 #include "HTMLEmbedElement.h"
@@ -43,59 +41,30 @@
 #include "SVGElement.h"
 #include "SVGImageElement.h"
 #include "SelectionData.h"
+#include "Settings.h"
+#include "WebContentReader.h"
 #include "XLinkNames.h"
 #include "markup.h"
 
 namespace WebCore {
 
-static RefPtr<DocumentFragment> createFragmentFromPasteboardData(Pasteboard& pasteboard, Frame& frame, Range& range, bool allowPlainText, bool& chosePlainText)
+void Editor::pasteWithPasteboard(Pasteboard* pasteboard, OptionSet<PasteOption> options)
 {
-    chosePlainText = false;
-
-    if (!pasteboard.hasData())
-        return nullptr;
-
-    const auto& selection = pasteboard.selectionData();
-    if (selection.hasImage()) {
-        Vector<uint8_t> buffer;
-        auto status = cairo_surface_write_to_png_stream(selection.image()->nativeImage().get(), [](void* output, const unsigned char* data, unsigned size) {
-            if (!reinterpret_cast<Vector<uint8_t>*>(output)->tryAppend(data, size))
-                return CAIRO_STATUS_WRITE_ERROR;
-            return CAIRO_STATUS_SUCCESS;
-        }, &buffer);
-        if (status == CAIRO_STATUS_SUCCESS) {
-            auto blob = Blob::create(WTFMove(buffer), "image/png");
-            return frame.editor().createFragmentForImageAndURL(DOMURL::createObjectURL(*frame.document(), blob));
-        }
-    }
-
-    if (selection.hasMarkup() && frame.document())
-        return createFragmentFromMarkup(*frame.document(), selection.markup(), emptyString(), DisallowScriptingAndPluginContent);
-
-    if (!allowPlainText)
-        return nullptr;
-
-    if (selection.hasText()) {
-        chosePlainText = true;
-        return createFragmentFromText(range, selection.text());
-    }
-
-    return nullptr;
-}
-
-void Editor::pasteWithPasteboard(Pasteboard* pasteboard, bool allowPlainText, MailBlockquoteHandling mailBlockquoteHandling)
-{
-    RefPtr<Range> range = selectedRange();
+    auto range = selectedRange();
     if (!range)
         return;
 
     bool chosePlainText;
-    RefPtr<DocumentFragment> fragment = createFragmentFromPasteboardData(*pasteboard, m_frame, *range, allowPlainText, chosePlainText);
-    if (fragment && shouldInsertFragment(*fragment, range.get(), EditorInsertAction::Pasted))
-        pasteAsFragment(fragment.releaseNonNull(), canSmartReplaceWithPasteboard(*pasteboard), chosePlainText, mailBlockquoteHandling);
+    auto fragment = webContentFromPasteboard(*pasteboard, *range, options.contains(PasteOption::AllowPlainText), chosePlainText);
+
+    if (fragment && options.contains(PasteOption::AsQuotation))
+        quoteFragmentForPasting(*fragment);
+
+    if (fragment && shouldInsertFragment(*fragment, *range, EditorInsertAction::Pasted))
+        pasteAsFragment(fragment.releaseNonNull(), canSmartReplaceWithPasteboard(*pasteboard), chosePlainText, options.contains(PasteOption::IgnoreMailBlockquote) ? MailBlockquoteHandling::IgnoreBlockquote : MailBlockquoteHandling::RespectBlockquote);
 }
 
-static const AtomicString& elementURL(Element& element)
+static const AtomString& elementURL(Element& element)
 {
     if (is<HTMLImageElement>(element) || is<HTMLInputElement>(element))
         return element.attributeWithoutSynchronization(HTMLNames::srcAttr);
@@ -130,7 +99,7 @@ void Editor::writeImageToPasteboard(Pasteboard& pasteboard, Element& imageElemen
 
     pasteboardImage.url.url = imageElement.document().completeURL(stripLeadingAndTrailingHTMLSpaces(elementURL(imageElement)));
     pasteboardImage.url.title = title;
-    pasteboardImage.url.markup = createMarkup(imageElement, IncludeNode, nullptr, ResolveAllURLs);
+    pasteboardImage.url.markup = serializeFragment(imageElement, SerializedNodes::SubtreeIncludingNode, nullptr, ResolveURLs::Yes);
     pasteboard.write(pasteboardImage);
 }
 
@@ -139,13 +108,18 @@ void Editor::writeSelectionToPasteboard(Pasteboard& pasteboard)
     PasteboardWebContent pasteboardContent;
     pasteboardContent.canSmartCopyOrDelete = canSmartCopyOrDelete();
     pasteboardContent.text = selectedTextForDataTransfer();
-    pasteboardContent.markup = createMarkup(*selectedRange(), nullptr, AnnotateForInterchange, false, ResolveNonLocalURLs);
+    pasteboardContent.markup = serializePreservingVisualAppearance(m_document.selection().selection(), ResolveURLs::YesExcludingLocalFileURLsForPrivacy,
+        m_document.settings().selectionAcrossShadowBoundariesEnabled() ? SerializeComposedTree::Yes : SerializeComposedTree::No);
+    pasteboardContent.contentOrigin = m_document.originIdentifierForPasteboard();
     pasteboard.write(pasteboardContent);
 }
 
-RefPtr<DocumentFragment> Editor::webContentFromPasteboard(Pasteboard& pasteboard, Range& context, bool allowPlainText, bool& chosePlainText)
+RefPtr<DocumentFragment> Editor::webContentFromPasteboard(Pasteboard& pasteboard, const SimpleRange& context, bool allowPlainText, bool& chosePlainText)
 {
-    return createFragmentFromPasteboardData(pasteboard, m_frame, context, allowPlainText, chosePlainText);
+    WebContentReader reader(*m_document.frame(), context, allowPlainText);
+    pasteboard.read(reader);
+    chosePlainText = reader.madeFragmentFromPlainText;
+    return WTFMove(reader.fragment);
 }
 
 } // namespace WebCore

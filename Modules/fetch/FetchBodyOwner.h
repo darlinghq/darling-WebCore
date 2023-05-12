@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2016 Canon Inc.
+ * Copyright (C) 2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted, provided that the following conditions
@@ -28,52 +29,73 @@
 
 #pragma once
 
-#if ENABLE(FETCH_API)
-
 #include "ActiveDOMObject.h"
+#include "ExceptionOr.h"
 #include "FetchBody.h"
+#include "FetchBodySource.h"
 #include "FetchHeaders.h"
 #include "FetchLoader.h"
 #include "FetchLoaderClient.h"
-#include "FetchResponseSource.h"
+#include "ResourceError.h"
 
 namespace WebCore {
 
 class FetchBodyOwner : public RefCounted<FetchBodyOwner>, public ActiveDOMObject {
 public:
-    FetchBodyOwner(ScriptExecutionContext&, std::optional<FetchBody>&&, Ref<FetchHeaders>&&);
+    FetchBodyOwner(ScriptExecutionContext&, Optional<FetchBody>&&, Ref<FetchHeaders>&&);
+    ~FetchBodyOwner();
 
-    // Exposed Body API
-    bool isDisturbed() const { return m_isDisturbed; };
-
+    bool bodyUsed() const { return isDisturbed(); }
     void arrayBuffer(Ref<DeferredPromise>&&);
     void blob(Ref<DeferredPromise>&&);
     void formData(Ref<DeferredPromise>&&);
     void json(Ref<DeferredPromise>&&);
     void text(Ref<DeferredPromise>&&);
 
+    bool isDisturbed() const;
     bool isDisturbedOrLocked() const;
 
     void loadBlob(const Blob&, FetchBodyConsumer*);
 
     bool isActive() const { return !!m_blobLoader; }
 
+    ExceptionOr<RefPtr<ReadableStream>> readableStream(JSC::JSGlobalObject&);
+    bool hasReadableStreamBody() const { return m_body && m_body->hasReadableStream(); }
+
+    virtual void consumeBodyAsStream();
+    virtual void feedStream() { }
+    virtual void cancel() { }
+
+    bool hasLoadingError() const;
+    ResourceError loadingError() const;
+    Optional<Exception> loadingException() const;
+
+    const String& contentType() const { return m_contentType; }
+
 protected:
     const FetchBody& body() const { return *m_body; }
     FetchBody& body() { return *m_body; }
     bool isBodyNull() const { return !m_body; }
-    void cloneBody(const FetchBodyOwner&);
+    bool isBodyNullOrOpaque() const { return !m_body || m_isBodyOpaque; }
+    void cloneBody(FetchBodyOwner&);
 
-    void extractBody(ScriptExecutionContext&, FetchBody::BindingDataType&&);
+    ExceptionOr<void> extractBody(FetchBody::Init&&);
     void updateContentType();
     void consumeOnceLoadingFinished(FetchBodyConsumer::Type, Ref<DeferredPromise>&&);
 
     void setBody(FetchBody&& body) { m_body = WTFMove(body); }
+    ExceptionOr<void> createReadableStream(JSC::JSGlobalObject&);
 
     // ActiveDOMObject API
     void stop() override;
 
     void setDisturbed() { m_isDisturbed = true; }
+
+    void setBodyAsOpaque() { m_isBodyOpaque = true; }
+    bool isBodyOpaque() const { return m_isBodyOpaque; }
+
+    void setLoadingError(Exception&&);
+    void setLoadingError(ResourceError&&);
 
 private:
     // Blob loading routines
@@ -82,13 +104,16 @@ private:
     void blobLoadingFailed();
     void finishBlobLoading();
 
+    // ActiveDOMObject API
+    bool virtualHasPendingActivity() const final;
+
     struct BlobLoader final : FetchLoaderClient {
         BlobLoader(FetchBodyOwner&);
 
         // FetchLoaderClient API
         void didReceiveResponse(const ResourceResponse&) final;
         void didReceiveData(const char* data, size_t size) final { owner.blobChunk(data, size); }
-        void didFail() final;
+        void didFail(const ResourceError&) final;
         void didSucceed() final { owner.blobLoadingSucceeded(); }
 
         FetchBodyOwner& owner;
@@ -96,18 +121,17 @@ private:
     };
 
 protected:
-    std::optional<FetchBody> m_body;
+    Optional<FetchBody> m_body;
     String m_contentType;
     bool m_isDisturbed { false };
-#if ENABLE(STREAMS_API)
-    RefPtr<FetchResponseSource> m_readableStreamSource;
-#endif
+    RefPtr<FetchBodySource> m_readableStreamSource;
     Ref<FetchHeaders> m_headers;
 
 private:
-    std::optional<BlobLoader> m_blobLoader;
+    Optional<BlobLoader> m_blobLoader;
+    bool m_isBodyOpaque { false };
+
+    Variant<std::nullptr_t, Exception, ResourceError> m_loadingError;
 };
 
 } // namespace WebCore
-
-#endif // ENABLE(FETCH_API)

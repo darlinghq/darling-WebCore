@@ -75,8 +75,8 @@ void IDBValue::setAsIsolatedCopy(const IDBValue& other)
     ASSERT(m_blobURLs.isEmpty() && m_blobFilePaths.isEmpty());
 
     m_data = other.m_data;
-    m_blobURLs = CrossThreadCopier<Vector<String>>::copy(other.m_blobURLs);
-    m_blobFilePaths = CrossThreadCopier<Vector<String>>::copy(other.m_blobFilePaths);
+    m_blobURLs = crossThreadCopy(other.m_blobURLs);
+    m_blobFilePaths = crossThreadCopy(other.m_blobFilePaths);
 }
 
 IDBValue IDBValue::isolatedCopy() const
@@ -84,6 +84,21 @@ IDBValue IDBValue::isolatedCopy() const
     IDBValue result;
     result.setAsIsolatedCopy(*this);
     return result;
+}
+
+size_t IDBValue::size() const
+{
+    size_t totalSize = 0;
+
+    for (auto& url : m_blobURLs)
+        totalSize += url.sizeInBytes();
+
+    for (auto& path : m_blobFilePaths)
+        totalSize += path.sizeInBytes();
+
+    totalSize += m_data.size();
+
+    return totalSize;
 }
 
 } // namespace WebCore

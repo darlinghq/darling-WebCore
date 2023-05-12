@@ -23,14 +23,16 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef NetworkExtensionContentFilter_h
-#define NetworkExtensionContentFilter_h
+#pragma once
+
+#if ENABLE(CONTENT_FILTERING)
 
 #include "PlatformContentFilter.h"
 #include <objc/NSObjCRuntime.h>
 #include <wtf/Compiler.h>
 #include <wtf/OSObjectPtr.h>
 #include <wtf/RetainPtr.h>
+#include <wtf/UniqueRef.h>
 
 enum NEFilterSourceStatus : NSInteger;
 
@@ -39,22 +41,21 @@ OBJC_CLASS NSData;
 
 namespace WebCore {
 
-class URL;
-
 class NetworkExtensionContentFilter final : public PlatformContentFilter {
-    friend std::unique_ptr<NetworkExtensionContentFilter> std::make_unique<NetworkExtensionContentFilter>();
+    friend UniqueRef<NetworkExtensionContentFilter> WTF::makeUniqueRefWithoutFastMallocCheck<NetworkExtensionContentFilter>();
 
 public:
-    static std::unique_ptr<NetworkExtensionContentFilter> create();
+    static UniqueRef<NetworkExtensionContentFilter> create();
 
     void willSendRequest(ResourceRequest&, const ResourceResponse&) override;
     void responseReceived(const ResourceResponse&) override;
     void addData(const char* data, int length) override;
     void finishedAddingData() override;
     Ref<SharedBuffer> replacementData() const override;
-#if ENABLE(CONTENT_FILTERING)
     ContentFilterUnblockHandler unblockHandler() const override;
-#endif
+
+    WEBCORE_EXPORT static bool isRequired();
+    WEBCORE_EXPORT static void setHasConsumedSandboxExtensions(bool);
 
 private:
     static bool enabled();
@@ -63,12 +64,19 @@ private:
     void initialize(const URL* = nullptr);
     void handleDecision(NEFilterSourceStatus, NSData *replacementData);
 
+    enum class SandboxExtensionsState : uint8_t {
+        Consumed,
+        NotConsumed,
+        NotSet
+    };
+
+    WEBCORE_EXPORT static SandboxExtensionsState m_sandboxExtensionsState;
+
     OSObjectPtr<dispatch_queue_t> m_queue;
-    OSObjectPtr<dispatch_semaphore_t> m_semaphore;
     RetainPtr<NSData> m_replacementData;
     RetainPtr<NEFilterSource> m_neFilterSource;
 };
 
 } // namespace WebCore
 
-#endif // NetworkExtensionContentFilter_h
+#endif // ENABLE(CONTENT_FILTERING)

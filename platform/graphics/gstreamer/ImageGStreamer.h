@@ -17,14 +17,13 @@
  * Boston, MA 02110-1301, USA.
  */
 
-#ifndef ImageGStreamer_h
-#define ImageGStreamer_h
+#pragma once
 
 #if ENABLE(VIDEO) && USE(GSTREAMER)
 
 #include "BitmapImage.h"
 #include "FloatRect.h"
-#include "GRefPtrGStreamer.h"
+#include "GStreamerCommon.h"
 
 #include <gst/gst.h>
 #include <gst/video/video-frame.h>
@@ -37,38 +36,44 @@ namespace WebCore {
 class IntSize;
 
 class ImageGStreamer : public RefCounted<ImageGStreamer> {
-    public:
-        static Ref<ImageGStreamer> createImage(GstSample* sample)
-        {
-            return adoptRef(*new ImageGStreamer(sample));
-        }
-        ~ImageGStreamer();
+public:
+    static RefPtr<ImageGStreamer> createImage(GstSample* sample)
+    {
+        auto image = adoptRef(new ImageGStreamer(sample));
+        if (!image->m_image)
+            return nullptr;
 
-        BitmapImage* image()
-        {
-            ASSERT(m_image);
-            return m_image.get();
-        }
+        return image;
+    }
+    ~ImageGStreamer();
 
-        void setCropRect(FloatRect rect) { m_cropRect = rect; }
-        FloatRect rect()
-        {
-            if (!m_cropRect.isEmpty())
-                return FloatRect(m_cropRect);
-            ASSERT(m_image);
-            return FloatRect(0, 0, m_image->size().width(), m_image->size().height());
-        }
+    BitmapImage& image()
+    {
+        ASSERT(m_image);
+        return *m_image.get();
+    }
 
-    private:
-        ImageGStreamer(GstSample*);
-        RefPtr<BitmapImage> m_image;
-        FloatRect m_cropRect;
+    void setCropRect(FloatRect rect) { m_cropRect = rect; }
+    FloatRect rect()
+    {
+        ASSERT(m_image);
+        if (!m_cropRect.isEmpty())
+            return FloatRect(m_cropRect);
+        return FloatRect(0, 0, m_image->size().width(), m_image->size().height());
+    }
 
+    bool hasAlpha() const { return m_hasAlpha; }
+
+private:
+    ImageGStreamer(GstSample*);
+    RefPtr<BitmapImage> m_image;
+    FloatRect m_cropRect;
 #if USE(CAIRO)
-        GstVideoFrame m_videoFrame;
+    GstVideoFrame m_videoFrame;
+    bool m_frameMapped { false };
 #endif
-    };
-}
+    bool m_hasAlpha { false };
+};
 
-#endif // USE(GSTREAMER)
-#endif
+}
+#endif // ENABLE(VIDEO) && USE(GSTREAMER)

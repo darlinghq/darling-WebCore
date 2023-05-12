@@ -57,12 +57,8 @@ struct ProtectionSpaceHash {
 
 namespace WTF {
 
-    template<> struct HashTraits<WebCore::ProtectionSpace> : SimpleClassHashTraits<WebCore::ProtectionSpace> { };
-
-    template<typename T> struct DefaultHash;
-    template<> struct DefaultHash<WebCore::ProtectionSpace> {
-        typedef WebCore::ProtectionSpaceHash Hash;
-    };
+template<> struct HashTraits<WebCore::ProtectionSpace> : SimpleClassHashTraits<WebCore::ProtectionSpace> { };
+template<> struct DefaultHash<WebCore::ProtectionSpace> : WebCore::ProtectionSpaceHash { };
 
 } // namespace WTF
 

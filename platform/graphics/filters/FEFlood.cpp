@@ -23,14 +23,15 @@
 #include "config.h"
 #include "FEFlood.h"
 
+#include "ColorSerialization.h"
 #include "Filter.h"
 #include "GraphicsContext.h"
-#include "TextStream.h"
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
 FEFlood::FEFlood(Filter& filter, const Color& floodColor, float floodOpacity)
-    : FilterEffect(filter)
+    : FilterEffect(filter, Type::Flood)
     , m_floodColor(floodColor)
     , m_floodOpacity(floodOpacity)
 {
@@ -41,22 +42,12 @@ Ref<FEFlood> FEFlood::create(Filter& filter, const Color& floodColor, float floo
     return adoptRef(*new FEFlood(filter, floodColor, floodOpacity));
 }
 
-const Color& FEFlood::floodColor() const
-{
-    return m_floodColor;
-}
-
 bool FEFlood::setFloodColor(const Color& color)
 {
     if (m_floodColor == color)
         return false;
     m_floodColor = color;
     return true;
-}
-
-float FEFlood::floodOpacity() const
-{
-    return m_floodOpacity;
 }
 
 bool FEFlood::setFloodOpacity(float floodOpacity)
@@ -73,20 +64,15 @@ void FEFlood::platformApplySoftware()
     if (!resultImage)
         return;
 
-    const Color& color = colorWithOverrideAlpha(floodColor().rgb(), floodOpacity());
+    auto color = floodColor().colorWithAlphaMultipliedBy(floodOpacity());
     resultImage->context().fillRect(FloatRect(FloatPoint(), absolutePaintRect().size()), color);
 }
 
-void FEFlood::dump()
+TextStream& FEFlood::externalRepresentation(TextStream& ts, RepresentationType representation) const
 {
-}
-
-TextStream& FEFlood::externalRepresentation(TextStream& ts, int indent) const
-{
-    writeIndent(ts, indent);
-    ts << "[feFlood";
-    FilterEffect::externalRepresentation(ts);
-    ts << " flood-color=\"" << floodColor().nameForRenderTreeAsText() << "\" "
+    ts << indent << "[feFlood";
+    FilterEffect::externalRepresentation(ts, representation);
+    ts << " flood-color=\"" << serializationForRenderTreeAsText(floodColor()) << "\" "
        << "flood-opacity=\"" << floodOpacity() << "\"]\n";
     return ts;
 }

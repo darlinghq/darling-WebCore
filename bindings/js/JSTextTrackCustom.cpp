@@ -25,16 +25,16 @@
 
 #include "config.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "JSTextTrack.h"
 
 #include "JSTextTrackCueList.h"
 #include "JSTrackCustom.h"
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
 void JSTextTrack::visitAdditionalChildren(SlotVisitor& visitor)
 {

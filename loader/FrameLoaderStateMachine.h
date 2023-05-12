@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include "PlatformExportMacros.h"
 #include <wtf/Noncopyable.h>
 
 namespace WebCore {
@@ -53,10 +52,12 @@ public:
 
     WEBCORE_EXPORT bool committingFirstRealLoad() const;
     bool committedFirstRealDocumentLoad() const;
-    bool creatingInitialEmptyDocument() const;
+    WEBCORE_EXPORT bool creatingInitialEmptyDocument() const;
     WEBCORE_EXPORT bool isDisplayingInitialEmptyDocument() const;
     WEBCORE_EXPORT bool firstLayoutDone() const;
     void advanceTo(State);
+
+    State stateForDebugging() const { return m_state; }
 
 private:
     State m_state;

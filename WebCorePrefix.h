@@ -41,22 +41,9 @@
 #endif
 #endif
 
-#if OS(WINDOWS)
-
-#if !USE(CURL)
-#ifndef _WINSOCKAPI_
-#define _WINSOCKAPI_ // Prevent inclusion of winsock.h in windows.h
-#endif
-#endif
-
-#undef WEBCORE_EXPORT
-#define WEBCORE_EXPORT WTF_EXPORT_DECLARATION
-
-#else
-
+#if !OS(WINDOWS)
 #include <pthread.h>
-
-#endif // OS(WINDOWS)
+#endif // !OS(WINDOWS)
 
 #include <sys/types.h>
 #include <fcntl.h>
@@ -92,7 +79,13 @@
 #include <sys/resource.h>
 #endif
 
+#if USE(CF)
 #include <CoreFoundation/CoreFoundation.h>
+#endif
+
+#if USE(CG)
+#include <CoreGraphics/CoreGraphics.h>
+#endif
 
 #if OS(WINDOWS)
 #ifndef CF_IMPLICIT_BRIDGING_ENABLED
@@ -103,7 +96,9 @@
 #define CF_IMPLICIT_BRIDGING_DISABLED
 #endif
 
+#if USE(CF)
 #include <CoreFoundation/CFBase.h>
+#endif
 
 #ifndef CF_ENUM
 #define CF_ENUM(_type, _name) _type _name; enum
@@ -120,7 +115,6 @@
 #endif
 
 #if PLATFORM(WIN_CAIRO)
-#include <ConditionalMacros.h>
 #include <windows.h>
 #else
 
@@ -143,26 +137,44 @@
 #endif
 
 #include <windows.h>
-#else
-#if !PLATFORM(IOS)
-#include <CoreServices/CoreServices.h>
-#endif // !PLATFORM(IOS)
 #endif // OS(WINDOWS)
+
+#if PLATFORM(IOS_FAMILY)
+#include <MobileCoreServices/MobileCoreServices.h>
+#endif
+
+#if PLATFORM(MAC)
+#if !USE(APPLE_INTERNAL_SDK)
+/* SecTrustedApplication.h declares SecTrustedApplicationCreateFromPath(...) to
+ * be unavailable on macOS, so do not include that header. */
+#define _SECURITY_SECTRUSTEDAPPLICATION_H_
+#endif
+#include <CoreServices/CoreServices.h>
+#endif
 
 #endif
 
 #ifdef __OBJC__
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 #import <Foundation/Foundation.h>
 #else
 #if USE(APPKIT)
 #import <Cocoa/Cocoa.h>
-#import <wtf/mac/AppKitCompatibilityDeclarations.h>
 #endif
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY)
 #endif
 
 #ifdef __cplusplus
+
+#if !PLATFORM(WIN)
+#import <wtf/FastMalloc.h>
+#import <wtf/HashMap.h>
+#import <wtf/Optional.h>
+#import <wtf/StdLibExtras.h>
+#import <wtf/text/AtomString.h>
+#import <wtf/text/WTFString.h>
+#endif
+
 #define new ("if you use new/delete make sure to include config.h at the top of the file"()) 
 #define delete ("if you use new/delete make sure to include config.h at the top of the file"()) 
 #endif

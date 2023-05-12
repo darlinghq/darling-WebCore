@@ -28,15 +28,19 @@
 
 #if ENABLE(SPEECH_SYNTHESIS)
 
+#include <wtf/IsoMallocInlines.h>
+
 namespace WebCore {
 
-Ref<SpeechSynthesisEvent> SpeechSynthesisEvent::create(const AtomicString& type, unsigned charIndex, float elapsedTime, const String& name)
+WTF_MAKE_ISO_ALLOCATED_IMPL(SpeechSynthesisEvent);
+
+Ref<SpeechSynthesisEvent> SpeechSynthesisEvent::create(const AtomString& type, unsigned charIndex, float elapsedTime, const String& name)
 {
     return adoptRef(*new SpeechSynthesisEvent(type, charIndex, elapsedTime, name));
 }
 
-SpeechSynthesisEvent::SpeechSynthesisEvent(const AtomicString& type, unsigned charIndex, float elapsedTime, const String& name)
-    : Event(type, false, false)
+SpeechSynthesisEvent::SpeechSynthesisEvent(const AtomString& type, unsigned charIndex, float elapsedTime, const String& name)
+    : Event(type, CanBubble::No, IsCancelable::No)
     , m_charIndex(charIndex)
     , m_elapsedTime(elapsedTime)
     , m_name(name)

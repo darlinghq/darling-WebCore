@@ -37,6 +37,10 @@
 #include <wtf/TypeCasts.h>
 #include <wtf/Vector.h>
 
+namespace WTF {
+class TextStream;
+}
+
 namespace WebCore {
 
 class FloatRect;
@@ -46,25 +50,27 @@ class SVGPathByteStream;
 
 class BasicShape : public RefCounted<BasicShape> {
 public:
-    virtual ~BasicShape() { }
+    virtual ~BasicShape() = default;
 
-    enum Type {
-        BasicShapePolygonType,
-        BasicShapePathType,
-        BasicShapeCircleType,
-        BasicShapeEllipseType,
-        BasicShapeInsetType
+    enum class Type {
+        Polygon,
+        Path,
+        Circle,
+        Ellipse,
+        Inset
     };
 
     virtual Type type() const = 0;
 
     virtual const Path& path(const FloatRect&) = 0;
-    virtual WindRule windRule() const { return RULE_NONZERO; }
+    virtual WindRule windRule() const { return WindRule::NonZero; }
 
     virtual bool canBlend(const BasicShape&) const = 0;
     virtual Ref<BasicShape> blend(const BasicShape& from, double) const = 0;
 
     virtual bool operator==(const BasicShape&) const = 0;
+    
+    virtual void dump(TextStream&) const = 0;
 };
 
 class BasicShapeCenterCoordinate {
@@ -75,8 +81,6 @@ public:
     };
 
     BasicShapeCenterCoordinate()
-        : m_direction(TopLeft)
-        , m_length(Undefined)
     {
         updateComputedLength();
     }
@@ -86,13 +90,6 @@ public:
         , m_length(length)
     {
         updateComputedLength();
-    }
-
-    BasicShapeCenterCoordinate(const BasicShapeCenterCoordinate& other)
-        : m_direction(other.direction())
-        , m_length(other.length())
-        , m_computedLength(other.m_computedLength)
-    {
     }
 
     Direction direction() const { return m_direction; }
@@ -114,8 +111,8 @@ public:
 private:
     void updateComputedLength();
 
-    Direction m_direction;
-    Length m_length;
+    Direction m_direction { TopLeft };
+    Length m_length { Undefined };
     Length m_computedLength;
 };
 
@@ -126,10 +123,8 @@ public:
         ClosestSide,
         FarthestSide
     };
-    BasicShapeRadius()
-        : m_value(Undefined),
-        m_type(ClosestSide)
-    { }
+
+    BasicShapeRadius() = default;
 
     explicit BasicShapeRadius(Length v)
         : m_value(v)
@@ -138,10 +133,6 @@ public:
     explicit BasicShapeRadius(Type t)
         : m_value(Undefined)
         , m_type(t)
-    { }
-    BasicShapeRadius(const BasicShapeRadius& other)
-        : m_value(other.value())
-        , m_type(other.type())
     { }
 
     const Length& value() const { return m_value; }
@@ -167,9 +158,8 @@ public:
     }
 
 private:
-    Length m_value;
-    Type m_type;
-
+    Length m_value { Undefined };
+    Type m_type { ClosestSide };
 };
 
 class BasicShapeCircle final : public BasicShape {
@@ -188,7 +178,7 @@ public:
 private:
     BasicShapeCircle() = default;
 
-    Type type() const override { return BasicShapeCircleType; }
+    Type type() const override { return Type::Circle; }
 
     const Path& path(const FloatRect&) override;
 
@@ -196,6 +186,8 @@ private:
     Ref<BasicShape> blend(const BasicShape& from, double) const override;
 
     bool operator==(const BasicShape&) const override;
+
+    void dump(TextStream&) const final;
 
     BasicShapeCenterCoordinate m_centerX;
     BasicShapeCenterCoordinate m_centerY;
@@ -220,7 +212,7 @@ public:
 private:
     BasicShapeEllipse() = default;
 
-    Type type() const override { return BasicShapeEllipseType; }
+    Type type() const override { return Type::Ellipse; }
 
     const Path& path(const FloatRect&) override;
 
@@ -228,6 +220,8 @@ private:
     Ref<BasicShape> blend(const BasicShape& from, double) const override;
 
     bool operator==(const BasicShape&) const override;
+
+    void dump(TextStream&) const final;
 
     BasicShapeCenterCoordinate m_centerX;
     BasicShapeCenterCoordinate m_centerY;
@@ -251,7 +245,7 @@ public:
 private:
     BasicShapePolygon() = default;
 
-    Type type() const override { return BasicShapePolygonType; }
+    Type type() const override { return Type::Polygon; }
 
     const Path& path(const FloatRect&) override;
 
@@ -260,7 +254,9 @@ private:
 
     bool operator==(const BasicShape&) const override;
 
-    WindRule m_windRule { RULE_NONZERO };
+    void dump(TextStream&) const final;
+
+    WindRule m_windRule { WindRule::NonZero };
     Vector<Length> m_values;
 };
 
@@ -274,12 +270,14 @@ public:
     void setWindRule(WindRule windRule) { m_windRule = windRule; }
     WindRule windRule() const override { return m_windRule; }
 
+    void setZoom(float z) { m_zoom = z; }
+
     const SVGPathByteStream* pathData() const { return m_byteStream.get(); }
 
 private:
     BasicShapePath(std::unique_ptr<SVGPathByteStream>&&);
 
-    Type type() const override { return BasicShapePathType; }
+    Type type() const override { return Type::Path; }
 
     const Path& path(const FloatRect&) override;
 
@@ -288,8 +286,11 @@ private:
 
     bool operator==(const BasicShape&) const override;
 
+    void dump(TextStream&) const final;
+
     std::unique_ptr<SVGPathByteStream> m_byteStream;
-    WindRule m_windRule { RULE_NONZERO };
+    float m_zoom { 1 };
+    WindRule m_windRule { WindRule::NonZero };
 };
 
 class BasicShapeInset final : public BasicShape {
@@ -319,7 +320,7 @@ public:
 private:
     BasicShapeInset() = default;
 
-    Type type() const override { return BasicShapeInsetType; }
+    Type type() const override { return Type::Inset; }
 
     const Path& path(const FloatRect&) override;
 
@@ -327,6 +328,8 @@ private:
     Ref<BasicShape> blend(const BasicShape& from, double) const override;
 
     bool operator==(const BasicShape&) const override;
+
+    void dump(TextStream&) const final;
 
     Length m_right;
     Length m_top;
@@ -339,6 +342,10 @@ private:
     LengthSize m_bottomLeftRadius;
 };
 
+WTF::TextStream& operator<<(WTF::TextStream&, const BasicShapeRadius&);
+WTF::TextStream& operator<<(WTF::TextStream&, const BasicShapeCenterCoordinate&);
+WTF::TextStream& operator<<(WTF::TextStream&, const BasicShape&);
+
 } // namespace WebCore
 
 #define SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(ToValueTypeName, predicate) \
@@ -346,8 +353,8 @@ SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::ToValueTypeName) \
     static bool isType(const WebCore::BasicShape& basicShape) { return basicShape.type() == WebCore::predicate; } \
 SPECIALIZE_TYPE_TRAITS_END()
 
-SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapeCircle, BasicShape::BasicShapeCircleType)
-SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapeEllipse, BasicShape::BasicShapeEllipseType)
-SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapePolygon, BasicShape::BasicShapePolygonType)
-SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapePath, BasicShape::BasicShapePathType)
-SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapeInset, BasicShape::BasicShapeInsetType)
+SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapeCircle, BasicShape::Type::Circle)
+SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapeEllipse, BasicShape::Type::Ellipse)
+SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapePolygon, BasicShape::Type::Polygon)
+SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapePath, BasicShape::Type::Path)
+SPECIALIZE_TYPE_TRAITS_BASIC_SHAPE(BasicShapeInset, BasicShape::Type::Inset)

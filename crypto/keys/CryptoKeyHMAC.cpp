@@ -26,12 +26,10 @@
 #include "config.h"
 #include "CryptoKeyHMAC.h"
 
-#if ENABLE(SUBTLE_CRYPTO)
+#if ENABLE(WEB_CRYPTO)
 
 #include "CryptoAlgorithmHmacKeyParams.h"
 #include "CryptoAlgorithmRegistry.h"
-#include "CryptoKeyDataOctetSequence.h"
-#include "ExceptionCode.h"
 #include "ExceptionOr.h"
 #include "JsonWebKey.h"
 #include <wtf/text/Base64.h>
@@ -69,9 +67,7 @@ CryptoKeyHMAC::CryptoKeyHMAC(Vector<uint8_t>&& key, CryptoAlgorithmIdentifier ha
 {
 }
 
-CryptoKeyHMAC::~CryptoKeyHMAC()
-{
-}
+CryptoKeyHMAC::~CryptoKeyHMAC() = default;
 
 RefPtr<CryptoKeyHMAC> CryptoKeyHMAC::generate(size_t lengthBits, CryptoAlgorithmIdentifier hash, bool extractable, CryptoKeyUsageBitmap usages)
 {
@@ -143,17 +139,15 @@ ExceptionOr<size_t> CryptoKeyHMAC::getKeyLength(const CryptoAlgorithmParameters&
     return Exception { TypeError };
 }
 
-std::unique_ptr<KeyAlgorithm> CryptoKeyHMAC::buildAlgorithm() const
+auto CryptoKeyHMAC::algorithm() const -> KeyAlgorithm
 {
-    return std::make_unique<HmacKeyAlgorithm>(CryptoAlgorithmRegistry::singleton().name(algorithmIdentifier()),
-        CryptoAlgorithmRegistry::singleton().name(m_hash), m_key.size() * 8);
-}
-
-std::unique_ptr<CryptoKeyData> CryptoKeyHMAC::exportData() const
-{
-    return std::make_unique<CryptoKeyDataOctetSequence>(m_key);
+    CryptoHmacKeyAlgorithm result;
+    result.name = CryptoAlgorithmRegistry::singleton().name(algorithmIdentifier());
+    result.hash.name = CryptoAlgorithmRegistry::singleton().name(m_hash);
+    result.length = m_key.size() * 8;
+    return result;
 }
 
 } // namespace WebCore
 
-#endif // ENABLE(SUBTLE_CRYPTO)
+#endif // ENABLE(WEB_CRYPTO)

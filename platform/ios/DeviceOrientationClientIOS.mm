@@ -29,14 +29,13 @@
 
 #import "WebCoreMotionManager.h"
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY) && ENABLE(DEVICE_ORIENTATION)
 
 namespace WebCore {
 
-DeviceOrientationClientIOS::DeviceOrientationClientIOS()
+DeviceOrientationClientIOS::DeviceOrientationClientIOS(RefPtr<DeviceOrientationUpdateProvider>&& deviceOrientationUpdateProvider)
     : DeviceOrientationClient()
-    , m_motionManager(nullptr)
-    , m_updating(0)
+    , m_deviceOrientationUpdateProvider(WTFMove(deviceOrientationUpdateProvider))
 {
 }
 
@@ -53,6 +52,11 @@ void DeviceOrientationClientIOS::startUpdating()
 {
     m_updating = true;
 
+    if (m_deviceOrientationUpdateProvider) {
+        m_deviceOrientationUpdateProvider->startUpdatingDeviceOrientation(*this);
+        return;
+    }
+
     if (!m_motionManager)
         m_motionManager = [WebCoreMotionManager sharedManager];
 
@@ -62,6 +66,11 @@ void DeviceOrientationClientIOS::startUpdating()
 void DeviceOrientationClientIOS::stopUpdating()
 {
     m_updating = false;
+
+    if (m_deviceOrientationUpdateProvider) {
+        m_deviceOrientationUpdateProvider->stopUpdatingDeviceOrientation(*this);
+        return;
+    }
 
     // Remove ourselves as the orientation client so we won't get updates.
     [m_motionManager removeOrientationClient:this];
@@ -74,6 +83,11 @@ DeviceOrientationData* DeviceOrientationClientIOS::lastOrientation() const
 
 void DeviceOrientationClientIOS::deviceOrientationControllerDestroyed()
 {
+    if (m_deviceOrientationUpdateProvider) {
+        m_deviceOrientationUpdateProvider->stopUpdatingDeviceOrientation(*this);
+        return;
+    }
+
     [m_motionManager removeOrientationClient:this];
 }
     
@@ -82,7 +96,7 @@ void DeviceOrientationClientIOS::orientationChanged(double alpha, double beta, d
     if (!m_updating)
         return;
 
-#if PLATFORM(IOS_SIMULATOR)
+#if PLATFORM(IOS_FAMILY_SIMULATOR)
     UNUSED_PARAM(alpha);
     UNUSED_PARAM(beta);
     UNUSED_PARAM(gamma);
@@ -98,4 +112,4 @@ void DeviceOrientationClientIOS::orientationChanged(double alpha, double beta, d
 
 } // namespace WebCore
 
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY) && ENABLE(DEVICE_ORIENTATION)

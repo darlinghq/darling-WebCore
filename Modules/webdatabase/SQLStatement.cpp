@@ -29,6 +29,7 @@
 #include "SQLStatement.h"
 
 #include "Database.h"
+#include "Document.h"
 #include "Logging.h"
 #include "SQLError.h"
 #include "SQLResultSet.h"
@@ -77,15 +78,13 @@ namespace WebCore {
 SQLStatement::SQLStatement(Database& database, const String& statement, Vector<SQLValue>&& arguments, RefPtr<SQLStatementCallback>&& callback, RefPtr<SQLStatementErrorCallback>&& errorCallback, int permissions)
     : m_statement(statement.isolatedCopy())
     , m_arguments(WTFMove(arguments))
-    , m_statementCallbackWrapper(WTFMove(callback), &database.scriptExecutionContext())
-    , m_statementErrorCallbackWrapper(WTFMove(errorCallback), &database.scriptExecutionContext())
+    , m_statementCallbackWrapper(WTFMove(callback), &database.document())
+    , m_statementErrorCallbackWrapper(WTFMove(errorCallback), &database.document())
     , m_permissions(permissions)
 {
 }
 
-SQLStatement::~SQLStatement()
-{
-}
+SQLStatement::~SQLStatement() = default;
 
 SQLError* SQLStatement::sqlError() const
 {
@@ -147,7 +146,7 @@ bool SQLStatement::execute(Database& db)
         }
     }
 
-    RefPtr<SQLResultSet> resultSet = SQLResultSet::create();
+    auto resultSet = SQLResultSet::create();
 
     // Step so we can fetch the column names.
     result = statement.step();
@@ -195,7 +194,7 @@ bool SQLStatement::execute(Database& db)
     // For now, this seems sufficient
     resultSet->setRowsAffected(database.lastChanges());
 
-    m_resultSet = resultSet;
+    m_resultSet = WTFMove(resultSet);
     return true;
 }
 

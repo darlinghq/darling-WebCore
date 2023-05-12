@@ -1,7 +1,7 @@
 /*
  *  Copyright (C) 2000 Harri Porten (porten@kde.org)
  *  Copyright (C) 2006 Jon Shier (jshier@iastate.edu)
- *  Copyright (C) 2003, 2004, 2005, 2006, 2007, 2008, 2010 Apple Inc. All rights reseved.
+ *  Copyright (C) 2003-2019 Apple Inc. All rights reseved.
  *  Copyright (C) 2006 Alexey Proskuryakov (ap@webkit.org)
  *
  *  This library is free software; you can redistribute it and/or
@@ -26,24 +26,28 @@
 #include "JSDOMBinding.h"
 #include "JSDOMBindingSecurity.h"
 #include "JSDOMExceptionHandling.h"
+#include "JSDOMWindowCustom.h"
 #include "RuntimeApplicationChecks.h"
-#include <runtime/JSFunction.h>
-#include <runtime/Lookup.h>
-
-using namespace JSC;
+#include "WebCoreJSClientData.h"
+#include <JavaScriptCore/JSFunction.h>
+#include <JavaScriptCore/Lookup.h>
 
 namespace WebCore {
+using namespace JSC;
 
-static bool getOwnPropertySlotCommon(JSLocation& thisObject, ExecState& state, PropertyName propertyName, PropertySlot& slot)
+static JSC_DECLARE_CUSTOM_GETTER(jsLocationInstanceFunction_replaceNonCaching);
+
+JSC_DEFINE_CUSTOM_GETTER(jsLocationInstanceFunction_replaceNonCaching, (JSGlobalObject* globalObject, EncodedJSValue, PropertyName propertyName))
 {
-    VM& vm = state.vm();
+    return nonCachingStaticFunctionGetterImpl<jsLocationInstanceFunction_replace, 1>(globalObject, propertyName);
+}
+
+static bool getOwnPropertySlotCommon(JSLocation& thisObject, JSGlobalObject& lexicalGlobalObject, PropertyName propertyName, PropertySlot& slot)
+{
+    VM& vm = lexicalGlobalObject.vm();
     auto scope = DECLARE_THROW_SCOPE(vm);
 
-    Frame* frame = thisObject.wrapped().frame();
-    if (!frame) {
-        slot.setUndefined();
-        return true;
-    }
+    auto* window = thisObject.wrapped().window();
 
     // When accessing Location cross-domain, functions are always the native built-in ones.
     // See JSDOMWindow::getOwnPropertySlotDelegate for additional details.
@@ -51,196 +55,159 @@ static bool getOwnPropertySlotCommon(JSLocation& thisObject, ExecState& state, P
     // Our custom code is only needed to implement the Window cross-domain scheme, so if access is
     // allowed, return false so the normal lookup will take place.
     String message;
-    if (BindingSecurity::shouldAllowAccessToFrame(state, *frame, message))
+    if (BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, window, message))
         return false;
 
     // https://html.spec.whatwg.org/#crossorigingetownpropertyhelper-(-o,-p-)
-    if (propertyName == state.propertyNames().toStringTagSymbol || propertyName == state.propertyNames().hasInstanceSymbol || propertyName == state.propertyNames().isConcatSpreadableSymbol) {
-        slot.setValue(&thisObject, ReadOnly | DontEnum, jsUndefined());
-        return true;
-    }
 
     // We only allow access to Location.replace() cross origin.
-    if (propertyName == state.propertyNames().replace) {
-        slot.setCustom(&thisObject, ReadOnly | DontEnum, nonCachingStaticFunctionGetter<jsLocationInstanceFunctionReplace, 1>);
+    if (propertyName == vm.propertyNames->replace) {
+        slot.setCustom(&thisObject, static_cast<unsigned>(PropertyAttribute::ReadOnly | PropertyAttribute::DontEnum), jsLocationInstanceFunction_replaceNonCaching);
         return true;
     }
 
     // Getting location.href cross origin needs to throw. However, getOwnPropertyDescriptor() needs to return
     // a descriptor that has a setter but no getter.
-    if (slot.internalMethodType() == PropertySlot::InternalMethodType::GetOwnProperty && propertyName == state.propertyNames().href) {
+    if (slot.internalMethodType() == PropertySlot::InternalMethodType::GetOwnProperty && propertyName == static_cast<JSVMClientData*>(vm.clientData)->builtinNames().hrefPublicName()) {
         auto* entry = JSLocation::info()->staticPropHashTable->entry(propertyName);
         CustomGetterSetter* customGetterSetter = CustomGetterSetter::create(vm, nullptr, entry->propertyPutter());
-        slot.setCustomGetterSetter(&thisObject, DontEnum | CustomAccessor, customGetterSetter);
+        slot.setCustomGetterSetter(&thisObject, static_cast<unsigned>(JSC::PropertyAttribute::CustomAccessor | PropertyAttribute::DontEnum), customGetterSetter);
         return true;
     }
 
-    throwSecurityError(state, scope, message);
+    if (handleCommonCrossOriginProperties(&thisObject, vm, propertyName, slot))
+        return true;
+
+    throwSecurityError(lexicalGlobalObject, scope, message);
     slot.setUndefined();
-    return true;
+    return false;
 }
 
-bool JSLocation::getOwnPropertySlot(JSObject* object, ExecState* state, PropertyName propertyName, PropertySlot& slot)
+bool JSLocation::getOwnPropertySlot(JSObject* object, JSGlobalObject* lexicalGlobalObject, PropertyName propertyName, PropertySlot& slot)
+{
+    VM& vm = lexicalGlobalObject->vm();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    auto* thisObject = jsCast<JSLocation*>(object);
+    ASSERT_GC_OBJECT_INHERITS(thisObject, info());
+
+    bool result = getOwnPropertySlotCommon(*thisObject, *lexicalGlobalObject, propertyName, slot);
+    EXCEPTION_ASSERT(!scope.exception() || !result);
+    RETURN_IF_EXCEPTION(scope, false);
+    if (result)
+        return true;
+    RELEASE_AND_RETURN(scope, JSObject::getOwnPropertySlot(object, lexicalGlobalObject, propertyName, slot));
+}
+
+bool JSLocation::getOwnPropertySlotByIndex(JSObject* object, JSGlobalObject* lexicalGlobalObject, unsigned index, PropertySlot& slot)
+{
+    VM& vm = lexicalGlobalObject->vm();
+    auto scope = DECLARE_THROW_SCOPE(vm);
+    auto* thisObject = jsCast<JSLocation*>(object);
+    ASSERT_GC_OBJECT_INHERITS(thisObject, info());
+
+    bool result = getOwnPropertySlotCommon(*thisObject, *lexicalGlobalObject, Identifier::from(vm, index), slot);
+    EXCEPTION_ASSERT(!scope.exception() || !result);
+    RETURN_IF_EXCEPTION(scope, false);
+    if (result)
+        return true;
+    RELEASE_AND_RETURN(scope, JSObject::getOwnPropertySlotByIndex(object, lexicalGlobalObject, index, slot));
+}
+
+void JSLocation::doPutPropertySecurityCheck(JSObject* object, JSGlobalObject* lexicalGlobalObject, PropertyName propertyName, PutPropertySlot&)
 {
     auto* thisObject = jsCast<JSLocation*>(object);
     ASSERT_GC_OBJECT_INHERITS(thisObject, info());
 
-    if (getOwnPropertySlotCommon(*thisObject, *state, propertyName, slot))
-        return true;
-    return JSObject::getOwnPropertySlot(object, state, propertyName, slot);
-}
-
-bool JSLocation::getOwnPropertySlotByIndex(JSObject* object, ExecState* state, unsigned index, PropertySlot& slot)
-{
-    auto* thisObject = jsCast<JSLocation*>(object);
-    ASSERT_GC_OBJECT_INHERITS(thisObject, info());
-
-    if (getOwnPropertySlotCommon(*thisObject, *state, Identifier::from(state, index), slot))
-        return true;
-    return JSObject::getOwnPropertySlotByIndex(object, state, index, slot);
-}
-
-static bool putCommon(JSLocation& thisObject, ExecState& state, PropertyName propertyName)
-{
-    Frame* frame = thisObject.wrapped().frame();
-    if (!frame)
-        return true;
-
-    // Silently block access to toString and valueOf.
-    if (propertyName == state.propertyNames().toString || propertyName == state.propertyNames().valueOf)
-        return true;
+    VM& vm = lexicalGlobalObject->vm();
 
     // Always allow assigning to the whole location.
     // However, alllowing assigning of pieces might inadvertently disclose parts of the original location.
     // So fall through to the access check for those.
-    if (propertyName == state.propertyNames().href)
-        return false;
+    if (propertyName == static_cast<JSVMClientData*>(vm.clientData)->builtinNames().hrefPublicName())
+        return;
 
     // Block access and throw if there is a security error.
-    if (!BindingSecurity::shouldAllowAccessToFrame(&state, frame, ThrowSecurityError))
-        return true;
-
-    return false;
+    BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, thisObject->wrapped().window(), ThrowSecurityError);
 }
 
-bool JSLocation::put(JSCell* cell, ExecState* state, PropertyName propertyName, JSValue value, PutPropertySlot& putPropertySlot)
+bool JSLocation::put(JSCell* cell, JSGlobalObject* lexicalGlobalObject, PropertyName propertyName, JSValue value, PutPropertySlot& putPropertySlot)
+{
+    VM& vm = lexicalGlobalObject->vm();
+    auto* thisObject = jsCast<JSLocation*>(cell);
+    ASSERT_GC_OBJECT_INHERITS(thisObject, info());
+
+    // Always allow assigning to the whole location.
+    // However, allowing assigning of pieces might inadvertently disclose parts of the original location.
+    // So fall through to the access check for those.
+    if (propertyName != static_cast<JSVMClientData*>(vm.clientData)->builtinNames().hrefPublicName()) {
+        if (!BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, thisObject->wrapped().window(), ThrowSecurityError))
+            return false;
+    }
+
+    return JSObject::put(thisObject, lexicalGlobalObject, propertyName, value, putPropertySlot);
+}
+
+bool JSLocation::putByIndex(JSCell* cell, JSGlobalObject* lexicalGlobalObject, unsigned index, JSValue value, bool shouldThrow)
 {
     auto* thisObject = jsCast<JSLocation*>(cell);
     ASSERT_GC_OBJECT_INHERITS(thisObject, info());
 
-    if (putCommon(*thisObject, *state, propertyName))
+    if (!BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, thisObject->wrapped().window(), ThrowSecurityError))
         return false;
 
-    return JSObject::put(thisObject, state, propertyName, value, putPropertySlot);
+    return JSObject::putByIndex(cell, lexicalGlobalObject, index, value, shouldThrow);
 }
 
-bool JSLocation::putByIndex(JSCell* cell, ExecState* state, unsigned index, JSValue value, bool shouldThrow)
-{
-    auto* thisObject = jsCast<JSLocation*>(cell);
-    ASSERT_GC_OBJECT_INHERITS(thisObject, info());
-
-    if (putCommon(*thisObject, *state, Identifier::from(state, index)))
-        return false;
-
-    return JSObject::putByIndex(cell, state, index, value, shouldThrow);
-}
-
-bool JSLocation::deleteProperty(JSCell* cell, ExecState* exec, PropertyName propertyName)
+bool JSLocation::deleteProperty(JSCell* cell, JSGlobalObject* lexicalGlobalObject, PropertyName propertyName, DeletePropertySlot& slot)
 {
     JSLocation* thisObject = jsCast<JSLocation*>(cell);
     // Only allow deleting by frames in the same origin.
-    if (!BindingSecurity::shouldAllowAccessToFrame(exec, thisObject->wrapped().frame(), ThrowSecurityError))
+    if (!BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, thisObject->wrapped().window(), ThrowSecurityError))
         return false;
-    return Base::deleteProperty(thisObject, exec, propertyName);
+    return Base::deleteProperty(thisObject, lexicalGlobalObject, propertyName, slot);
 }
 
-bool JSLocation::deletePropertyByIndex(JSCell* cell, ExecState* exec, unsigned propertyName)
+bool JSLocation::deletePropertyByIndex(JSCell* cell, JSGlobalObject* lexicalGlobalObject, unsigned propertyName)
 {
     JSLocation* thisObject = jsCast<JSLocation*>(cell);
     // Only allow deleting by frames in the same origin.
-    if (!BindingSecurity::shouldAllowAccessToFrame(exec, thisObject->wrapped().frame(), ThrowSecurityError))
+    if (!BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, thisObject->wrapped().window(), ThrowSecurityError))
         return false;
-    return Base::deletePropertyByIndex(thisObject, exec, propertyName);
+    return Base::deletePropertyByIndex(thisObject, lexicalGlobalObject, propertyName);
 }
 
-// https://html.spec.whatwg.org/#crossoriginproperties-(-o-)
-static void addCrossOriginLocationPropertyNames(ExecState& state, PropertyNameArray& propertyNames)
-{
-    static const Identifier* const properties[] = { &state.propertyNames().href, &state.propertyNames().replace };
-    for (auto* property : properties)
-        propertyNames.add(*property);
-}
-
-// https://html.spec.whatwg.org/#crossoriginownpropertykeys-(-o-)
-static void addCrossOriginLocationOwnPropertyNames(ExecState& state, PropertyNameArray& propertyNames)
-{
-    addCrossOriginLocationPropertyNames(state, propertyNames);
-
-    propertyNames.add(state.propertyNames().toStringTagSymbol);
-    propertyNames.add(state.propertyNames().hasInstanceSymbol);
-    propertyNames.add(state.propertyNames().isConcatSpreadableSymbol);
-}
-
-void JSLocation::getOwnPropertyNames(JSObject* object, ExecState* exec, PropertyNameArray& propertyNames, EnumerationMode mode)
+void JSLocation::getOwnPropertyNames(JSObject* object, JSGlobalObject* lexicalGlobalObject, PropertyNameArray& propertyNames, DontEnumPropertiesMode mode)
 {
     JSLocation* thisObject = jsCast<JSLocation*>(object);
-    if (!BindingSecurity::shouldAllowAccessToFrame(exec, thisObject->wrapped().frame(), DoNotReportSecurityError)) {
-        if (mode.includeDontEnumProperties())
-            addCrossOriginLocationOwnPropertyNames(*exec, propertyNames);
+    if (!BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, thisObject->wrapped().window(), DoNotReportSecurityError)) {
+        if (mode == DontEnumPropertiesMode::Include)
+            addCrossOriginOwnPropertyNames<CrossOriginObject::Location>(*lexicalGlobalObject, propertyNames);
         return;
     }
-    Base::getOwnPropertyNames(thisObject, exec, propertyNames, mode);
+    Base::getOwnPropertyNames(thisObject, lexicalGlobalObject, propertyNames, mode);
 }
 
-bool JSLocation::defineOwnProperty(JSObject* object, ExecState* exec, PropertyName propertyName, const PropertyDescriptor& descriptor, bool throwException)
+bool JSLocation::defineOwnProperty(JSObject* object, JSGlobalObject* lexicalGlobalObject, PropertyName propertyName, const PropertyDescriptor& descriptor, bool throwException)
 {
     JSLocation* thisObject = jsCast<JSLocation*>(object);
-    if (!BindingSecurity::shouldAllowAccessToFrame(exec, thisObject->wrapped().frame(), ThrowSecurityError))
+    if (!BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, thisObject->wrapped().window(), ThrowSecurityError))
         return false;
 
-    if (descriptor.isAccessorDescriptor() && (propertyName == exec->propertyNames().toString || propertyName == exec->propertyNames().valueOf))
-        return false;
-    return Base::defineOwnProperty(object, exec, propertyName, descriptor, throwException);
+    return Base::defineOwnProperty(object, lexicalGlobalObject, propertyName, descriptor, throwException);
 }
 
-JSValue JSLocation::getPrototype(JSObject* object, ExecState* exec)
+JSValue JSLocation::getPrototype(JSObject* object, JSGlobalObject* lexicalGlobalObject)
 {
     JSLocation* thisObject = jsCast<JSLocation*>(object);
-    if (!BindingSecurity::shouldAllowAccessToFrame(exec, thisObject->wrapped().frame(), DoNotReportSecurityError))
+    if (!BindingSecurity::shouldAllowAccessToDOMWindow(lexicalGlobalObject, thisObject->wrapped().window(), DoNotReportSecurityError))
         return jsNull();
 
-    return Base::getPrototype(object, exec);
+    return Base::getPrototype(object, lexicalGlobalObject);
 }
 
-bool JSLocation::preventExtensions(JSObject*, ExecState* exec)
+bool JSLocation::preventExtensions(JSObject*, JSGlobalObject*)
 {
-    auto scope = DECLARE_THROW_SCOPE(exec->vm());
-
-    throwTypeError(exec, scope, ASCIILiteral("Cannot prevent extensions on this object"));
     return false;
-}
-
-String JSLocation::toStringName(const JSObject* object, ExecState* exec)
-{
-    auto* thisObject = jsCast<const JSLocation*>(object);
-    if (!BindingSecurity::shouldAllowAccessToFrame(exec, thisObject->wrapped().frame(), DoNotReportSecurityError))
-        return ASCIILiteral("Object");
-    return ASCIILiteral("Location");
-}
-
-bool JSLocationPrototype::put(JSCell* cell, ExecState* state, PropertyName propertyName, JSValue value, PutPropertySlot& slot)
-{
-    auto* thisObject = jsCast<JSLocationPrototype*>(cell);
-    if (propertyName == state->propertyNames().toString || propertyName == state->propertyNames().valueOf)
-        return false;
-    return Base::put(thisObject, state, propertyName, value, slot);
-}
-
-bool JSLocationPrototype::defineOwnProperty(JSObject* object, ExecState* exec, PropertyName propertyName, const PropertyDescriptor& descriptor, bool throwException)
-{
-    if (descriptor.isAccessorDescriptor() && (propertyName == exec->propertyNames().toString || propertyName == exec->propertyNames().valueOf))
-        return false;
-    return Base::defineOwnProperty(object, exec, propertyName, descriptor, throwException);
 }
 
 } // namespace WebCore

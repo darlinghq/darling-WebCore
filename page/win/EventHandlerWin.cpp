@@ -27,96 +27,24 @@
 #include "config.h"
 #include "EventHandler.h"
 
-#include "COMPtr.h"
-#include "Cursor.h"
-#include "DataTransfer.h"
-#include "FloatPoint.h"
-#include "FocusController.h"
-#include "FrameView.h"
-#include "Frame.h"
-#include "FrameSelection.h"
-#include "HitTestRequest.h"
-#include "HitTestResult.h"
 #include "MouseEventWithHitTestResults.h"
-#include "Page.h"
-#include "PlatformKeyboardEvent.h"
-#include "PlatformWheelEvent.h"
-#include "Scrollbar.h"
-#include "WCDataObject.h"
-#include "NotImplemented.h"
 
 namespace WebCore {
 
-#if ENABLE(DRAG_SUPPORT)
-const double EventHandler::TextDragDelay = 0.0;
-#endif
-
-bool EventHandler::passMousePressEventToSubframe(MouseEventWithHitTestResults& mev, Frame* subframe)
-{
-    subframe->eventHandler().handleMousePressEvent(mev.event());
-    return true;
-}
-
-bool EventHandler::passMouseMoveEventToSubframe(MouseEventWithHitTestResults& mev, Frame* subframe, HitTestResult* hoveredNode)
+bool EventHandler::passMouseMoveEventToSubframe(MouseEventWithHitTestResults& mouseEventAndResult, Frame& subframe, HitTestResult* hitTestResult)
 {
 #if ENABLE(DRAG_SUPPORT)
     if (m_mouseDownMayStartDrag && !m_mouseDownWasInSubframe)
         return false;
 #endif
-    subframe->eventHandler().handleMouseMoveEvent(mev.event(), hoveredNode);
-    return true;
-}
 
-bool EventHandler::passMouseReleaseEventToSubframe(MouseEventWithHitTestResults& mev, Frame* subframe)
-{
-    subframe->eventHandler().handleMouseReleaseEvent(mev.event());
-    return true;
-}
-
-bool EventHandler::widgetDidHandleWheelEvent(const PlatformWheelEvent& wheelEvent, Widget& widget)
-{
-    if (!is<FrameView>(widget))
-        return false;
-
-    return downcast<FrameView>(widget).frame().eventHandler().handleWheelEvent(wheelEvent);
-}
-
-bool EventHandler::tabsToAllFormControls(KeyboardEvent&) const
-{
+    subframe.eventHandler().handleMouseMoveEvent(mouseEventAndResult.event(), hitTestResult);
     return true;
 }
 
 bool EventHandler::eventActivatedView(const PlatformMouseEvent& event) const
 {
     return event.didActivateWebView();
-}
-
-#if ENABLE(DRAG_SUPPORT)
-
-Ref<DataTransfer> EventHandler::createDraggingDataTransfer() const
-{
-    return DataTransfer::createForDrag();
-}
-
-#endif
-
-void EventHandler::focusDocumentView()
-{
-    Page* page = m_frame.page();
-    if (!page)
-        return;
-    page->focusController().setFocusedFrame(&m_frame);
-}
-
-bool EventHandler::passWidgetMouseDownEventToWidget(const MouseEventWithHitTestResults&)
-{
-    notImplemented();
-    return false;
-}
-
-OptionSet<PlatformEvent::Modifier> EventHandler::accessKeyModifiers()
-{
-    return PlatformEvent::Modifier::AltKey;
 }
 
 }

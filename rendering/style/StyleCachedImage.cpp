@@ -24,32 +24,29 @@
 #include "config.h"
 #include "StyleCachedImage.h"
 
-#include "CSSCursorImageValue.h"
-#include "CSSImageSetValue.h"
 #include "CSSImageValue.h"
 #include "CachedImage.h"
 #include "RenderElement.h"
+#include "RenderView.h"
 
 namespace WebCore {
 
-StyleCachedImage::StyleCachedImage(CSSValue& cssValue)
+Ref<StyleCachedImage> StyleCachedImage::create(CSSImageValue& cssValue, float scaleFactor)
+{
+    return adoptRef(*new StyleCachedImage(cssValue, scaleFactor));
+}
+
+StyleCachedImage::StyleCachedImage(CSSImageValue& cssValue, float scaleFactor)
     : m_cssValue(cssValue)
+    , m_scaleFactor(scaleFactor)
 {
-    ASSERT(is<CSSImageValue>(m_cssValue) || is<CSSImageSetValue>(m_cssValue) || is<CSSCursorImageValue>(m_cssValue));
-
     m_isCachedImage = true;
-
-    // CSSImageValue doesn't get invalidated so we can grab the CachedImage immediately if it exists.
-    if (is<CSSImageValue>(m_cssValue)) {
-        m_cachedImage = downcast<CSSImageValue>(m_cssValue.get()).cachedImage();
-        if (m_cachedImage)
-            m_isPending = false;
-    }
+    m_cachedImage = m_cssValue->cachedImage();
+    if (m_cachedImage)
+        m_isPending = false;
 }
 
-StyleCachedImage::~StyleCachedImage()
-{
-}
+StyleCachedImage::~StyleCachedImage() = default;
 
 bool StyleCachedImage::operator==(const StyleImage& other) const
 {
@@ -67,28 +64,16 @@ bool StyleCachedImage::operator==(const StyleImage& other) const
     return false;
 }
 
+URL StyleCachedImage::imageURL()
+{
+    return m_cssValue->url();
+}
+
 void StyleCachedImage::load(CachedResourceLoader& loader, const ResourceLoaderOptions& options)
 {
     ASSERT(m_isPending);
     m_isPending = false;
-
-    if (is<CSSImageValue>(m_cssValue)) {
-        auto& imageValue = downcast<CSSImageValue>(m_cssValue.get());
-        m_cachedImage = imageValue.loadImage(loader, options);
-        return;
-    }
-
-    if (is<CSSImageSetValue>(m_cssValue)) {
-        auto& imageSetValue = downcast<CSSImageSetValue>(m_cssValue.get());
-        std::tie(m_cachedImage, m_scaleFactor) = imageSetValue.loadBestFitImage(loader, options);
-        return;
-    }
-
-    if (is<CSSCursorImageValue>(m_cssValue.get())) {
-        auto& cursorValue = downcast<CSSCursorImageValue>(m_cssValue.get());
-        std::tie(m_cachedImage, m_scaleFactor) = cursorValue.loadImage(loader, options);
-        return;
-    }
+    m_cachedImage = m_cssValue->loadImage(loader, options);
 }
 
 CachedImage* StyleCachedImage::cachedImage() const
@@ -164,11 +149,11 @@ bool StyleCachedImage::usesImageContainerSize() const
     return m_cachedImage->usesImageContainerSize();
 }
 
-void StyleCachedImage::setContainerSizeForRenderer(const RenderElement* renderer, const FloatSize& imageContainerSize, float imageContainerZoomFactor)
+void StyleCachedImage::setContainerContextForRenderer(const RenderElement& renderer, const FloatSize& containerSize, float containerZoom)
 {
     if (!m_cachedImage)
         return;
-    m_cachedImage->setContainerSizeForRenderer(renderer, LayoutSize(imageContainerSize), imageContainerZoomFactor);
+    m_cachedImage->setContainerContextForClient(renderer, LayoutSize(containerSize), containerZoom, imageURL());
 }
 
 void StyleCachedImage::addClient(RenderElement* renderer)

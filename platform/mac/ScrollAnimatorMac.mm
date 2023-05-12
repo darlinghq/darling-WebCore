@@ -23,27 +23,26 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
+#import "config.h"
+#import "ScrollAnimatorMac.h"
 
 #if ENABLE(SMOOTH_SCROLLING)
 
-#include "ScrollAnimatorMac.h"
+#import "Gradient.h"
+#import "GraphicsLayer.h"
+#import "Logging.h"
+#import "NSScrollerImpDetails.h"
+#import "PlatformWheelEvent.h"
+#import "ScrollView.h"
+#import "ScrollableArea.h"
+#import "ScrollbarTheme.h"
+#import "ScrollbarThemeMac.h"
+#import <pal/spi/mac/NSScrollerImpSPI.h>
+#import <wtf/BlockObjCExceptions.h>
+#import <wtf/NakedPtr.h>
+#import <wtf/text/TextStream.h>
 
-#include "FloatPoint.h"
-#include "GraphicsLayer.h"
-#include "Logging.h"
-#include "NSScrollerImpDetails.h"
-#include "NSScrollerImpSPI.h"
-#include "PlatformWheelEvent.h"
-#include "ScrollView.h"
-#include "ScrollableArea.h"
-#include "ScrollbarTheme.h"
-#include "ScrollbarThemeMac.h"
-#include "TextStream.h"
-#include "WebCoreSystemInterface.h"
-#include <wtf/BlockObjCExceptions.h>
-
-using namespace WebCore;
+namespace WebCore {
 
 static ScrollbarThemeMac* macScrollbarTheme()
 {
@@ -53,11 +52,25 @@ static ScrollbarThemeMac* macScrollbarTheme()
 
 static NSScrollerImp *scrollerImpForScrollbar(Scrollbar& scrollbar)
 {
-    if (ScrollbarThemeMac* scrollbarTheme = macScrollbarTheme())
-        return scrollbarTheme->painterForScrollbar(scrollbar);
-
-    return nil;
+    return ScrollbarThemeMac::painterForScrollbar(scrollbar);
 }
+
+} // namespace WebCore
+
+using WebCore::ScrollableArea;
+using WebCore::ScrollAnimatorMac;
+using WebCore::Scrollbar;
+using WebCore::ScrollbarThemeMac;
+using WebCore::GraphicsLayer;
+using WebCore::VerticalScrollbar;
+using WebCore::macScrollbarTheme;
+using WebCore::IntRect;
+using WebCore::ThumbPart;
+using WebCore::CubicBezierTimingFunction;
+
+#if !LOG_DISABLED
+using WebCore::LogOverlayScrollbars;
+#endif
 
 @interface NSObject (ScrollAnimationHelperDetails)
 - (id)initWithDelegate:(id)delegate;
@@ -69,9 +82,9 @@ static NSScrollerImp *scrollerImpForScrollbar(Scrollbar& scrollbar)
 
 @interface WebScrollAnimationHelperDelegate : NSObject
 {
-    WebCore::ScrollAnimatorMac* _animator;
+    NakedPtr<WebCore::ScrollAnimatorMac> _animator;
 }
-- (id)initWithScrollAnimator:(WebCore::ScrollAnimatorMac*)scrollAnimator;
+- (id)initWithScrollAnimator:(NakedPtr<WebCore::ScrollAnimatorMac>)scrollAnimator;
 @end
 
 static NSSize abs(NSSize size)
@@ -86,7 +99,7 @@ static NSSize abs(NSSize size)
 
 @implementation WebScrollAnimationHelperDelegate
 
-- (id)initWithScrollAnimator:(WebCore::ScrollAnimatorMac*)scrollAnimator
+- (id)initWithScrollAnimator:(NakedPtr<WebCore::ScrollAnimatorMac>)scrollAnimator
 {
     self = [super init];
     if (!self)
@@ -98,7 +111,7 @@ static NSSize abs(NSSize size)
 
 - (void)invalidate
 {
-    _animator = 0;
+    _animator = nullptr;
 }
 
 - (NSRect)bounds
@@ -212,7 +225,9 @@ static NSSize abs(NSSize size)
     if (!_scrollableArea)
         return NSZeroPoint;
 
-    return _scrollableArea->lastKnownMousePosition();
+    // It's OK that this position isn't relative to this scroller (which might be an overflow scroller).
+    // AppKit just takes the result and passes it back to -scrollerImpPair:convertContentPoint:toScrollerImp:.
+    return _scrollableArea->lastKnownMousePositionInView();
 }
 
 - (NSPoint)scrollerImpPair:(NSScrollerImpPair *)scrollerImpPair convertContentPoint:(NSPoint)pointInContentArea toScrollerImp:(NSScrollerImp *)scrollerImp
@@ -238,7 +253,7 @@ static NSSize abs(NSSize size)
 
     ASSERT(scrollerImp == scrollerImpForScrollbar(*scrollbar));
 
-    return scrollbar->convertFromContainingView(WebCore::IntPoint(pointInContentArea));
+    return scrollbar->convertFromContainingView(WebCore::roundedIntPoint(pointInContentArea));
 }
 
 - (void)scrollerImpPair:(NSScrollerImpPair *)scrollerImpPair setContentAreaNeedsDisplayInRect:(NSRect)rect
@@ -274,31 +289,74 @@ enum FeatureToAnimate {
     ExpansionTransition
 };
 
+#if !LOG_DISABLED
+static TextStream& operator<<(TextStream& ts, FeatureToAnimate feature)
+{
+    switch (feature) {
+    case ThumbAlpha: ts << "ThumbAlpha" ; break;
+    case TrackAlpha: ts << "TrackAlpha" ; break;
+    case UIStateTransition: ts << "UIStateTransition" ; break;
+    case ExpansionTransition: ts << "ExpansionTransition" ; break;
+    }
+    return ts;
+}
+#endif
+
+#if !ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
 @interface WebScrollbarPartAnimation : NSAnimation
+#else
+@interface WebScrollbarPartAnimation : NSObject
+#endif
 {
     Scrollbar* _scrollbar;
     RetainPtr<NSScrollerImp> _scrollerImp;
     FeatureToAnimate _featureToAnimate;
     CGFloat _startValue;
     CGFloat _endValue;
+#if ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
+    NSTimeInterval _duration;
+    RetainPtr<NSTimer> _timer;
+    RetainPtr<NSDate> _startDate;
+    RefPtr<CubicBezierTimingFunction> _timingFunction;
+#endif
 }
 - (id)initWithScrollbar:(Scrollbar*)scrollbar featureToAnimate:(FeatureToAnimate)featureToAnimate animateFrom:(CGFloat)startValue animateTo:(CGFloat)endValue duration:(NSTimeInterval)duration;
+#if ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
+- (void)setCurrentProgress:(NSTimer *)timer;
+- (void)setDuration:(NSTimeInterval)duration;
+- (void)stopAnimation;
+#endif
 @end
 
 @implementation WebScrollbarPartAnimation
 
 - (id)initWithScrollbar:(Scrollbar*)scrollbar featureToAnimate:(FeatureToAnimate)featureToAnimate animateFrom:(CGFloat)startValue animateTo:(CGFloat)endValue duration:(NSTimeInterval)duration
 {
+#if !ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
     self = [super initWithDuration:duration animationCurve:NSAnimationEaseInOut];
     if (!self)
         return nil;
+#else
+    self = [super init];
+    if (!self)
+        return nil;
+
+    const NSTimeInterval timeInterval = 0.01;
+    _timer = adoptNS([[NSTimer alloc] initWithFireDate:[NSDate dateWithTimeIntervalSinceNow:0] interval:timeInterval target:self selector:@selector(setCurrentProgress:) userInfo:nil repeats:YES]);
+    _duration = duration;
+    _timingFunction = CubicBezierTimingFunction::create(CubicBezierTimingFunction::EaseInOut);
+#endif
+
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "Creating WebScrollbarPartAnimation for " << featureToAnimate << " from " << startValue << " to " << endValue);
 
     _scrollbar = scrollbar;
     _featureToAnimate = featureToAnimate;
     _startValue = startValue;
     _endValue = endValue;
 
+#if !ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
     [self setAnimationBlockingMode:NSAnimationNonblocking];
+#endif
 
     return self;
 }
@@ -309,7 +367,14 @@ enum FeatureToAnimate {
 
     _scrollerImp = scrollerImpForScrollbar(*_scrollbar);
 
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "-[WebScrollbarPartAnimation " << self << "startAnimation] for " << _featureToAnimate);
+
+#if !ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
     [super startAnimation];
+#else
+    [[NSRunLoop mainRunLoop] addTimer:_timer.get() forMode:NSDefaultRunLoopMode];
+    _startDate = adoptNS([[NSDate alloc] initWithTimeIntervalSinceNow:0]);
+#endif
 }
 
 - (void)setStartValue:(CGFloat)startValue
@@ -322,11 +387,31 @@ enum FeatureToAnimate {
     _endValue = endValue;
 }
 
+#if !ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
 - (void)setCurrentProgress:(NSAnimationProgress)progress
+#else
+- (void)setCurrentProgress:(NSTimer *)timer
+#endif
 {
+#if !ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
     [super setCurrentProgress:progress];
-
+#else
+    CGFloat progress = 0;
+    NSDate *now = [NSDate dateWithTimeIntervalSinceNow:0];
+    NSTimeInterval elapsed = [now timeIntervalSinceDate:_startDate.get()];
+    if (elapsed > _duration) {
+        progress = 1;
+        [timer invalidate];
+    } else {
+        NSTimeInterval t = 1;
+        if (_duration)
+            t = elapsed / _duration;
+        progress = _timingFunction->transformTime(t, _duration);
+    }
+#endif
     ASSERT(_scrollbar);
+
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "-[WebScrollbarPartAnimation " << self << "setCurrentProgress:" << progress <<"] for " << _featureToAnimate);
 
     CGFloat currentValue;
     if (_startValue > _endValue)
@@ -355,11 +440,23 @@ enum FeatureToAnimate {
 
 - (void)invalidate
 {
-    BEGIN_BLOCK_OBJC_EXCEPTIONS;
+    BEGIN_BLOCK_OBJC_EXCEPTIONS
     [self stopAnimation];
-    END_BLOCK_OBJC_EXCEPTIONS;
+    END_BLOCK_OBJC_EXCEPTIONS
     _scrollbar = 0;
 }
+
+#if ENABLE(WEBPROCESS_WINDOWSERVER_BLOCKING)
+- (void)setDuration:(NSTimeInterval)duration
+{
+    _duration = duration;
+}
+
+- (void)stopAnimation
+{
+    [_timer invalidate];
+}
+#endif
 
 @end
 
@@ -390,15 +487,15 @@ enum FeatureToAnimate {
 
 - (void)cancelAnimations
 {
-    BEGIN_BLOCK_OBJC_EXCEPTIONS;
+    BEGIN_BLOCK_OBJC_EXCEPTIONS
     [_knobAlphaAnimation stopAnimation];
     [_trackAlphaAnimation stopAnimation];
     [_uiStateTransitionAnimation stopAnimation];
     [_expansionTransitionAnimation stopAnimation];
-    END_BLOCK_OBJC_EXCEPTIONS;
+    END_BLOCK_OBJC_EXCEPTIONS
 }
 
-- (ScrollAnimatorMac*)scrollAnimator
+- (NakedPtr<ScrollAnimatorMac>)scrollAnimator
 {
     return &static_cast<ScrollAnimatorMac&>(_scrollbar->scrollableArea().scrollAnimator());
 }
@@ -438,7 +535,8 @@ enum FeatureToAnimate {
 
     ASSERT_UNUSED(scrollerImp, scrollerImp == scrollerImpForScrollbar(*_scrollbar));
 
-    return _scrollbar->convertFromContainingView(_scrollbar->scrollableArea().lastKnownMousePosition());
+    auto positionInView = _scrollbar->scrollableArea().lastKnownMousePositionInView();
+    return _scrollbar->convertFromContainingView(positionInView);
 }
 
 - (NSRect)convertRectToLayer:(NSRect)rect
@@ -455,6 +553,27 @@ enum FeatureToAnimate {
 
     return _scrollbar->supportsUpdateOnSecondaryThread();
 }
+
+#if HAVE(OS_DARK_MODE_SUPPORT)
+- (NSAppearance *)effectiveAppearanceForScrollerImp:(NSScrollerImp *)scrollerImp
+{
+    UNUSED_PARAM(scrollerImp);
+
+    if (!_scrollbar)
+        ALLOW_DEPRECATED_DECLARATIONS_BEGIN
+        return [NSAppearance currentAppearance];
+        ALLOW_DEPRECATED_DECLARATIONS_END
+
+    // Keep this in sync with FrameView::paintScrollCorner.
+    // The base system does not support dark Aqua, so we might get a null result.
+    bool useDarkAppearance = _scrollbar->scrollableArea().useDarkAppearanceForScrollbars();
+    if (auto *appearance = [NSAppearance appearanceNamed:useDarkAppearance ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua])
+        return appearance;
+    ALLOW_DEPRECATED_DECLARATIONS_BEGIN
+    return [NSAppearance currentAppearance];
+    ALLOW_DEPRECATED_DECLARATIONS_END
+}
+#endif
 
 - (void)setUpAlphaAnimation:(RetainPtr<WebScrollbarPartAnimation>&)scrollbarPartAnimation scrollerPainter:(NSScrollerImp *)scrollerPainter part:(WebCore::ScrollbarPart)part animateAlphaTo:(CGFloat)newAlpha duration:(NSTimeInterval)duration
 {
@@ -595,12 +714,12 @@ enum FeatureToAnimate {
 - (void)invalidate
 {
     _scrollbar = 0;
-    BEGIN_BLOCK_OBJC_EXCEPTIONS;
+    BEGIN_BLOCK_OBJC_EXCEPTIONS
     [_knobAlphaAnimation invalidate];
     [_trackAlphaAnimation invalidate];
     [_uiStateTransitionAnimation invalidate];
     [_expansionTransitionAnimation invalidate];
-    END_BLOCK_OBJC_EXCEPTIONS;
+    END_BLOCK_OBJC_EXCEPTIONS
 }
 
 @end
@@ -609,7 +728,7 @@ namespace WebCore {
 
 std::unique_ptr<ScrollAnimator> ScrollAnimator::create(ScrollableArea& scrollableArea)
 {
-    return std::make_unique<ScrollAnimatorMac>(scrollableArea);
+    return makeUnique<ScrollAnimatorMac>(scrollableArea);
 }
 
 ScrollAnimatorMac::ScrollAnimatorMac(ScrollableArea& scrollableArea)
@@ -625,18 +744,18 @@ ScrollAnimatorMac::ScrollAnimatorMac(ScrollableArea& scrollableArea)
     m_scrollerImpPairDelegate = adoptNS([[WebScrollerImpPairDelegate alloc] initWithScrollableArea:&scrollableArea]);
     m_scrollerImpPair = adoptNS([[NSScrollerImpPair alloc] init]);
     [m_scrollerImpPair setDelegate:m_scrollerImpPairDelegate.get()];
-    [m_scrollerImpPair setScrollerStyle:recommendedScrollerStyle()];
+    [m_scrollerImpPair setScrollerStyle:ScrollerStyle::recommendedScrollerStyle()];
 }
 
 ScrollAnimatorMac::~ScrollAnimatorMac()
 {
-    BEGIN_BLOCK_OBJC_EXCEPTIONS;
+    BEGIN_BLOCK_OBJC_EXCEPTIONS
     [m_scrollerImpPairDelegate invalidate];
     [m_scrollerImpPair setDelegate:nil];
     [m_horizontalScrollerImpDelegate invalidate];
     [m_verticalScrollerImpDelegate invalidate];
     [m_scrollAnimationHelperDelegate invalidate];
-    END_BLOCK_OBJC_EXCEPTIONS;
+    END_BLOCK_OBJC_EXCEPTIONS
 }
 
 static bool scrollAnimationEnabledForSystem()
@@ -664,24 +783,24 @@ static bool rubberBandingEnabledForSystem()
 }
 #endif
 
-bool ScrollAnimatorMac::scroll(ScrollbarOrientation orientation, ScrollGranularity granularity, float step, float multiplier)
+bool ScrollAnimatorMac::scroll(ScrollbarOrientation orientation, ScrollGranularity granularity, float step, float multiplier, ScrollBehavior behavior)
 {
     m_haveScrolledSincePageLoad = true;
 
     if (!scrollAnimationEnabledForSystem() || !m_scrollableArea.scrollAnimatorEnabled())
-        return ScrollAnimator::scroll(orientation, granularity, step, multiplier);
+        return ScrollAnimator::scroll(orientation, granularity, step, multiplier, behavior);
 
     if (granularity == ScrollByPixel)
-        return ScrollAnimator::scroll(orientation, granularity, step, multiplier);
+        return ScrollAnimator::scroll(orientation, granularity, step, multiplier, behavior);
+
+    // This method doesn't do directional snapping, but our base class does. It will call into
+    // ScrollAnimatorMac::scroll again with the snapped positions and ScrollBehavior::Default.
+    if (behavior == ScrollBehavior::DoDirectionalSnapping)
+        return ScrollAnimator::scroll(orientation, granularity, step, multiplier, behavior);
 
     FloatPoint currentPosition = this->currentPosition();
-    FloatSize delta;
-    if (orientation == HorizontalScrollbar)
-        delta.setWidth(step * multiplier);
-    else
-        delta.setHeight(step * multiplier);
-
-    FloatPoint newPosition = FloatPoint(currentPosition + delta).constrainedBetween(m_scrollableArea.minimumScrollPosition(), m_scrollableArea.maximumScrollPosition());
+    FloatPoint newPosition = positionFromStep(orientation, step, multiplier);
+    newPosition = newPosition.constrainedBetween(m_scrollableArea.minimumScrollPosition(), m_scrollableArea.maximumScrollPosition());
     if (currentPosition == newPosition)
         return false;
 
@@ -699,10 +818,10 @@ bool ScrollAnimatorMac::scroll(ScrollbarOrientation orientation, ScrollGranulari
 }
 
 // FIXME: Maybe this should take a position.
-void ScrollAnimatorMac::scrollToOffsetWithoutAnimation(const FloatPoint& offset)
+void ScrollAnimatorMac::scrollToOffsetWithoutAnimation(const FloatPoint& offset, ScrollClamping clamping)
 {
     [m_scrollAnimationHelper _stopRun];
-    immediateScrollToPosition(ScrollableArea::scrollPositionFromOffset(offset, toFloatSize(m_scrollableArea.scrollOrigin())));
+    immediateScrollToPosition(ScrollableArea::scrollPositionFromOffset(offset, toFloatSize(m_scrollableArea.scrollOrigin())), clamping);
 }
 
 FloatPoint ScrollAnimatorMac::adjustScrollPositionIfNecessary(const FloatPoint& position) const
@@ -719,16 +838,16 @@ void ScrollAnimatorMac::adjustScrollPositionToBoundsIfNecessary()
     m_scrollableArea.setConstrainsScrollingToContentEdge(true);
 
     ScrollPosition currentScrollPosition = m_scrollableArea.scrollPosition();
-    ScrollPosition constainedPosition = m_scrollableArea.constrainScrollPosition(currentScrollPosition);
-    immediateScrollBy(constainedPosition - currentScrollPosition);
+    ScrollPosition constrainedPosition = m_scrollableArea.constrainScrollPosition(currentScrollPosition);
+    immediateScrollBy(constrainedPosition - currentScrollPosition);
 
     m_scrollableArea.setConstrainsScrollingToContentEdge(currentlyConstrainsToContentEdge);
 }
 
-void ScrollAnimatorMac::immediateScrollToPosition(const FloatPoint& newPosition)
+void ScrollAnimatorMac::immediateScrollToPosition(const FloatPoint& newPosition, ScrollClamping clamping)
 {
     FloatPoint currentPosition = this->currentPosition();
-    FloatPoint adjustedPosition = adjustScrollPositionIfNecessary(newPosition);
+    FloatPoint adjustedPosition = clamping == ScrollClamping::Clamped ? adjustScrollPositionIfNecessary(newPosition) : newPosition;
  
     bool positionChanged = adjustedPosition != currentPosition;
     if (!positionChanged && !scrollableArea().scrollOriginChanged())
@@ -738,6 +857,11 @@ void ScrollAnimatorMac::immediateScrollToPosition(const FloatPoint& newPosition)
     m_currentPosition = adjustedPosition;
     notifyPositionChanged(delta);
     updateActiveScrollSnapIndexForOffset();
+}
+
+bool ScrollAnimatorMac::isUserScrollInProgress() const
+{
+    return m_scrollController.isUserScrollInProgress();
 }
 
 bool ScrollAnimatorMac::isRubberBandInProgress() const
@@ -758,6 +882,43 @@ bool ScrollAnimatorMac::isScrollSnapInProgress() const
 #endif
 }
 
+static String scrollbarState(Scrollbar* scrollbar)
+{
+    if (!scrollbar)
+        return "none"_s;
+
+    StringBuilder result;
+    result.append(scrollbar->enabled() ? "enabled"_s : "disabled"_s);
+
+    if (!scrollbar->isOverlayScrollbar())
+        return result.toString();
+
+    NSScrollerImp *scrollerImp = scrollerImpForScrollbar(*scrollbar);
+    if (!scrollerImp)
+        return result.toString();
+
+    if (scrollerImp.expanded)
+        result.append(",expanded"_s);
+
+    if (scrollerImp.trackAlpha > 0)
+        result.append(",visible_track"_s);
+
+    if (scrollerImp.knobAlpha > 0)
+        result.append(",visible_thumb"_s);
+
+    return result.toString();
+}
+
+String ScrollAnimatorMac::horizontalScrollbarStateForTesting() const
+{
+    return scrollbarState(m_scrollableArea.horizontalScrollbar());
+}
+
+String ScrollAnimatorMac::verticalScrollbarStateForTesting() const
+{
+    return scrollbarState(m_scrollableArea.verticalScrollbar());
+}
+
 void ScrollAnimatorMac::immediateScrollToPositionForScrollAnimation(const FloatPoint& newPosition)
 {
     ASSERT(m_scrollAnimationHelper);
@@ -775,11 +936,14 @@ void ScrollAnimatorMac::contentAreaWillPaint() const
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
         return;
 
+    ALLOW_DEPRECATED_DECLARATIONS_BEGIN
     [m_scrollerImpPair contentAreaWillDraw];
+    ALLOW_DEPRECATED_DECLARATIONS_END
 }
 
 void ScrollAnimatorMac::mouseEnteredContentArea()
 {
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "ScrollAnimatorMac for [" << scrollableArea() << "] mouseEnteredContentArea");
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
         return;
 
@@ -788,6 +952,7 @@ void ScrollAnimatorMac::mouseEnteredContentArea()
 
 void ScrollAnimatorMac::mouseExitedContentArea()
 {
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "ScrollAnimatorMac for [" << scrollableArea() << "] mouseExitedContentArea");
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
         return;
 
@@ -796,6 +961,7 @@ void ScrollAnimatorMac::mouseExitedContentArea()
 
 void ScrollAnimatorMac::mouseMovedInContentArea()
 {
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "ScrollAnimatorMac for [" << scrollableArea() << "] mouseMovedInContentArea");
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
         return;
 
@@ -805,7 +971,7 @@ void ScrollAnimatorMac::mouseMovedInContentArea()
 void ScrollAnimatorMac::mouseEnteredScrollbar(Scrollbar* scrollbar) const
 {
     // At this time, only legacy scrollbars needs to send notifications here.
-    if (recommendedScrollerStyle() != NSScrollerStyleLegacy)
+    if (ScrollerStyle::recommendedScrollerStyle() != NSScrollerStyleLegacy)
         return;
 
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
@@ -818,7 +984,7 @@ void ScrollAnimatorMac::mouseEnteredScrollbar(Scrollbar* scrollbar) const
 void ScrollAnimatorMac::mouseExitedScrollbar(Scrollbar* scrollbar) const
 {
     // At this time, only legacy scrollbars needs to send notifications here.
-    if (recommendedScrollerStyle() != NSScrollerStyleLegacy)
+    if (ScrollerStyle::recommendedScrollerStyle() != NSScrollerStyleLegacy)
         return;
 
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
@@ -884,32 +1050,38 @@ void ScrollAnimatorMac::contentAreaDidHide()
 
 void ScrollAnimatorMac::didBeginScrollGesture() const
 {
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "ScrollAnimatorMac for [" << scrollableArea() << "] didBeginScrollGesture");
+
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
         return;
 
     [m_scrollerImpPair beginScrollGesture];
 
 #if ENABLE(CSS_SCROLL_SNAP) || ENABLE(RUBBER_BANDING)
-    if (m_wheelEventTestTrigger)
-        m_wheelEventTestTrigger->deferTestsForReason(reinterpret_cast<WheelEventTestTrigger::ScrollableAreaIdentifier>(this), WheelEventTestTrigger::ContentScrollInProgress);
+    if (m_wheelEventTestMonitor)
+        m_wheelEventTestMonitor->deferForReason(reinterpret_cast<WheelEventTestMonitor::ScrollableAreaIdentifier>(this), WheelEventTestMonitor::ContentScrollInProgress);
 #endif
 }
 
 void ScrollAnimatorMac::didEndScrollGesture() const
 {
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "ScrollAnimatorMac for [" << scrollableArea() << "] didEndScrollGesture");
+
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
         return;
 
     [m_scrollerImpPair endScrollGesture];
 
 #if ENABLE(CSS_SCROLL_SNAP) || ENABLE(RUBBER_BANDING)
-    if (m_wheelEventTestTrigger)
-        m_wheelEventTestTrigger->removeTestDeferralForReason(reinterpret_cast<WheelEventTestTrigger::ScrollableAreaIdentifier>(this), WheelEventTestTrigger::ContentScrollInProgress);
+    if (m_wheelEventTestMonitor)
+        m_wheelEventTestMonitor->removeDeferralForReason(reinterpret_cast<WheelEventTestMonitor::ScrollableAreaIdentifier>(this), WheelEventTestMonitor::ContentScrollInProgress);
 #endif
 }
 
 void ScrollAnimatorMac::mayBeginScrollGesture() const
 {
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "ScrollAnimatorMac for [" << scrollableArea() << "] mayBeginScrollGesture");
+
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
         return;
 
@@ -1037,10 +1209,7 @@ void ScrollAnimatorMac::horizontalScrollbarLayerDidChange()
 bool ScrollAnimatorMac::shouldScrollbarParticipateInHitTesting(Scrollbar* scrollbar)
 {
     // Non-overlay scrollbars should always participate in hit testing.
-    if (recommendedScrollerStyle() != NSScrollerStyleOverlay)
-        return true;
-
-    if (scrollbar->isAlphaLocked())
+    if (ScrollerStyle::recommendedScrollerStyle() != NSScrollerStyleOverlay)
         return true;
 
     // Overlay scrollbars should participate in hit testing whenever they are at all visible.
@@ -1052,7 +1221,7 @@ bool ScrollAnimatorMac::shouldScrollbarParticipateInHitTesting(Scrollbar* scroll
 
 void ScrollAnimatorMac::notifyContentAreaScrolled(const FloatSize& delta)
 {
-    // This function is called when a page is going into the page cache, but the page
+    // This function is called when a page is going into the back/forward cache, but the page
     // isn't really scrolling in that case. We should only pass the message on to the
     // ScrollerImpPair when we're really scrolling on an active page.
     if ([m_scrollerImpPair overlayScrollerStateIsLocked])
@@ -1066,6 +1235,7 @@ void ScrollAnimatorMac::notifyContentAreaScrolled(const FloatSize& delta)
 
 void ScrollAnimatorMac::cancelAnimations()
 {
+    ScrollAnimator::cancelAnimations();
     m_haveScrolledSincePageLoad = false;
 
     if (scrollbarPaintTimerIsActive())
@@ -1076,21 +1246,24 @@ void ScrollAnimatorMac::cancelAnimations()
 
 void ScrollAnimatorMac::handleWheelEventPhase(PlatformWheelEventPhase phase)
 {
+    LOG_WITH_STREAM(OverlayScrollbars, stream << "ScrollAnimatorMac " << this << " scrollableArea " << m_scrollableArea << " handleWheelEventPhase " << phase);
+
     // This may not have been set to true yet if the wheel event was handled by the ScrollingTree,
     // So set it to true here.
     m_haveScrolledSincePageLoad = true;
 
-    if (phase == PlatformWheelEventPhaseBegan)
+    // FIXME: Need to ensure we get PlatformWheelEventPhase::Ended.
+    if (phase == PlatformWheelEventPhase::Began)
         didBeginScrollGesture();
-    else if (phase == PlatformWheelEventPhaseEnded || phase == PlatformWheelEventPhaseCancelled)
+    else if (phase == PlatformWheelEventPhase::Ended || phase == PlatformWheelEventPhase::Cancelled)
         didEndScrollGesture();
-    else if (phase == PlatformWheelEventPhaseMayBegin)
+    else if (phase == PlatformWheelEventPhase::MayBegin)
         mayBeginScrollGesture();
 }
 
 #if ENABLE(RUBBER_BANDING)
 
-bool ScrollAnimatorMac::shouldForwardWheelEventsToParent(const PlatformWheelEvent& wheelEvent)
+bool ScrollAnimatorMac::shouldForwardWheelEventsToParent(const PlatformWheelEvent& wheelEvent) const
 {
     if (std::abs(wheelEvent.deltaY()) >= std::abs(wheelEvent.deltaX()))
         return !allowsVerticalStretching(wheelEvent);
@@ -1104,6 +1277,8 @@ bool ScrollAnimatorMac::handleWheelEvent(const PlatformWheelEvent& wheelEvent)
 
     if (!wheelEvent.hasPreciseScrollingDeltas() || !rubberBandingEnabledForSystem())
         return ScrollAnimator::handleWheelEvent(wheelEvent);
+
+    m_scrollController.updateGestureInProgressState(wheelEvent);
 
     // FIXME: This is somewhat roundabout hack to allow forwarding wheel events
     // up to the parent scrollable area. It takes advantage of the fact that
@@ -1124,49 +1299,19 @@ bool ScrollAnimatorMac::handleWheelEvent(const PlatformWheelEvent& wheelEvent)
     return didHandleEvent;
 }
 
-bool ScrollAnimatorMac::pinnedInDirection(const FloatSize& direction)
+RectEdges<bool> ScrollAnimatorMac::edgePinnedState() const
 {
-    FloatSize limitDelta;
-    if (fabsf(direction.height()) >= fabsf(direction.width())) {
-        if (direction.height() < 0) {
-            // We are trying to scroll up. Make sure we are not pinned to the top
-            limitDelta.setHeight(m_scrollableArea.visibleContentRect().y() + m_scrollableArea.scrollOrigin().y());
-        } else {
-            // We are trying to scroll down. Make sure we are not pinned to the bottom
-            limitDelta.setHeight(m_scrollableArea.totalContentsSize().height() - (m_scrollableArea.visibleContentRect().maxY() + m_scrollableArea.scrollOrigin().y()));
-        }
-    } else if (direction.width()) {
-        if (direction.width() < 0) {
-            // We are trying to scroll left. Make sure we are not pinned to the left
-            limitDelta.setWidth(m_scrollableArea.visibleContentRect().x() + m_scrollableArea.scrollOrigin().x());
-        } else {
-            // We are trying to scroll right. Make sure we are not pinned to the right
-            limitDelta.setWidth(m_scrollableArea.totalContentsSize().width() - (m_scrollableArea.visibleContentRect().maxX() + m_scrollableArea.scrollOrigin().x()));
-        }
-    }
-    
-    if ((direction.width() || direction.height()) && (limitDelta.width() < 1 && limitDelta.height() < 1))
-        return true;
-    return false;
+    return m_scrollableArea.edgePinnedState();
 }
 
-// FIXME: We should find a way to share some of the code from newGestureIsStarting(), isAlreadyPinnedInDirectionOfGesture(),
-// allowsVerticalStretching(), and allowsHorizontalStretching() with the implementation in ScrollingTreeFrameScrollingNodeMac.
-static bool newGestureIsStarting(const PlatformWheelEvent& wheelEvent)
+bool ScrollAnimatorMac::isPinnedForScrollDelta(const FloatSize& delta) const
 {
-    return wheelEvent.phase() == PlatformWheelEventPhaseMayBegin || wheelEvent.phase() == PlatformWheelEventPhaseBegan;
-}
+    if (fabsf(delta.height()) >= fabsf(delta.width()))
+        return m_scrollableArea.isPinnedForScrollDeltaOnAxis(delta.height(), ScrollEventAxis::Vertical);
 
-bool ScrollAnimatorMac::isAlreadyPinnedInDirectionOfGesture(const PlatformWheelEvent& wheelEvent, ScrollEventAxis axis)
-{
-    switch (axis) {
-    case ScrollEventAxis::Vertical:
-        return (wheelEvent.deltaY() > 0 && m_scrollableArea.scrolledToTop()) || (wheelEvent.deltaY() < 0 && m_scrollableArea.scrolledToBottom());
-    case ScrollEventAxis::Horizontal:
-        return (wheelEvent.deltaX() > 0 && m_scrollableArea.scrolledToLeft()) || (wheelEvent.deltaX() < 0 && m_scrollableArea.scrolledToRight());
-    }
+    if (delta.width())
+        return m_scrollableArea.isPinnedForScrollDeltaOnAxis(delta.width(), ScrollEventAxis::Horizontal);
 
-    ASSERT_NOT_REACHED();
     return false;
 }
 
@@ -1176,21 +1321,21 @@ static bool gestureShouldBeginSnap(const PlatformWheelEvent& wheelEvent, const V
     if (!snapOffsets)
         return false;
     
-    if (wheelEvent.phase() != PlatformWheelEventPhaseEnded && !wheelEvent.isEndOfMomentumScroll())
+    if (wheelEvent.phase() != PlatformWheelEventPhase::Ended && !wheelEvent.isEndOfMomentumScroll())
         return false;
 
     return true;
 }
 #endif
 
-bool ScrollAnimatorMac::allowsVerticalStretching(const PlatformWheelEvent& wheelEvent)
+bool ScrollAnimatorMac::allowsVerticalStretching(const PlatformWheelEvent& wheelEvent) const
 {
     switch (m_scrollableArea.verticalScrollElasticity()) {
     case ScrollElasticityAutomatic: {
         Scrollbar* hScroller = m_scrollableArea.horizontalScrollbar();
         Scrollbar* vScroller = m_scrollableArea.verticalScrollbar();
         bool scrollbarsAllowStretching = ((vScroller && vScroller->enabled()) || (!hScroller || !hScroller->enabled()));
-        bool eventPreventsStretching = m_scrollableArea.hasScrollableOrRubberbandableAncestor() && newGestureIsStarting(wheelEvent) && isAlreadyPinnedInDirectionOfGesture(wheelEvent, ScrollEventAxis::Vertical);
+        bool eventPreventsStretching = m_scrollableArea.hasScrollableOrRubberbandableAncestor() && wheelEvent.isGestureStart() && m_scrollableArea.isPinnedForScrollDeltaOnAxis(-wheelEvent.deltaY(), ScrollEventAxis::Vertical);
 #if ENABLE(CSS_SCROLL_SNAP)
         if (!eventPreventsStretching)
             eventPreventsStretching = gestureShouldBeginSnap(wheelEvent, m_scrollableArea.verticalSnapOffsets());
@@ -1207,14 +1352,14 @@ bool ScrollAnimatorMac::allowsVerticalStretching(const PlatformWheelEvent& wheel
     return false;
 }
 
-bool ScrollAnimatorMac::allowsHorizontalStretching(const PlatformWheelEvent& wheelEvent)
+bool ScrollAnimatorMac::allowsHorizontalStretching(const PlatformWheelEvent& wheelEvent) const
 {
     switch (m_scrollableArea.horizontalScrollElasticity()) {
     case ScrollElasticityAutomatic: {
         Scrollbar* hScroller = m_scrollableArea.horizontalScrollbar();
         Scrollbar* vScroller = m_scrollableArea.verticalScrollbar();
         bool scrollbarsAllowStretching = ((hScroller && hScroller->enabled()) || (!vScroller || !vScroller->enabled()));
-        bool eventPreventsStretching = m_scrollableArea.hasScrollableOrRubberbandableAncestor() && newGestureIsStarting(wheelEvent) && isAlreadyPinnedInDirectionOfGesture(wheelEvent, ScrollEventAxis::Horizontal);
+        bool eventPreventsStretching = m_scrollableArea.hasScrollableOrRubberbandableAncestor() && wheelEvent.isGestureStart() && m_scrollableArea.isPinnedForScrollDeltaOnAxis(-wheelEvent.deltaX(), ScrollEventAxis::Horizontal);
 #if ENABLE(CSS_SCROLL_SNAP)
         if (!eventPreventsStretching)
             eventPreventsStretching = gestureShouldBeginSnap(wheelEvent, m_scrollableArea.horizontalSnapOffsets());
@@ -1231,28 +1376,22 @@ bool ScrollAnimatorMac::allowsHorizontalStretching(const PlatformWheelEvent& whe
     return false;
 }
 
-IntSize ScrollAnimatorMac::stretchAmount()
+IntSize ScrollAnimatorMac::stretchAmount() const
 {
     return m_scrollableArea.overhangAmount();
 }
 
-bool ScrollAnimatorMac::canScrollHorizontally()
+bool ScrollAnimatorMac::allowsHorizontalScrolling() const
 {
-    Scrollbar* scrollbar = m_scrollableArea.horizontalScrollbar();
-    if (!scrollbar)
-        return false;
-    return scrollbar->enabled();
+    return m_scrollableArea.allowsHorizontalScrolling();
 }
 
-bool ScrollAnimatorMac::canScrollVertically()
+bool ScrollAnimatorMac::allowsVerticalScrolling() const
 {
-    Scrollbar* scrollbar = m_scrollableArea.verticalScrollbar();
-    if (!scrollbar)
-        return false;
-    return scrollbar->enabled();
+    return m_scrollableArea.allowsVerticalScrolling();
 }
 
-bool ScrollAnimatorMac::shouldRubberBandInDirection(ScrollDirection)
+bool ScrollAnimatorMac::shouldRubberBandInDirection(ScrollDirection) const
 {
     return false;
 }
@@ -1299,10 +1438,10 @@ void ScrollAnimatorMac::updateScrollerStyle()
         verticalScrollbar->invalidate();
 
         NSScrollerImp *oldVerticalPainter = [m_scrollerImpPair verticalScrollerImp];
-        NSScrollerImp *newVerticalPainter = [NSScrollerImp scrollerImpWithStyle:newStyle controlSize:(NSControlSize)verticalScrollbar->controlSize() horizontal:NO replacingScrollerImp:oldVerticalPainter];
+        auto newVerticalPainter = retainPtr([NSScrollerImp scrollerImpWithStyle:newStyle controlSize:(NSControlSize)verticalScrollbar->controlSize() horizontal:NO replacingScrollerImp:oldVerticalPainter]);
 
-        [m_scrollerImpPair setVerticalScrollerImp:newVerticalPainter];
-        macTheme->setNewPainterForScrollbar(*verticalScrollbar, newVerticalPainter);
+        [m_scrollerImpPair setVerticalScrollerImp:newVerticalPainter.get()];
+        macTheme->setNewPainterForScrollbar(*verticalScrollbar, WTFMove(newVerticalPainter));
         macTheme->didCreateScrollerImp(*verticalScrollbar);
 
         // The different scrollbar styles have different thicknesses, so we must re-set the 
@@ -1316,10 +1455,10 @@ void ScrollAnimatorMac::updateScrollerStyle()
         horizontalScrollbar->invalidate();
 
         NSScrollerImp *oldHorizontalPainter = [m_scrollerImpPair horizontalScrollerImp];
-        NSScrollerImp *newHorizontalPainter = [NSScrollerImp scrollerImpWithStyle:newStyle controlSize:(NSControlSize)horizontalScrollbar->controlSize() horizontal:YES replacingScrollerImp:oldHorizontalPainter];
+        auto newHorizontalPainter = retainPtr([NSScrollerImp scrollerImpWithStyle:newStyle controlSize:(NSControlSize)horizontalScrollbar->controlSize() horizontal:YES replacingScrollerImp:oldHorizontalPainter]);
 
-        [m_scrollerImpPair setHorizontalScrollerImp:newHorizontalPainter];
-        macTheme->setNewPainterForScrollbar(*horizontalScrollbar, newHorizontalPainter);
+        [m_scrollerImpPair setHorizontalScrollerImp:newHorizontalPainter.get()];
+        macTheme->setNewPainterForScrollbar(*horizontalScrollbar, WTFMove(newHorizontalPainter));
         macTheme->didCreateScrollerImp(*horizontalScrollbar);
 
         // The different scrollbar styles have different thicknesses, so we must re-set the 
@@ -1329,7 +1468,7 @@ void ScrollAnimatorMac::updateScrollerStyle()
         horizontalScrollbar->setFrameRect(IntRect(0, 0, thickness, thickness));
     }
 
-    // If m_needsScrollerStyleUpdate is true, then the page is restoring from the page cache, and 
+    // If m_needsScrollerStyleUpdate is true, then the page is restoring from the back/forward cache, and
     // a relayout will happen on its own. Otherwise, we must initiate a re-layout ourselves.
     scrollableArea().scrollbarStyleChanged(newStyle == NSScrollerStyleOverlay ? ScrollbarStyle::Overlay : ScrollbarStyle::AlwaysVisible, !m_needsScrollerStyleUpdate);
 
@@ -1366,8 +1505,8 @@ void ScrollAnimatorMac::sendContentAreaScrolledSoon(const FloatSize& delta)
     if (!m_sendContentAreaScrolledTimer.isActive())
         m_sendContentAreaScrolledTimer.startOneShot(0_s);
 
-    if (m_wheelEventTestTrigger)
-        m_wheelEventTestTrigger->deferTestsForReason(reinterpret_cast<WheelEventTestTrigger::ScrollableAreaIdentifier>(this), WheelEventTestTrigger::ContentScrollInProgress);
+    if (m_wheelEventTestMonitor)
+        m_wheelEventTestMonitor->deferForReason(reinterpret_cast<WheelEventTestMonitor::ScrollableAreaIdentifier>(this), WheelEventTestMonitor::ContentScrollInProgress);
 }
 
 void ScrollAnimatorMac::sendContentAreaScrolled(const FloatSize& delta)
@@ -1380,8 +1519,8 @@ void ScrollAnimatorMac::sendContentAreaScrolledTimerFired()
     sendContentAreaScrolled(m_contentAreaScrolledTimerScrollDelta);
     m_contentAreaScrolledTimerScrollDelta = FloatSize();
 
-    if (m_wheelEventTestTrigger)
-        m_wheelEventTestTrigger->removeTestDeferralForReason(reinterpret_cast<WheelEventTestTrigger::ScrollableAreaIdentifier>(this), WheelEventTestTrigger::ContentScrollInProgress);
+    if (m_wheelEventTestMonitor)
+        m_wheelEventTestMonitor->removeDeferralForReason(reinterpret_cast<WheelEventTestMonitor::ScrollableAreaIdentifier>(this), WheelEventTestMonitor::ContentScrollInProgress);
 }
 
 void ScrollAnimatorMac::setVisibleScrollerThumbRect(const IntRect& scrollerThumb)

@@ -1,7 +1,5 @@
 /*
- * This file is part of the WebKit project.
- *
- * Copyright (C) 2006, 2008, 2013, 2014 Apple Inc.
+ * Copyright (C) 2006-2017 Apple Inc. All rights reserved.
  * Copyright (C) 2009 Kenneth Rohde Christiansen
  *
  * This library is free software; you can redistribute it and/or
@@ -46,9 +44,9 @@ struct ThemeData {
     unsigned m_classicState;
 };
 
-class RenderThemeWin final: public RenderTheme {
+class RenderThemeWin final : public RenderTheme {
 public:
-    static Ref<RenderTheme> create();
+    friend NeverDestroyed<RenderThemeWin>;
 
     String extraDefaultStyleSheet() override;
     String extraQuirksStyleSheet() override;
@@ -56,12 +54,12 @@ public:
     // A method asking if the theme's controls actually care about redrawing when hovered.
     bool supportsHover(const RenderStyle&) const override;
 
-    Color platformActiveSelectionBackgroundColor() const override;
-    Color platformInactiveSelectionBackgroundColor() const override;
-    Color platformActiveSelectionForegroundColor() const override;
-    Color platformInactiveSelectionForegroundColor() const override;
+    Color platformActiveSelectionBackgroundColor(OptionSet<StyleColor::Options>) const override;
+    Color platformInactiveSelectionBackgroundColor(OptionSet<StyleColor::Options>) const override;
+    Color platformActiveSelectionForegroundColor(OptionSet<StyleColor::Options>) const override;
+    Color platformInactiveSelectionForegroundColor(OptionSet<StyleColor::Options>) const override;
 
-    Color systemColor(CSSValueID) const override;
+    Color systemColor(CSSValueID, OptionSet<StyleColor::Options>) const override;
 
     bool paintCheckbox(const RenderObject& o, const PaintInfo& i, const IntRect& r) override
     { return paintButton(o, i, r); }
@@ -74,7 +72,7 @@ public:
 
     bool paintButton(const RenderObject&, const PaintInfo&, const IntRect&) override;
 
-    void adjustInnerSpinButtonStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    void adjustInnerSpinButtonStyle(RenderStyle&, const Element*) const override;
     bool paintInnerSpinButton(const RenderObject&, const PaintInfo&, const IntRect&) override;
 
     bool paintTextField(const RenderObject&, const PaintInfo&, const FloatRect&) override;
@@ -82,11 +80,11 @@ public:
     bool paintTextArea(const RenderObject& o, const PaintInfo& i, const FloatRect& r) override
     { return paintTextField(o, i, r); }
 
-    void adjustMenuListStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    void adjustMenuListStyle(RenderStyle&, const Element*) const override;
     bool paintMenuList(const RenderObject&, const PaintInfo&, const FloatRect&) override;
-    void adjustMenuListButtonStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    void adjustMenuListButtonStyle(RenderStyle&, const Element*) const override;
 
-    bool paintMenuListButtonDecorations(const RenderBox&, const PaintInfo&, const FloatRect&) override;
+    void paintMenuListButtonDecorations(const RenderBox&, const PaintInfo&, const FloatRect&) override;
 
     bool paintSliderTrack(const RenderObject&, const PaintInfo&, const IntRect&) override;
     bool paintSliderThumb(const RenderObject&, const PaintInfo&, const IntRect&) override;
@@ -94,30 +92,30 @@ public:
 
     bool popupOptionSupportsTextIndent() const override { return true; }
 
-    void adjustSearchFieldStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    void adjustSearchFieldStyle(RenderStyle&, const Element*) const override;
     bool paintSearchField(const RenderObject&, const PaintInfo&, const IntRect&) override;
 
-    void adjustSearchFieldCancelButtonStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    void adjustSearchFieldCancelButtonStyle(RenderStyle&, const Element*) const override;
     bool paintSearchFieldCancelButton(const RenderBox&, const PaintInfo&, const IntRect&) override;
 
-    void adjustSearchFieldDecorationPartStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    void adjustSearchFieldDecorationPartStyle(RenderStyle&, const Element*) const override;
     bool paintSearchFieldDecorationPart(const RenderObject&, const PaintInfo&, const IntRect&) override { return false; }
 
-    void adjustSearchFieldResultsDecorationPartStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    void adjustSearchFieldResultsDecorationPartStyle(RenderStyle&, const Element*) const override;
     bool paintSearchFieldResultsDecorationPart(const RenderBox&, const PaintInfo&, const IntRect&) override;
 
-    void adjustSearchFieldResultsButtonStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    void adjustSearchFieldResultsButtonStyle(RenderStyle&, const Element*) const override;
     bool paintSearchFieldResultsButton(const RenderBox&, const PaintInfo&, const IntRect&) override;
 
     void themeChanged() override;
 
-    void adjustButtonStyle(StyleResolver&, RenderStyle& style, const Element*) const override { }
-    void adjustTextFieldStyle(StyleResolver&, RenderStyle& style, const Element*) const override { }
-    void adjustTextAreaStyle(StyleResolver&, RenderStyle& style, const Element*) const override { }
+    void adjustButtonStyle(RenderStyle& style, const Element*) const override { }
+    void adjustTextFieldStyle(RenderStyle& style, const Element*) const override { }
+    void adjustTextAreaStyle(RenderStyle& style, const Element*) const override { }
 
     static void setWebKitIsBeingUnloaded();
 
-    static String stringWithContentsOfFile(CFStringRef name, CFStringRef type);
+    static String stringWithContentsOfFile(const String& name, const String& type);
 
     bool supportsFocusRing(const RenderStyle&) const override;
 
@@ -126,12 +124,10 @@ public:
     String mediaControlsScript() override;
 #endif
 
-#if ENABLE(METER_ELEMENT)
     IntSize meterSizeForBounds(const RenderMeter&, const IntRect&) const override;
-    bool supportsMeter(ControlPart) const override;
-    void adjustMeterStyle(StyleResolver&, RenderStyle&, const Element*) const override;
+    bool supportsMeter(ControlPart, const HTMLMeterElement&) const override;
+    void adjustMeterStyle(RenderStyle&, const Element*) const override;
     bool paintMeter(const RenderObject&, const PaintInfo&, const IntRect&) override;
-#endif
 
 private:
     enum ControlSubPart {

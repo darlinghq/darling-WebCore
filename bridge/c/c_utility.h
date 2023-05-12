@@ -29,13 +29,13 @@
 #if ENABLE(NETSCAPE_PLUGIN_API)
 
 #include "npruntime_internal.h"
-#include <runtime/JSCInlines.h>
-#include <runtime/JSCJSValue.h>
+#include <JavaScriptCore/JSCInlines.h>
+#include <JavaScriptCore/JSCJSValue.h>
 #include <wtf/Forward.h>
 
 namespace JSC {
 
-class ExecState;
+class CallFrame;
 class Identifier;
 
 namespace Bindings {
@@ -45,9 +45,9 @@ class RootObject;
 typedef uint16_t NPUTF16;
 
 WTF::String convertNPStringToUTF16(const NPString *string);
-void convertValueToNPVariant(ExecState*, JSValue, NPVariant* result);
-JSValue convertNPVariantToValue(ExecState*, const NPVariant*, RootObject*);
-Identifier identifierFromNPIdentifier(ExecState*, const NPUTF8* name);
+void convertValueToNPVariant(JSGlobalObject*, JSValue, NPVariant* result);
+JSValue convertNPVariantToValue(JSGlobalObject*, const NPVariant*, RootObject*);
+Identifier identifierFromNPIdentifier(JSGlobalObject*, const NPUTF8* name);
 
 } }
 

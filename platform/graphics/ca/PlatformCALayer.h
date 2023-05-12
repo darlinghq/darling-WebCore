@@ -27,10 +27,9 @@
 
 #include "FloatRoundedRect.h"
 #include "GraphicsLayer.h"
-#include <QuartzCore/CABase.h>
-#include <wtf/CurrentTime.h>
-#include <wtf/RefCounted.h>
+#include <wtf/EnumTraits.h>
 #include <wtf/RetainPtr.h>
+#include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/TypeCasts.h>
 #include <wtf/Vector.h>
 
@@ -49,14 +48,14 @@ class PlatformCALayerClient;
 
 typedef Vector<RefPtr<PlatformCALayer>> PlatformCALayerList;
 
-class WEBCORE_EXPORT PlatformCALayer : public RefCounted<PlatformCALayer> {
+class WEBCORE_EXPORT PlatformCALayer : public ThreadSafeRefCounted<PlatformCALayer> {
 #if PLATFORM(COCOA)
     friend class PlatformCALayerCocoa;
 #elif PLATFORM(WIN)
     friend class PlatformCALayerWin;
 #endif
 public:
-    static CFTimeInterval currentTimeToMediaTime(double t) { return CACurrentMediaTime() + t - monotonicallyIncreasingTime(); }
+    static CFTimeInterval currentTimeToMediaTime(MonotonicTime);
 
     // LayerTypeRootLayer is used on some platforms. It has no backing store, so setNeedsDisplay
     // should not call CACFLayerSetNeedsDisplay, but rather just notify the renderer that it
@@ -76,8 +75,8 @@ public:
         LayerTypeShapeLayer,
         LayerTypeLightSystemBackdropLayer,
         LayerTypeDarkSystemBackdropLayer,
-        LayerTypeScrollingLayer,
-        LayerTypeCustom
+        LayerTypeScrollContainerLayer,
+        LayerTypeCustom,
     };
     enum FilterType { Linear, Nearest, Trilinear };
 
@@ -93,16 +92,18 @@ public:
 
     // This function passes the layer as a void* rather than a PlatformLayer because PlatformLayer
     // is defined differently for Obj C and C++. This allows callers from both languages.
-    static PlatformCALayer* platformCALayer(void* platformLayer);
+    static RefPtr<PlatformCALayer> platformCALayerForLayer(void* platformLayer);
 
     virtual PlatformLayer* platformLayer() const { return m_layer.get(); }
 
     bool usesTiledBackingLayer() const { return layerType() == LayerTypePageTiledBackingLayer || layerType() == LayerTypeTiledBackingLayer; }
 
+    bool isPageTiledBackingLayer() const { return layerType() == LayerTypePageTiledBackingLayer; }
+
     PlatformCALayerClient* owner() const { return m_owner; }
     virtual void setOwner(PlatformCALayerClient* owner) { m_owner = owner; }
 
-    virtual void animationStarted(const String& key, CFTimeInterval beginTime) = 0;
+    virtual void animationStarted(const String& key, MonotonicTime beginTime) = 0;
     virtual void animationEnded(const String& key) = 0;
 
     virtual void setNeedsDisplay() = 0;
@@ -181,6 +182,7 @@ public:
     virtual bool supportsSubpixelAntialiasedText() const = 0;
     virtual void setSupportsSubpixelAntialiasedText(bool) = 0;
 
+    virtual bool hasContents() const = 0;
     virtual CFTypeRef contents() const = 0;
     virtual void setContents(CFTypeRef) = 0;
 
@@ -232,7 +234,15 @@ public:
 
     virtual WindRule shapeWindRule() const = 0;
     virtual void setShapeWindRule(WindRule) = 0;
+
+    virtual const EventRegion* eventRegion() const { return nullptr; }
+    virtual void setEventRegion(const EventRegion&) { }
     
+#if ENABLE(SCROLLING_THREAD)
+    virtual ScrollingNodeID scrollingNodeID() const { return 0; }
+    virtual void setScrollingNodeID(ScrollingNodeID) { }
+#endif
+
     virtual GraphicsLayer::CustomAppearance customAppearance() const = 0;
     virtual void updateCustomAppearance(GraphicsLayer::CustomAppearance) = 0;
 
@@ -251,7 +261,7 @@ public:
     virtual String layerTreeAsString() const = 0;
 #endif // PLATFORM(WIN)
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     bool isWebLayer();
     void setBoundsOnMainThread(CGRect);
     void setPositionOnMainThread(CGPoint);
@@ -262,7 +272,7 @@ public:
     Ref<PlatformCALayer> createCompatibleLayerOrTakeFromPool(LayerType, PlatformCALayerClient*, IntSize);
 
 #if PLATFORM(COCOA)
-    virtual void enumerateRectsBeingDrawn(CGContextRef, void (^block)(CGRect)) = 0;
+    virtual void enumerateRectsBeingDrawn(GraphicsContext&, void (^block)(FloatRect)) = 0;
 #endif
 
     static const unsigned webLayerMaxRectsToPaint = 5;
@@ -275,9 +285,9 @@ public:
     typedef Vector<FloatRect, webLayerMaxRectsToPaint> RepaintRectList;
         
     // Functions allows us to share implementation across WebTiledLayer and WebLayer
-    static RepaintRectList collectRectsToPaint(CGContextRef, PlatformCALayer*);
-    static void drawLayerContents(CGContextRef, PlatformCALayer*, RepaintRectList& dirtyRects, GraphicsLayerPaintBehavior);
-    static void drawRepaintIndicator(CGContextRef, PlatformCALayer*, int repaintCount, CGColorRef customBackgroundColor);
+    static RepaintRectList collectRectsToPaint(GraphicsContext&, PlatformCALayer*);
+    static void drawLayerContents(GraphicsContext&, PlatformCALayer*, RepaintRectList&, GraphicsLayerPaintBehavior);
+    static void drawRepaintIndicator(GraphicsContext&, PlatformCALayer*, int repaintCount, Color customBackgroundColor = { });
     static CGRect frameForLayer(const PlatformLayer*);
 
     void moveToLayerPool();
@@ -293,8 +303,8 @@ protected:
     PlatformCALayerClient* m_owner;
 };
 
-WEBCORE_EXPORT TextStream& operator<<(TextStream&, PlatformCALayer::LayerType);
-WEBCORE_EXPORT TextStream& operator<<(TextStream&, PlatformCALayer::FilterType);
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, PlatformCALayer::LayerType);
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, PlatformCALayer::FilterType);
 
 } // namespace WebCore
 
@@ -302,3 +312,38 @@ WEBCORE_EXPORT TextStream& operator<<(TextStream&, PlatformCALayer::FilterType);
 SPECIALIZE_TYPE_TRAITS_BEGIN(ToValueTypeName) \
     static bool isType(const WebCore::PlatformCALayer& layer) { return layer.predicate; } \
 SPECIALIZE_TYPE_TRAITS_END()
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::PlatformCALayer::FilterType> {
+    using values = EnumValues<
+        WebCore::PlatformCALayer::FilterType,
+        WebCore::PlatformCALayer::FilterType::Linear,
+        WebCore::PlatformCALayer::FilterType::Nearest,
+        WebCore::PlatformCALayer::FilterType::Trilinear
+    >;
+};
+
+template<> struct EnumTraits<WebCore::PlatformCALayer::LayerType> {
+    using values = EnumValues<
+        WebCore::PlatformCALayer::LayerType,
+        WebCore::PlatformCALayer::LayerType::LayerTypeLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeWebLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeSimpleLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeTransformLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeTiledBackingLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypePageTiledBackingLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeTiledBackingTileLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeRootLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeAVPlayerLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeContentsProvidedLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeBackdropLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeShapeLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeLightSystemBackdropLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeDarkSystemBackdropLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeScrollContainerLayer,
+        WebCore::PlatformCALayer::LayerType::LayerTypeCustom
+    >;
+};
+
+} // namespace WTF

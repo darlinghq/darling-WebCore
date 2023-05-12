@@ -23,13 +23,34 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef ScrollTypes_h
-#define ScrollTypes_h
+#pragma once
 
+#include "IntPoint.h"
 #include <cstdint>
 #include <wtf/Assertions.h>
+#include <wtf/EnumTraits.h>
+
+namespace WTF {
+class TextStream;
+}
 
 namespace WebCore {
+
+// scrollPosition is in content coordinates (0,0 is at scrollOrigin), so may have negative components.
+using ScrollPosition = IntPoint;
+// scrollOffset() is the value used by scrollbars (min is 0,0), and should never have negative components.
+using ScrollOffset = IntPoint;
+    
+enum class ScrollType : bool {
+    User,
+    Programmatic
+};
+
+enum class OverscrollBehavior : uint8_t {
+    Auto,
+    Contain,
+    None
+};
 
 enum ScrollDirection : uint8_t {
     ScrollUp,
@@ -45,6 +66,17 @@ enum ScrollLogicalDirection : uint8_t {
     ScrollInlineDirectionForward
 };
 
+// FIXME: Add another status InNativeAnimation to indicate native scrolling is in progress.
+// See: https://bugs.webkit.org/show_bug.cgi?id=204936
+enum class ScrollBehaviorStatus : uint8_t {
+    NotInAnimation,
+    InNonNativeAnimation,
+};
+
+enum class AnimatedScroll : uint8_t {
+    No,
+    Yes
+};
 
 inline ScrollDirection logicalToPhysical(ScrollLogicalDirection direction, bool isVertical, bool isFlipped)
 {
@@ -108,27 +140,40 @@ enum ScrollGranularity : uint8_t {
     ScrollByLine,
     ScrollByPage,
     ScrollByDocument,
-    ScrollByPixel,
-    ScrollByPrecisePixel
+    ScrollByPixel
 };
 
-enum ScrollElasticity {
+enum ScrollElasticity : uint8_t {
     ScrollElasticityAutomatic,
     ScrollElasticityNone,
     ScrollElasticityAllowed
 };
 
-enum ScrollbarOrientation { HorizontalScrollbar, VerticalScrollbar };
+enum ScrollbarOrientation : uint8_t {
+    HorizontalScrollbar,
+    VerticalScrollbar
+};
 
-enum ScrollbarMode { ScrollbarAuto, ScrollbarAlwaysOff, ScrollbarAlwaysOn };
+enum ScrollbarMode : uint8_t {
+    ScrollbarAuto,
+    ScrollbarAlwaysOff,
+    ScrollbarAlwaysOn
+};
 
-enum ScrollbarControlSize { RegularScrollbar, SmallScrollbar };
+enum class ScrollbarControlSize : uint8_t {
+    Regular,
+    Small
+};
 
-enum class ScrollbarExpansionState { Regular, Expanded };
+enum class ScrollbarExpansionState : uint8_t {
+    Regular,
+    Expanded
+};
 
-enum class ScrollEventAxis { Horizontal, Vertical };
-
-typedef unsigned ScrollbarControlState;
+enum class ScrollEventAxis : uint8_t {
+    Horizontal,
+    Vertical
+};
 
 enum ScrollbarControlStateMask {
     ActiveScrollbarState = 1,
@@ -150,7 +195,7 @@ enum ScrollbarPart {
     AllParts = 0xffffffff
 };
 
-enum ScrollbarButtonsPlacement {
+enum ScrollbarButtonsPlacement : uint8_t {
     ScrollbarButtonsNone,
     ScrollbarButtonsSingle,
     ScrollbarButtonsDoubleStart,
@@ -158,37 +203,90 @@ enum ScrollbarButtonsPlacement {
     ScrollbarButtonsDoubleBoth
 };
 
-enum class ScrollbarStyle {
+enum class ScrollbarStyle : uint8_t {
     AlwaysVisible,
     Overlay
 };
 
-enum ScrollbarOverlayStyle {
+enum ScrollbarOverlayStyle: uint8_t {
     ScrollbarOverlayStyleDefault,
     ScrollbarOverlayStyleDark,
     ScrollbarOverlayStyleLight
 };
 
-typedef unsigned ScrollbarControlPartMask;
-
-enum ScrollPinningBehavior {
+enum ScrollPinningBehavior : uint8_t {
     DoNotPin,
     PinToTop,
     PinToBottom
 };
 
-enum ScrollBehaviorForFixedElements {
+enum class ScrollClamping : bool {
+    Unclamped,
+    Clamped
+};
+
+enum ScrollBehaviorForFixedElements : bool {
     StickToDocumentBounds,
     StickToViewportBounds
 };
 
-enum class ScrollbarButtonPressAction {
+enum class ScrollbarButtonPressAction : uint8_t {
     None,
     CenterOnThumb,
     StartDrag,
     Scroll
 };
 
-}
+enum class SelectionRevealMode : uint8_t  {
+    Reveal,
+    RevealUpToMainFrame, // Scroll overflow and iframes, but not the main frame.
+    DoNotReveal
+};
 
-#endif
+enum class ScrollPositioningBehavior : uint8_t {
+    None,
+    Moves,
+    Stationary
+};
+
+using ScrollbarControlState = unsigned;
+using ScrollbarControlPartMask = unsigned;
+using ScrollingNodeID = uint64_t;
+
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, ScrollType);
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, ScrollClamping);
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, ScrollBehaviorForFixedElements);
+
+} // namespace WebCore
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::ScrollbarMode> {
+    using values = EnumValues<
+        WebCore::ScrollbarMode,
+        WebCore::ScrollbarMode::ScrollbarAuto,
+        WebCore::ScrollbarMode::ScrollbarAlwaysOff,
+        WebCore::ScrollbarMode::ScrollbarAlwaysOn
+    >;
+};
+
+template<> struct EnumTraits<WebCore::ScrollElasticity> {
+    using values = EnumValues<
+        WebCore::ScrollElasticity,
+        WebCore::ScrollElasticity::ScrollElasticityAutomatic,
+        WebCore::ScrollElasticity::ScrollElasticityNone,
+        WebCore::ScrollElasticity::ScrollElasticityAllowed
+    >;
+};
+
+
+template<> struct EnumTraits<WebCore::ScrollPinningBehavior> {
+    using values = EnumValues<
+        WebCore::ScrollPinningBehavior,
+        WebCore::ScrollPinningBehavior::DoNotPin,
+        WebCore::ScrollPinningBehavior::PinToTop,
+        WebCore::ScrollPinningBehavior::PinToBottom
+    >;
+};
+
+} // namespace WTF

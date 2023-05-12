@@ -25,7 +25,7 @@
 
 #pragma once
 
-#if USE(REQUEST_ANIMATION_FRAME_DISPLAY_MONITOR)
+#if PLATFORM(MAC)
 
 #include "DisplayRefreshMonitor.h"
 #include <wtf/WeakPtr.h>
@@ -43,16 +43,16 @@ public:
     
     virtual ~DisplayRefreshMonitorMac();
 
-    void displayLinkFired();
+    void displayLinkFired() override;
     bool requestRefreshCallback() override;
+    void stop() override;
 
 private:
     explicit DisplayRefreshMonitorMac(PlatformDisplayID);
 
-    WeakPtrFactory<DisplayRefreshMonitorMac> m_weakFactory;
-    CVDisplayLinkRef m_displayLink;
+    CVDisplayLinkRef m_displayLink { nullptr };
 };
 
 }
 
-#endif // USE(REQUEST_ANIMATION_FRAME_DISPLAY_MONITOR)
+#endif // PLATFORM(MAC)

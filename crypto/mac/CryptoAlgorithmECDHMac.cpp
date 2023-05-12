@@ -26,34 +26,23 @@
 #include "config.h"
 #include "CryptoAlgorithmECDH.h"
 
-#if ENABLE(SUBTLE_CRYPTO)
+#if ENABLE(WEB_CRYPTO)
 
 #include "CommonCryptoUtilities.h"
 #include "CryptoKeyEC.h"
-#include "ScriptExecutionContext.h"
 
 namespace WebCore {
 
-void CryptoAlgorithmECDH::platformDeriveBits(Ref<CryptoKey>&& baseKey, Ref<CryptoKey>&& publicKey, size_t length, Callback&& callback, ScriptExecutionContext& context, WorkQueue& workQueue)
+Optional<Vector<uint8_t>> CryptoAlgorithmECDH::platformDeriveBits(const CryptoKeyEC& baseKey, const CryptoKeyEC& publicKey)
 {
-    context.ref();
-    workQueue.dispatch([baseKey = WTFMove(baseKey), publicKey = WTFMove(publicKey), length, callback = WTFMove(callback), &context]() mutable {
-        auto& ecBaseKey = downcast<CryptoKeyEC>(baseKey.get());
-        auto& ecPublicKey = downcast<CryptoKeyEC>(publicKey.get());
-
-        std::optional<Vector<uint8_t>> result = std::nullopt;
-        Vector<uint8_t> derivedKey(ecBaseKey.keySizeInBits() / 8); // Per https://tools.ietf.org/html/rfc6090#section-4.
-        size_t size = derivedKey.size();
-        if (!CCECCryptorComputeSharedSecret(ecBaseKey.platformKey(), ecPublicKey.platformKey(), derivedKey.data(), &size))
-            result = WTFMove(derivedKey);
-
-        context.postTask([result = WTFMove(result), length, callback = WTFMove(callback)](ScriptExecutionContext& context) mutable {
-            callback(WTFMove(result), length);
-            context.deref();
-        });
-    });
+    Optional<Vector<uint8_t>> result = WTF::nullopt;
+    Vector<uint8_t> derivedKey(baseKey.keySizeInBits() / 8); // Per https://tools.ietf.org/html/rfc6090#section-4.
+    size_t size = derivedKey.size();
+    if (!CCECCryptorComputeSharedSecret(baseKey.platformKey(), publicKey.platformKey(), derivedKey.data(), &size))
+        result = WTFMove(derivedKey);
+    return result;
 }
 
 }
 
-#endif // ENABLE(SUBTLE_CRYPTO)
+#endif // ENABLE(WEB_CRYPTO)

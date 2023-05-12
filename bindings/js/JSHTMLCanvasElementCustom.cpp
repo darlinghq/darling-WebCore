@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2007, 2016, 2017 Apple Inc. All rights reserved.
- * Copyright (C) 2010 Torch Mobile (Beijing) Co. Ltd. All rights reserved.
+ * Copyright (C) 2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,87 +26,14 @@
 #include "config.h"
 #include "JSHTMLCanvasElement.h"
 
-#include "HTMLCanvasElement.h"
-#include "JSCanvasRenderingContext2D.h"
-#include "JSDOMConvertDictionary.h"
-#include "JSDOMConvertNullable.h"
-#include "JSDOMConvertStrings.h"
-
-#if ENABLE(WEBGL)
-#include "JSWebGLContextAttributes.h"
-#include "JSWebGLRenderingContext.h"
-#if ENABLE(WEBGL2)
-#include "JSWebGL2RenderingContext.h"
-#endif
-#endif
-
-#if ENABLE(WEBGPU)
-#include "JSWebGPURenderingContext.h"
-#endif
-
-using namespace JSC;
+#include <JavaScriptCore/SlotVisitor.h>
+#include <JavaScriptCore/SlotVisitorInlines.h>
 
 namespace WebCore {
 
-JSValue JSHTMLCanvasElement::getContext(ExecState& state)
+void JSHTMLCanvasElement::visitAdditionalChildren(JSC::SlotVisitor& visitor)
 {
-    auto& vm = state.vm();
-    auto scope = DECLARE_THROW_SCOPE(vm);
-
-    if (UNLIKELY(state.argumentCount() < 1))
-        return throwException(&state, scope, createNotEnoughArgumentsError(&state));
-
-    auto contextId = convert<IDLDOMString>(state, state.uncheckedArgument(0));
-    RETURN_IF_EXCEPTION(scope, JSValue());
-
-    if (HTMLCanvasElement::is2dType(contextId))
-        return toJS<IDLNullable<IDLInterface<CanvasRenderingContext2D>>>(state, *globalObject(), static_cast<CanvasRenderingContext2D*>(wrapped().getContext2d(contextId)));
-
-#if ENABLE(WEBGL)
-    if (HTMLCanvasElement::is3dType(contextId)) {
-        auto attributes = convert<IDLDictionary<WebGLContextAttributes>>(state, state.argument(1));
-        RETURN_IF_EXCEPTION(scope, JSValue());
-
-        if (auto context = wrapped().getContextWebGL(contextId, WTFMove(attributes))) {
-            if (is<WebGLRenderingContext>(*context))
-                return toJS<IDLNullable<IDLInterface<WebGLRenderingContext>>>(state, *globalObject(), static_cast<WebGLRenderingContext*>(context));
-#if ENABLE(WEBGL2)
-            if (is<WebGL2RenderingContext>(*context))
-                return toJS<IDLNullable<IDLInterface<WebGL2RenderingContext>>>(state, *globalObject(), static_cast<WebGL2RenderingContext*>(context));
-#endif
-        }
-    }
-#endif
-
-#if ENABLE(WEBGPU)
-    if (HTMLCanvasElement::isWebGPUType(contextId))
-        return toJS<IDLNullable<IDLInterface<WebGPURenderingContext>>>(state, *globalObject(), static_cast<WebGPURenderingContext*>(wrapped().getContextWebGPU(contextId)));
-#endif
-
-    return jsNull();
-}
-
-JSValue JSHTMLCanvasElement::toDataURL(ExecState& state)
-{
-    VM& vm = state.vm();
-    auto scope = DECLARE_THROW_SCOPE(vm);
-
-    auto type = convert<IDLNullable<IDLDOMString>>(state, state.argument(0));
-    RETURN_IF_EXCEPTION(scope, JSC::JSValue());
-
-    std::optional<double> quality;
-    auto qualityValue = state.argument(1);
-    if (qualityValue.isNumber())
-        quality = qualityValue.toNumber(&state);
-
-    // We would use toJS<IDLString> here, but it uses jsStringWithCache and we historically
-    // did not cache here, presumably because results are likely to be differing long strings.
-    auto result = wrapped().toDataURL(type, quality);
-    if (result.hasException()) {
-        propagateException(state, scope, result.releaseException());
-        return { };
-    }
-    return jsString(&state, result.releaseReturnValue());
+    visitor.addOpaqueRoot(static_cast<CanvasBase*>(&wrapped()));
 }
 
 } // namespace WebCore

@@ -58,7 +58,6 @@ public:
     bool isGroup() const override;
     bool isHeading() const override;
     bool isHovered() const override;
-    bool isImage() const override;
     bool isImageButton() const override;
     bool isInputImage() const override;
     bool isLink() const override;
@@ -101,8 +100,8 @@ public:
     float minValueForRange() const override;
     float stepValueForRange() const override;
 
-    AccessibilityObject* selectedRadioButton() override;
-    AccessibilityObject* selectedTabItem() override;
+    AXCoreObject* selectedRadioButton() override;
+    AXCoreObject* selectedTabItem() override;
     AccessibilityButtonState checkboxOrRadioValue() const override;
 
     unsigned hierarchicalLevel() const override;
@@ -113,7 +112,7 @@ public:
     String title() const override;
     String text() const override;
     String stringValue() const override;
-    void colorValue(int& r, int& g, int& b) const override;
+    SRGBA<uint8_t> colorValue() const override;
     String ariaLabeledByAttribute() const override;
     bool hasAttributesRequiredForInclusion() const final;
     void setIsExpanded(bool) override;
@@ -132,7 +131,6 @@ public:
     AccessibilityObject* parentObject() const override;
     AccessibilityObject* parentObjectIfExists() const override;
 
-    void detach(AccessibilityDetachmentType, AXObjectCache*) override;
     void childrenChanged() override;
     void updateAccessibilityRole() override;
 
@@ -143,11 +141,12 @@ public:
 
 protected:
     explicit AccessibilityNodeObject(Node*);
+    void detachRemoteParts(AccessibilityDetachmentType) override;
 
-    AccessibilityRole m_ariaRole;
-    mutable AccessibilityRole m_roleForMSAA;
+    AccessibilityRole m_ariaRole { AccessibilityRole::Unknown };
+    mutable AccessibilityRole m_roleForMSAA { AccessibilityRole::Unknown };
 #ifndef NDEBUG
-    bool m_initialized;
+    bool m_initialized { false };
 #endif
 
     bool isDetached() const override { return !m_node; }
@@ -177,11 +176,11 @@ protected:
     Element* menuItemElementForMenu() const;
     AccessibilityObject* menuButtonForMenu() const;
     AccessibilityObject* captionForFigure() const;
+    virtual void titleElementText(Vector<AccessibilityText>&) const;
 
 private:
     bool isAccessibilityNodeObject() const final { return true; }
-    void accessibilityText(Vector<AccessibilityText>&) override;
-    virtual void titleElementText(Vector<AccessibilityText>&) const;
+    void accessibilityText(Vector<AccessibilityText>&) const override;
     void alternativeText(Vector<AccessibilityText>&) const;
     void visibleText(Vector<AccessibilityText>&) const;
     void helpText(Vector<AccessibilityText>&) const;
@@ -189,7 +188,11 @@ private:
     void ariaLabeledByText(Vector<AccessibilityText>&) const;
     bool computeAccessibilityIsIgnored() const override;
     bool usesAltTagForTextComputation() const;
-
+    bool roleIgnoresTitle() const;
+    bool postKeyboardKeysForValueChange(bool increase);
+    void setNodeValue(bool increase, float value);
+    bool performDismissAction() final;
+    
     Node* m_node;
 };
 

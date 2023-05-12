@@ -19,8 +19,7 @@
  * Boston, MA 02110-1301, USA.
  */
 
-#ifndef FEFlood_h
-#define FEFlood_h
+#pragma once
 
 #include "Color.h"
 #include "Filter.h"
@@ -32,28 +31,29 @@ class FEFlood : public FilterEffect {
 public:
     static Ref<FEFlood> create(Filter&, const Color&, float);
 
-    const Color& floodColor() const;
+    const Color& floodColor() const { return m_floodColor; }
     bool setFloodColor(const Color&);
 
-    float floodOpacity() const;
+    float floodOpacity() const { return m_floodOpacity; }
     bool setFloodOpacity(float);
 
 #if !USE(CG)
     // feFlood does not perform color interpolation of any kind, so the result is always in the current
     // color space regardless of the value of color-interpolation-filters.
-    void setOperatingColorSpace(ColorSpace) override { FilterEffect::setResultColorSpace(ColorSpaceSRGB); }
-    void setResultColorSpace(ColorSpace) override { FilterEffect::setResultColorSpace(ColorSpaceSRGB); }
+    void setOperatingColorSpace(ColorSpace) override { FilterEffect::setResultColorSpace(ColorSpace::SRGB); }
+    void setResultColorSpace(ColorSpace) override { FilterEffect::setResultColorSpace(ColorSpace::SRGB); }
 #endif
-
-    void platformApplySoftware() override;
-    void dump() override;
-
-    void determineAbsolutePaintRect() override { setAbsolutePaintRect(enclosingIntRect(maxEffectRect())); }
-
-    TextStream& externalRepresentation(TextStream&, int indention) const override;
 
 private:
     FEFlood(Filter&, const Color&, float);
+
+    const char* filterName() const final { return "FEFlood"; }
+
+    void platformApplySoftware() override;
+
+    void determineAbsolutePaintRect() override { setAbsolutePaintRect(enclosingIntRect(maxEffectRect())); }
+
+    WTF::TextStream& externalRepresentation(WTF::TextStream&, RepresentationType) const override;
 
     Color m_floodColor;
     float m_floodOpacity;
@@ -61,4 +61,3 @@ private:
 
 } // namespace WebCore
 
-#endif // FEFlood_h

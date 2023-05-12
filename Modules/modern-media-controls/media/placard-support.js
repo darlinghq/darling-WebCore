@@ -44,6 +44,20 @@ class PlacardSupport extends MediaControllerSupport
         this._updatePlacard();
     }
 
+    enable()
+    {
+        super.enable();
+        this._isDisabled = false;
+        this._updatePlacard();
+    }
+
+    disable()
+    {
+        // Never disable the plackard, just remeber whether the placard should be visible or not
+        this._isDisabled = true;
+        this._updatePlacard();
+    }
+
     // Private
 
     _updatePlacard()
@@ -54,12 +68,38 @@ class PlacardSupport extends MediaControllerSupport
         let placard = null;
         if (media.webkitPresentationMode === "picture-in-picture")
             placard = controls.pipPlacard;
-        else if (media.webkitCurrentPlaybackTargetIsWireless)
+        else if (media.webkitCurrentPlaybackTargetIsWireless) {
+            this._updateAirPlayPlacard();
             placard = controls.airplayPlacard;
-        else if (media instanceof HTMLVideoElement && media.error !== null && media.played.length === 0)
+        } else if (!this._isDisabled && media instanceof HTMLVideoElement && media.error !== null && media.played.length === 0)
             placard = controls.invalidPlacard;
 
         controls.placard = placard;
     }
+    
+    _updateAirPlayPlacard()
+    {
+        var deviceName = "";
+        
+        if (!this.mediaController.host)
+            return;
+        
+        switch(this.mediaController.host.externalDeviceType) {
+            case 'airplay':
+                deviceName = UIString("This video is playing on “%s”.", escapeHTML(this.mediaController.host.externalDeviceDisplayName) || UIString("Apple TV"));
+                break;
+            case 'tvout':
+                deviceName = UIString("This video is playing on the TV.");
+                break;
+        }
+        this.mediaController.controls.airplayPlacard.description = deviceName;
+    }
 
+}
+
+function escapeHTML(unsafeString)
+{
+    var div = document.createElement("div");
+    div.textContent = unsafeString;
+    return div.innerHTML;
 }

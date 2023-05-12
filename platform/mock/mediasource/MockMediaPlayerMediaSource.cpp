@@ -37,24 +37,36 @@
 
 namespace WebCore {
 
+class MediaPlayerFactoryMediaSourceMock final : public MediaPlayerFactory {
+private:
+    MediaPlayerEnums::MediaEngineIdentifier identifier() const final { return MediaPlayerEnums::MediaEngineIdentifier::MockMSE; };
+
+    std::unique_ptr<MediaPlayerPrivateInterface> createMediaEnginePlayer(MediaPlayer* player) const final { return makeUnique<MockMediaPlayerMediaSource>(player); }
+
+    void getSupportedTypes(HashSet<String, ASCIICaseInsensitiveHash>& types) const final
+    {
+        return MockMediaPlayerMediaSource::getSupportedTypes(types);
+    }
+
+    MediaPlayer::SupportsType supportsTypeAndCodecs(const MediaEngineSupportParameters& parameters) const final
+    {
+        return MockMediaPlayerMediaSource::supportsType(parameters);
+    }
+};
+
 // MediaPlayer Enigne Support
 void MockMediaPlayerMediaSource::registerMediaEngine(MediaEngineRegistrar registrar)
 {
-    registrar([](MediaPlayer* player) { return std::make_unique<MockMediaPlayerMediaSource>(player); }, getSupportedTypes,
-        supportsType, 0, 0, 0, 0);
+    registrar(makeUnique<MediaPlayerFactoryMediaSourceMock>());
 }
 
+// FIXME: What does the word "cache" mean here?
 static const HashSet<String, ASCIICaseInsensitiveHash>& mimeTypeCache()
 {
-    static NeverDestroyed<HashSet<String, ASCIICaseInsensitiveHash>> cache;
-    static bool isInitialized = false;
-
-    if (!isInitialized) {
-        isInitialized = true;
-        cache.get().add(ASCIILiteral("video/mock"));
-        cache.get().add(ASCIILiteral("audio/mock"));
-    }
-
+    static const auto cache = makeNeverDestroyed(HashSet<String, ASCIICaseInsensitiveHash> {
+        "video/mock",
+        "audio/mock",
+    });
     return cache;
 }
 
@@ -66,41 +78,42 @@ void MockMediaPlayerMediaSource::getSupportedTypes(HashSet<String, ASCIICaseInse
 MediaPlayer::SupportsType MockMediaPlayerMediaSource::supportsType(const MediaEngineSupportParameters& parameters)
 {
     if (!parameters.isMediaSource)
-        return MediaPlayer::IsNotSupported;
+        return MediaPlayer::SupportsType::IsNotSupported;
 
     auto containerType = parameters.type.containerType();
     if (containerType.isEmpty() || !mimeTypeCache().contains(containerType))
-        return MediaPlayer::IsNotSupported;
+        return MediaPlayer::SupportsType::IsNotSupported;
 
     auto codecs = parameters.type.parameter(ContentType::codecsParameter());
     if (codecs.isEmpty())
-        return MediaPlayer::MayBeSupported;
+        return MediaPlayer::SupportsType::MayBeSupported;
 
-    return codecs == "mock" ? MediaPlayer::IsSupported : MediaPlayer::MayBeSupported;
+    if (codecs == "mock" || codecs == "kcom")
+        return MediaPlayer::SupportsType::IsSupported;
+
+    return MediaPlayer::SupportsType::MayBeSupported;
 }
 
 MockMediaPlayerMediaSource::MockMediaPlayerMediaSource(MediaPlayer* player)
     : m_player(player)
     , m_currentTime(MediaTime::zeroTime())
-    , m_readyState(MediaPlayer::HaveNothing)
-    , m_networkState(MediaPlayer::Empty)
+    , m_readyState(MediaPlayer::ReadyState::HaveNothing)
+    , m_networkState(MediaPlayer::NetworkState::Empty)
     , m_playing(false)
     , m_seekCompleted(true)
 {
 }
 
-MockMediaPlayerMediaSource::~MockMediaPlayerMediaSource()
-{
-}
+MockMediaPlayerMediaSource::~MockMediaPlayerMediaSource() = default;
 
 void MockMediaPlayerMediaSource::load(const String&)
 {
     ASSERT_NOT_REACHED();
 }
 
-void MockMediaPlayerMediaSource::load(const String&, MediaSourcePrivateClient* source)
+void MockMediaPlayerMediaSource::load(const URL&, const ContentType&, MediaSourcePrivateClient* source)
 {
-    m_mediaSourcePrivate = MockMediaSourcePrivate::create(this, source);
+    m_mediaSourcePrivate = MockMediaSourcePrivate::create(*this, *source);
 }
 
 void MockMediaPlayerMediaSource::cancelLoad()
@@ -169,7 +182,7 @@ std::unique_ptr<PlatformTimeRanges> MockMediaPlayerMediaSource::buffered() const
     if (m_mediaSourcePrivate)
         return m_mediaSourcePrivate->buffered();
 
-    return std::make_unique<PlatformTimeRanges>();
+    return makeUnique<PlatformTimeRanges>();
 }
 
 bool MockMediaPlayerMediaSource::didLoadingProgress() const
@@ -274,9 +287,9 @@ void MockMediaPlayerMediaSource::seekCompleted()
         });
 }
 
-std::optional<PlatformVideoPlaybackQualityMetrics> MockMediaPlayerMediaSource::videoPlaybackQualityMetrics()
+Optional<VideoPlaybackQualityMetrics> MockMediaPlayerMediaSource::videoPlaybackQualityMetrics()
 {
-    return m_mediaSourcePrivate ? m_mediaSourcePrivate->videoPlaybackQualityMetrics() : std::nullopt;
+    return m_mediaSourcePrivate ? m_mediaSourcePrivate->videoPlaybackQualityMetrics() : WTF::nullopt;
 }
 
 }

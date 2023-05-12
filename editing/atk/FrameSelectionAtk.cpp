@@ -20,22 +20,23 @@
 #include "config.h"
 #include "FrameSelection.h"
 
-#if HAVE(ACCESSIBILITY)
+#if ENABLE(ACCESSIBILITY)
 
 #include "AXObjectCache.h"
 #include "Document.h"
 #include "Frame.h"
 #include "RenderListItem.h"
-#include "WebKitAccessibleWrapperAtk.h"
+#include "WebKitAccessible.h"
+#include "WebKitAccessibleUtil.h"
 #include <glib.h>
 #include <wtf/NeverDestroyed.h>
 #include <wtf/RefPtr.h>
 
 namespace WebCore {
 
-static void emitTextSelectionChange(AccessibilityObject* object, VisibleSelection selection, int offset)
+static void emitTextSelectionChange(AXCoreObject* object, VisibleSelection selection, int offset)
 {
-    AtkObject* axObject = object->wrapper();
+    auto* axObject = object->wrapper();
     if (!axObject || !ATK_IS_TEXT(axObject))
         return;
 
@@ -43,7 +44,7 @@ static void emitTextSelectionChange(AccessibilityObject* object, VisibleSelectio
     // the list item marker is exposed through the text of the accessible list item rather
     // than through a separate accessible object.
     RenderObject* renderer = object->renderer();
-    if (is<RenderListItem>(renderer) && renderer->style().direction() == LTR)
+    if (is<RenderListItem>(renderer) && renderer->style().direction() == TextDirection::LTR)
         offset += downcast<RenderListItem>(*renderer).markerTextWithSuffix().length();
 
     g_signal_emit_by_name(axObject, "text-caret-moved", offset);
@@ -51,12 +52,12 @@ static void emitTextSelectionChange(AccessibilityObject* object, VisibleSelectio
         g_signal_emit_by_name(axObject, "text-selection-changed");
 }
 
-static void maybeEmitTextFocusChange(RefPtr<AccessibilityObject>&& object)
+static void maybeEmitTextFocusChange(RefPtr<AXCoreObject>&& object)
 {
     // This static variable is needed to keep track of the old object
     // as per previous calls to this function, in order to properly
     // decide whether to emit some signals or not.
-    static NeverDestroyed<RefPtr<AccessibilityObject>> oldObject;
+    static NeverDestroyed<RefPtr<AXCoreObject>> oldObject;
 
     // Ensure the oldObject belongs to the same document that the
     // current object so further comparisons make sense. Otherwise,
@@ -65,17 +66,17 @@ static void maybeEmitTextFocusChange(RefPtr<AccessibilityObject>&& object)
     if (object && oldObject.get() && oldObject.get()->document() != object->document())
         oldObject.get() = nullptr;
 
-    AtkObject* axObject = object ? object->wrapper() : 0;
-    AtkObject* oldAxObject = oldObject.get() ? oldObject.get()->wrapper() : nullptr;
+    auto* axObject = object ? object->wrapper() : nullptr;
+    auto* oldAxObject = oldObject.get() ? oldObject.get()->wrapper() : nullptr;
 
     if (axObject != oldAxObject) {
         if (oldAxObject && ATK_IS_TEXT(oldAxObject)) {
-            g_signal_emit_by_name(oldAxObject, "focus-event", false);
-            atk_object_notify_state_change(oldAxObject, ATK_STATE_FOCUSED, false);
+            g_signal_emit_by_name(oldAxObject, "focus-event", FALSE);
+            atk_object_notify_state_change(ATK_OBJECT(oldAxObject), ATK_STATE_FOCUSED, FALSE);
         }
         if (axObject && ATK_IS_TEXT(axObject)) {
-            g_signal_emit_by_name(axObject, "focus-event", true);
-            atk_object_notify_state_change(axObject, ATK_STATE_FOCUSED, true);
+            g_signal_emit_by_name(axObject, "focus-event", TRUE);
+            atk_object_notify_state_change(ATK_OBJECT(axObject), ATK_STATE_FOCUSED, TRUE);
         }
     }
 
@@ -96,7 +97,7 @@ void FrameSelection::notifyAccessibilityForSelectionChange(const AXTextStateChan
     if (!focusedNode)
         return;
 
-    AXObjectCache* cache = m_frame->document()->existingAXObjectCache();
+    AXObjectCache* cache = m_document->existingAXObjectCache();
     if (!cache)
         return;
 
@@ -105,7 +106,7 @@ void FrameSelection::notifyAccessibilityForSelectionChange(const AXTextStateChan
         return;
 
     int offset;
-    RefPtr<AccessibilityObject> object = objectFocusedAndCaretOffsetUnignored(accessibilityObject, offset);
+    RefPtr<AXCoreObject> object = objectFocusedAndCaretOffsetUnignored(accessibilityObject, offset);
     if (!object)
         return;
 
@@ -115,4 +116,4 @@ void FrameSelection::notifyAccessibilityForSelectionChange(const AXTextStateChan
 
 } // namespace WebCore
 
-#endif // HAVE(ACCESSIBILITY)
+#endif // ENABLE(ACCESSIBILITY)

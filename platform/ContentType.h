@@ -33,23 +33,56 @@ namespace WebCore {
 
 class ContentType {
 public:
-    static ContentType create(const String& type) { return ContentType(type); }
-    explicit ContentType(const String& type);
+    WEBCORE_EXPORT explicit ContentType(String&& type);
+    WEBCORE_EXPORT explicit ContentType(const String& type);
     ContentType() = default;
 
-    static const String& codecsParameter();
+    WEBCORE_EXPORT static const String& codecsParameter();
     static const String& profilesParameter();
 
-    String parameter(const String& parameterName) const;
-    String containerType() const;
+    WEBCORE_EXPORT String parameter(const String& parameterName) const;
+    WEBCORE_EXPORT String containerType() const;
     Vector<String> codecs() const;
     Vector<String> profiles() const;
     const String& raw() const { return m_type; }
     bool isEmpty() const { return m_type.isEmpty(); }
+
+    WEBCORE_EXPORT String toJSONString() const;
+
+    template<class Encoder>
+    void encode(Encoder& encoder) const
+    {
+        encoder << m_type;
+    }
+
+    template <class Decoder>
+    static Optional<ContentType> decode(Decoder& decoder)
+    {
+        Optional<String> type;
+        decoder >> type;
+        if (!type)
+            return WTF::nullopt;
+
+        return { ContentType(WTFMove(*type)) };
+    }
+
 private:
     String m_type;
 };
 
 } // namespace WebCore
+
+namespace WTF {
+template<typename Type> struct LogArgument;
+
+template <>
+struct LogArgument<WebCore::ContentType> {
+    static String toString(const WebCore::ContentType& type)
+    {
+        return type.toJSONString();
+    }
+};
+
+} // namespace WTF
 
 #endif // ContentType_h

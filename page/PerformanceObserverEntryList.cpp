@@ -26,8 +26,6 @@
 #include "config.h"
 #include "PerformanceObserverEntryList.h"
 
-#if ENABLE(WEB_TIMING)
-
 #include "PerformanceEntry.h"
 
 namespace WebCore {
@@ -56,7 +54,7 @@ Vector<RefPtr<PerformanceEntry>> PerformanceObserverEntryList::getEntriesByName(
 
     // PerformanceObservers can only be registered for valid types.
     // So if the incoming entryType is an unknown type, there will be no matches.
-    std::optional<PerformanceEntry::Type> type;
+    Optional<PerformanceEntry::Type> type;
     if (!entryType.isNull()) {
         type = PerformanceEntry::parseEntryTypeString(entryType);
         if (!type)
@@ -75,5 +73,3 @@ Vector<RefPtr<PerformanceEntry>> PerformanceObserverEntryList::getEntriesByName(
 }
 
 } // namespace WebCore
-
-#endif // ENABLE(WEB_TIMING)

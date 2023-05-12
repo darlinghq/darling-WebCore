@@ -29,7 +29,6 @@
  */
 
 #include "config.h"
-#if ENABLE(WEB_SOCKETS)
 #include "ThreadableWebSocketChannelClientWrapper.h"
 
 #include "ScriptExecutionContext.h"
@@ -154,7 +153,7 @@ void ThreadableWebSocketChannelClientWrapper::clearClient()
 
 void ThreadableWebSocketChannelClientWrapper::didConnect()
 {
-    m_pendingTasks.append(std::make_unique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this)] (ScriptExecutionContext&) {
+    m_pendingTasks.append(makeUnique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this)] (ScriptExecutionContext&) {
         if (m_client)
             m_client->didConnect();
     }));
@@ -165,7 +164,7 @@ void ThreadableWebSocketChannelClientWrapper::didConnect()
 
 void ThreadableWebSocketChannelClientWrapper::didReceiveMessage(const String& message)
 {
-    m_pendingTasks.append(std::make_unique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this), message = message.isolatedCopy()] (ScriptExecutionContext&) {
+    m_pendingTasks.append(makeUnique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this), message = message.isolatedCopy()] (ScriptExecutionContext&) {
         if (m_client)
             m_client->didReceiveMessage(message);
     }));
@@ -176,7 +175,7 @@ void ThreadableWebSocketChannelClientWrapper::didReceiveMessage(const String& me
 
 void ThreadableWebSocketChannelClientWrapper::didReceiveBinaryData(Vector<uint8_t>&& binaryData)
 {
-    m_pendingTasks.append(std::make_unique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this), binaryData = WTFMove(binaryData)] (ScriptExecutionContext&) mutable {
+    m_pendingTasks.append(makeUnique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this), binaryData = WTFMove(binaryData)] (ScriptExecutionContext&) mutable {
         if (m_client)
             m_client->didReceiveBinaryData(WTFMove(binaryData));
     }));
@@ -187,7 +186,7 @@ void ThreadableWebSocketChannelClientWrapper::didReceiveBinaryData(Vector<uint8_
 
 void ThreadableWebSocketChannelClientWrapper::didUpdateBufferedAmount(unsigned bufferedAmount)
 {
-    m_pendingTasks.append(std::make_unique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this), bufferedAmount] (ScriptExecutionContext&) {
+    m_pendingTasks.append(makeUnique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this), bufferedAmount] (ScriptExecutionContext&) {
         if (m_client)
             m_client->didUpdateBufferedAmount(bufferedAmount);
     }));
@@ -198,7 +197,7 @@ void ThreadableWebSocketChannelClientWrapper::didUpdateBufferedAmount(unsigned b
 
 void ThreadableWebSocketChannelClientWrapper::didStartClosingHandshake()
 {
-    m_pendingTasks.append(std::make_unique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this)] (ScriptExecutionContext&) {
+    m_pendingTasks.append(makeUnique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this)] (ScriptExecutionContext&) {
         if (m_client)
             m_client->didStartClosingHandshake();
     }));
@@ -209,7 +208,7 @@ void ThreadableWebSocketChannelClientWrapper::didStartClosingHandshake()
 
 void ThreadableWebSocketChannelClientWrapper::didClose(unsigned unhandledBufferedAmount, WebSocketChannelClient::ClosingHandshakeCompletionStatus closingHandshakeCompletion, unsigned short code, const String& reason)
 {
-    m_pendingTasks.append(std::make_unique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this), unhandledBufferedAmount, closingHandshakeCompletion, code, reason = reason.isolatedCopy()] (ScriptExecutionContext&) {
+    m_pendingTasks.append(makeUnique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this), unhandledBufferedAmount, closingHandshakeCompletion, code, reason = reason.isolatedCopy()] (ScriptExecutionContext&) {
             if (m_client)
                 m_client->didClose(unhandledBufferedAmount, closingHandshakeCompletion, code, reason);
         }));
@@ -220,7 +219,7 @@ void ThreadableWebSocketChannelClientWrapper::didClose(unsigned unhandledBuffere
 
 void ThreadableWebSocketChannelClientWrapper::didReceiveMessageError()
 {
-    m_pendingTasks.append(std::make_unique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this)] (ScriptExecutionContext&) {
+    m_pendingTasks.append(makeUnique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this)] (ScriptExecutionContext&) {
         if (m_client)
             m_client->didReceiveMessageError();
     }));
@@ -231,7 +230,7 @@ void ThreadableWebSocketChannelClientWrapper::didReceiveMessageError()
 
 void ThreadableWebSocketChannelClientWrapper::didUpgradeURL()
 {
-    m_pendingTasks.append(std::make_unique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this)] (ScriptExecutionContext&) {
+    m_pendingTasks.append(makeUnique<ScriptExecutionContext::Task>([this, protectedThis = makeRef(*this)] (ScriptExecutionContext&) {
         if (m_client)
             m_client->didUpgradeURL();
     }));
@@ -271,5 +270,3 @@ void ThreadableWebSocketChannelClientWrapper::processPendingTasks()
 }
 
 } // namespace WebCore
-
-#endif

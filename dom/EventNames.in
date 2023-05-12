@@ -1,22 +1,30 @@
 namespace="Event"
+factoryFunction=toNewlyCreated
+useNamespaceAsSuffix=false
 
 Event
 Events interfaceName=Event
 HTMLEvents interfaceName=Event
 AnimationEvent
+AnimationPlaybackEvent
 BeforeLoadEvent
 BeforeUnloadEvent
 ClipboardEvent
 CloseEvent
 CompositionEvent
 CustomEvent
+DragEvent
+ExtendableEvent conditional=SERVICE_WORKER
+ExtendableMessageEvent conditional=SERVICE_WORKER
 ErrorEvent
+FetchEvent conditional=SERVICE_WORKER
 FocusEvent
 HashChangeEvent
 InputEvent
 InputEvents interfaceName=InputEvent
 KeyboardEvent
 KeyboardEvents interfaceName=KeyboardEvent
+MediaQueryListEvent
 MessageEvent
 MouseEvent
 MouseEvents interfaceName=MouseEvent
@@ -35,19 +43,27 @@ WebKitAnimationEvent
 WebKitTransitionEvent
 WheelEvent
 XMLHttpRequestProgressEvent
+ApplePayCancelEvent conditional=APPLE_PAY
 ApplePayPaymentAuthorizedEvent conditional=APPLE_PAY
 ApplePayPaymentMethodSelectedEvent conditional=APPLE_PAY
 ApplePayShippingContactSelectedEvent conditional=APPLE_PAY
 ApplePayShippingMethodSelectedEvent conditional=APPLE_PAY
 ApplePayValidateMerchantEvent conditional=APPLE_PAY
 AudioProcessingEvent conditional=WEB_AUDIO
+BlobEvent conditional=MEDIA_STREAM
 OfflineAudioCompletionEvent conditional=WEB_AUDIO
-MediaStreamEvent conditional=WEB_RTC
+MediaRecorderErrorEvent conditional=MEDIA_STREAM
 MediaStreamTrackEvent conditional=MEDIA_STREAM
+MerchantValidationEvent conditional=PAYMENT_REQUEST
+PaymentMethodChangeEvent conditional=PAYMENT_REQUEST
+PaymentRequestUpdateEvent conditional=PAYMENT_REQUEST
+RTCPeerConnectionIceErrorEvent conditional=WEB_RTC
 RTCPeerConnectionIceEvent conditional=WEB_RTC
 RTCDataChannelEvent conditional=WEB_RTC
-RTCDTMFToneChangeEvent conditional=WEB_RTC_DTMF
+RTCDTMFToneChangeEvent conditional=WEB_RTC
 RTCTrackEvent conditional=WEB_RTC
+SpeechRecognitionErrorEvent
+SpeechRecognitionEvent
 SpeechSynthesisEvent conditional=SPEECH_SYNTHESIS
 WebGLContextEvent conditional=WEBGL
 StorageEvent
@@ -58,12 +74,10 @@ IDBVersionChangeEvent conditional=INDEXED_DATABASE
 TouchEvent conditional=TOUCH_EVENTS
 DeviceMotionEvent conditional=DEVICE_ORIENTATION
 DeviceOrientationEvent conditional=DEVICE_ORIENTATION
-DeviceProximityEvent conditional=PROXIMITY_EVENTS
 OrientationEvent interfaceName=Event, conditional=ORIENTATION_EVENTS
 WebKitMediaKeyMessageEvent conditional=LEGACY_ENCRYPTED_MEDIA
 WebKitMediaKeyNeededEvent conditional=LEGACY_ENCRYPTED_MEDIA
-TrackEvent conditional=VIDEO_TRACK
-AutocompleteErrorEvent conditional=REQUEST_AUTOCOMPLETE
+TrackEvent conditional=VIDEO
 SecurityPolicyViolationEvent
 GestureEvent conditional=IOS_GESTURE_EVENTS|MAC_GESTURE_EVENTS
 WebKitPlaybackTargetAvailabilityEvent conditional=WIRELESS_PLAYBACK_TARGET
@@ -71,3 +85,10 @@ GamepadEvent conditional=GAMEPAD
 OverconstrainedErrorEvent conditional=MEDIA_STREAM
 MediaEncryptedEvent conditional=ENCRYPTED_MEDIA
 MediaKeyMessageEvent conditional=ENCRYPTED_MEDIA
+PointerEvent
+GPUUncapturedErrorEvent conditional=WEBGPU
+EnterPictureInPictureEvent conditional=PICTURE_IN_PICTURE_API
+XRInputSourceEvent conditional=WEBXR
+XRInputSourcesChangeEvent conditional=WEBXR
+XRReferenceSpaceEvent conditional=WEBXR
+XRSessionEvent conditional=WEBXR

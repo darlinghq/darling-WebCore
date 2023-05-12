@@ -26,15 +26,16 @@
 
 #include "config.h"
 #include "PublicURLManager.h"
-#include "URL.h"
+
 #include "URLRegistry.h"
+#include <wtf/URL.h>
 #include <wtf/text/StringHash.h>
 
 namespace WebCore {
 
 std::unique_ptr<PublicURLManager> PublicURLManager::create(ScriptExecutionContext* context)
 {
-    auto publicURLManager = std::make_unique<PublicURLManager>(context);
+    auto publicURLManager = makeUnique<PublicURLManager>(context);
     publicURLManager->suspendIfNeeded();
     return publicURLManager;
 }
@@ -45,13 +46,13 @@ PublicURLManager::PublicURLManager(ScriptExecutionContext* context)
 {
 }
 
-void PublicURLManager::registerURL(SecurityOrigin* origin, const URL& url, URLRegistrable& registrable)
+void PublicURLManager::registerURL(const URL& url, URLRegistrable& registrable)
 {
     if (m_isStopped)
         return;
 
     RegistryURLMap::iterator found = m_registryToURL.add(&registrable.registry(), URLSet()).iterator;
-    found->key->registerURL(origin, url, registrable);
+    found->key->registerURL(*scriptExecutionContext(), url, registrable);
     found->value.add(url.string());
 }
 
@@ -74,16 +75,10 @@ void PublicURLManager::stop()
     m_isStopped = true;
     for (auto& registry : m_registryToURL) {
         for (auto& url : registry.value)
-            registry.key->unregisterURL(URL(ParsedURLString, url));
+            registry.key->unregisterURL(URL({ }, url));
     }
 
     m_registryToURL.clear();
-}
-
-bool PublicURLManager::canSuspendForDocumentSuspension() const
-{
-    // Suspending an PublicURLManager is safe as it does not cause any JS to be executed.
-    return true;
 }
 
 const char* PublicURLManager::activeDOMObjectName() const

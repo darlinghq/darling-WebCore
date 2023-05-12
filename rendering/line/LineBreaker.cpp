@@ -34,7 +34,7 @@ void LineBreaker::reset()
 {
     m_positionedObjects.clear();
     m_hyphenated = false;
-    m_clear = CNONE;
+    m_clear = Clear::None;
 }
 
 // FIXME: The entire concept of the skipTrailingWhitespace function is flawed, since we really need to be building
@@ -62,11 +62,11 @@ void LineBreaker::skipLeadingWhitespace(InlineBidiResolver& resolver, LineInfo& 
         if (object.isOutOfFlowPositioned()) {
             setStaticPositions(m_block, downcast<RenderBox>(object), width.shouldIndentText());
             if (object.style().isOriginalDisplayInlineType()) {
-                resolver.runs().appendRun(std::make_unique<BidiRun>(0, 1, object, resolver.context(), resolver.dir()));
+                resolver.runs().appendRun(makeUnique<BidiRun>(0, 1, object, resolver.context(), resolver.dir()));
                 lineInfo.incrementRunsFromLeadingWhitespace();
             }
         } else if (object.isFloating())
-            m_block.positionNewFloatOnLine(*m_block.insertFloatingObject(downcast<RenderBox>(object)), lastFloatFromPreviousLine, lineInfo, width);
+            m_block.complexLineLayout()->positionNewFloatOnLine(*m_block.insertFloatingObject(downcast<RenderBox>(object)), lastFloatFromPreviousLine, lineInfo, width);
         else if (object.style().hasTextCombine() && is<RenderCombineText>(object)) {
             downcast<RenderCombineText>(object).combineTextIfNeeded();
             if (downcast<RenderCombineText>(object).isCombined())
@@ -77,7 +77,7 @@ void LineBreaker::skipLeadingWhitespace(InlineBidiResolver& resolver, LineInfo& 
     resolver.commitExplicitEmbedding();
 }
 
-InlineIterator LineBreaker::nextLineBreak(InlineBidiResolver& resolver, LineInfo& lineInfo, LineLayoutState& layoutState, RenderTextInfo& renderTextInfo, FloatingObject* lastFloatFromPreviousLine, unsigned consecutiveHyphenatedLines, WordMeasurements& wordMeasurements)
+InlineIterator LineBreaker::nextLineBreak(InlineBidiResolver& resolver, LineInfo& lineInfo, RenderTextInfo& renderTextInfo, FloatingObject* lastFloatFromPreviousLine, unsigned consecutiveHyphenatedLines, WordMeasurements& wordMeasurements)
 {
     reset();
 
@@ -92,7 +92,7 @@ InlineIterator LineBreaker::nextLineBreak(InlineBidiResolver& resolver, LineInfo
     if (resolver.position().atEnd())
         return resolver.position();
 
-    BreakingContext context(*this, resolver, lineInfo, layoutState, width, renderTextInfo, lastFloatFromPreviousLine, appliedStartWidth, m_block);
+    BreakingContext context(*this, resolver, lineInfo, width, renderTextInfo, lastFloatFromPreviousLine, appliedStartWidth, m_block);
 
     while (context.currentObject()) {
         context.initializeForCurrentObject();

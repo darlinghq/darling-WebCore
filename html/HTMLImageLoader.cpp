@@ -35,8 +35,8 @@
 #include "Settings.h"
 
 #include "JSDOMWindowBase.h"
-#include <runtime/JSCInlines.h>
-#include <runtime/JSLock.h>
+#include <JavaScriptCore/JSCInlines.h>
+#include <JavaScriptCore/JSLock.h>
 
 namespace WebCore {
 
@@ -45,9 +45,7 @@ HTMLImageLoader::HTMLImageLoader(Element& element)
 {
 }
 
-HTMLImageLoader::~HTMLImageLoader()
-{
-}
+HTMLImageLoader::~HTMLImageLoader() = default;
 
 void HTMLImageLoader::dispatchLoadEvent()
 {
@@ -60,26 +58,21 @@ void HTMLImageLoader::dispatchLoadEvent()
     bool errorOccurred = image()->errorOccurred();
     if (!errorOccurred && image()->response().httpStatusCode() >= 400)
         errorOccurred = is<HTMLObjectElement>(element()); // An <object> considers a 404 to be an error and should fire onerror.
-    element().dispatchEvent(Event::create(errorOccurred ? eventNames().errorEvent : eventNames().loadEvent, false, false));
+    element().dispatchEvent(Event::create(errorOccurred ? eventNames().errorEvent : eventNames().loadEvent, Event::CanBubble::No, Event::IsCancelable::No));
 }
 
-String HTMLImageLoader::sourceURI(const AtomicString& attr) const
+String HTMLImageLoader::sourceURI(const AtomString& attr) const
 {
-#if ENABLE(DASHBOARD_SUPPORT)
-    if (element().document().settings().usesDashboardBackwardCompatibilityMode() && attr.length() > 7 && attr.startsWith("url(\"") && attr.endsWith("\")"))
-        return attr.string().substring(5, attr.length() - 7);
-#endif
-
     return stripLeadingAndTrailingHTMLSpaces(attr);
 }
 
-void HTMLImageLoader::notifyFinished(CachedResource&)
+void HTMLImageLoader::notifyFinished(CachedResource&, const NetworkLoadMetrics& metrics)
 {
     ASSERT(image());
     CachedImage& cachedImage = *image();
 
     Ref<Element> protect(element());
-    ImageLoader::notifyFinished(cachedImage);
+    ImageLoader::notifyFinished(cachedImage, metrics);
 
     bool loadError = cachedImage.errorOccurred() || cachedImage.response().httpStatusCode() >= 400;
     if (!loadError) {

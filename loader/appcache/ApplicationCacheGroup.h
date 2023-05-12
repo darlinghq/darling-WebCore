@@ -25,12 +25,13 @@
 
 #pragma once
 
+#include "ApplicationCacheResourceLoader.h"
 #include "DOMApplicationCache.h"
-#include "URL.h"
-#include "ResourceHandleClient.h"
 #include <wtf/Noncopyable.h>
 #include <wtf/HashMap.h>
 #include <wtf/HashSet.h>
+#include <wtf/URL.h>
+#include <wtf/WeakPtr.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -41,7 +42,6 @@ class ApplicationCacheStorage;
 class Document;
 class DocumentLoader;
 class Frame;
-class ResourceHandle;
 class SecurityOrigin;
 
 enum ApplicationCacheUpdateOption {
@@ -49,7 +49,7 @@ enum ApplicationCacheUpdateOption {
     ApplicationCacheUpdateWithoutBrowsingContext
 };
 
-class ApplicationCacheGroup final : private ResourceHandleClient {
+class ApplicationCacheGroup : public CanMakeWeakPtr<ApplicationCacheGroup> {
     WTF_MAKE_NONCOPYABLE(ApplicationCacheGroup);
     WTF_MAKE_FAST_ALLOCATED;
 public:
@@ -95,28 +95,19 @@ public:
     void disassociateDocumentLoader(DocumentLoader&);
 
 private:
-    static void postListenerTask(const AtomicString& eventType, const HashSet<DocumentLoader*>& set) { postListenerTask(eventType, 0, 0, set); }
-    static void postListenerTask(const AtomicString& eventType, DocumentLoader& loader)  { postListenerTask(eventType, 0, 0, loader); }
-    static void postListenerTask(const AtomicString& eventType, int progressTotal, int progressDone, const HashSet<DocumentLoader*>&);
-    static void postListenerTask(const AtomicString& eventType, int progressTotal, int progressDone, DocumentLoader&);
+    static void postListenerTask(const AtomString& eventType, const HashSet<DocumentLoader*>& set) { postListenerTask(eventType, 0, 0, set); }
+    static void postListenerTask(const AtomString& eventType, DocumentLoader& loader)  { postListenerTask(eventType, 0, 0, loader); }
+    static void postListenerTask(const AtomString& eventType, int progressTotal, int progressDone, const HashSet<DocumentLoader*>&);
+    static void postListenerTask(const AtomString& eventType, int progressTotal, int progressDone, DocumentLoader&);
 
     void scheduleReachedMaxAppCacheSizeCallback();
 
-    RefPtr<ResourceHandle> createResourceHandle(const URL&, ApplicationCacheResource* newestCachedResource);
-
-    // For normal resource loading, WebKit client is asked about each resource individually. Since application cache does not belong to any particular document,
-    // the existing client callback cannot be used, so assume that any client that enables application cache also wants it to use credential storage.
-    bool shouldUseCredentialStorage(ResourceHandle*) override { return true; }
-
-    // ResourceHandleClient
-    void didReceiveResponse(ResourceHandle*, ResourceResponse&&) override;
-    void didReceiveData(ResourceHandle*, const char*, unsigned length, int encodedDataLength) override;
-    void didFinishLoading(ResourceHandle*) override;
-    void didFail(ResourceHandle*, const ResourceError&) override;
-
-    void didReceiveManifestResponse(const ResourceResponse&);
-    void didReceiveManifestData(const char*, int);
     void didFinishLoadingManifest();
+    void didFailLoadingManifest(ApplicationCacheResourceLoader::Error);
+
+    void didFailLoadingEntry(ApplicationCacheResourceLoader::Error, const URL&, unsigned type);
+    void didFinishLoadingEntry(const URL&);
+
     void didReachMaxAppCacheSize();
     void didReachOriginQuota(int64_t totalSpaceNeeded);
     
@@ -132,6 +123,8 @@ private:
     void associateDocumentLoaderWithCache(DocumentLoader*, ApplicationCache*);
     
     void stopLoading();
+
+    ResourceRequest createRequest(URL&&, ApplicationCacheResource*);
 
     Ref<ApplicationCacheStorage> m_storage;
 
@@ -166,7 +159,7 @@ private:
 
     // Frame used for fetching resources when updating.
     // FIXME: An update started by a particular frame should not stop if it is destroyed, but there are other frames associated with the same cache group.
-    Frame* m_frame { nullptr };
+    WeakPtr<Frame> m_frame;
   
     // An obsolete cache group is never stored, but the opposite is not true - storing may fail for multiple reasons, such as exceeding disk quota.
     unsigned m_storageID { 0 };
@@ -186,12 +179,12 @@ private:
     // the course of action in case of this failure (i.e. call the ChromeClient callback or run the failure steps).
     bool m_calledReachedMaxAppCacheSize { false };
     
-    RefPtr<ResourceHandle> m_currentHandle;
     RefPtr<ApplicationCacheResource> m_currentResource;
+    RefPtr<ApplicationCacheResourceLoader> m_entryLoader;
     unsigned long m_currentResourceIdentifier;
 
     RefPtr<ApplicationCacheResource> m_manifestResource;
-    RefPtr<ResourceHandle> m_manifestHandle;
+    RefPtr<ApplicationCacheResourceLoader> m_manifestLoader;
 
     int64_t m_availableSpaceInQuota;
     bool m_originQuotaExceededPreviously { false };

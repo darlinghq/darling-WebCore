@@ -26,7 +26,7 @@
 
 #pragma once
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "InbandTextTrack.h"
 
@@ -35,22 +35,29 @@ namespace WebCore {
 class DataCue;
 
 class InbandDataTextTrack final : public InbandTextTrack {
+    WTF_MAKE_ISO_ALLOCATED(InbandDataTextTrack);
 public:
-    static Ref<InbandDataTextTrack> create(ScriptExecutionContext&, TextTrackClient&, InbandTextTrackPrivate&);
+    static Ref<InbandDataTextTrack> create(Document&, TextTrackClient&, InbandTextTrackPrivate&);
     virtual ~InbandDataTextTrack();
 
 private:
-    InbandDataTextTrack(ScriptExecutionContext&, TextTrackClient&, InbandTextTrackPrivate&);
+    InbandDataTextTrack(Document&, TextTrackClient&, InbandTextTrackPrivate&);
 
     void addDataCue(const MediaTime& start, const MediaTime& end, const void*, unsigned) final;
 
+#if !RELEASE_LOG_DISABLED
+    const char* logClassName() const final { return "DataCue"; }
+#endif
+
 #if ENABLE(DATACUE_VALUE)
-    void addDataCue(const MediaTime& start, const MediaTime& end, Ref<SerializedPlatformRepresentation>&&, const String&) final;
-    void updateDataCue(const MediaTime& start, const MediaTime& end, SerializedPlatformRepresentation&) final;
-    void removeDataCue(const MediaTime& start, const MediaTime& end, SerializedPlatformRepresentation&) final;
+    void addDataCue(const MediaTime& start, const MediaTime& end, Ref<SerializedPlatformDataCue>&&, const String&) final;
+    void updateDataCue(const MediaTime& start, const MediaTime& end, SerializedPlatformDataCue&) final;
+    void removeDataCue(const MediaTime& start, const MediaTime& end, SerializedPlatformDataCue&) final;
     ExceptionOr<void> removeCue(TextTrackCue&) final;
 
-    HashMap<RefPtr<SerializedPlatformRepresentation>, RefPtr<DataCue>> m_incompleteCueMap;
+    RefPtr<DataCue> findIncompleteCue(const SerializedPlatformDataCue&);
+
+    Vector<RefPtr<DataCue>> m_incompleteCueMap;
 #endif
 };
 

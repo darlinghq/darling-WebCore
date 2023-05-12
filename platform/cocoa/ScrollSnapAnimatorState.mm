@@ -23,11 +23,13 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "ScrollSnapAnimatorState.h"
-#include <wtf/MathExtras.h>
+#import "config.h"
+#import "ScrollSnapAnimatorState.h"
 
 #if ENABLE(CSS_SCROLL_SNAP)
+
+#import <wtf/MathExtras.h>
+#import <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -96,13 +98,36 @@ float ScrollSnapAnimatorState::targetOffsetForStartOffset(const Vector<LayoutUni
         return clampTo<float>(startOffset, 0, maxScrollOffset);
     }
 
-    float targetOffset = closestSnapOffset(snapOffsets, snapOffsetRanges, predictedOffset / pageScale, initialDelta, outActiveSnapIndex);
+    float targetOffset = closestSnapOffset(snapOffsets, snapOffsetRanges, LayoutUnit(predictedOffset / pageScale), initialDelta, outActiveSnapIndex);
     float minimumTargetOffset = std::max<float>(0, snapOffsets.first());
     float maximumTargetOffset = std::min<float>(maxScrollOffset, snapOffsets.last());
     targetOffset = clampTo<float>(targetOffset, minimumTargetOffset, maximumTargetOffset);
     return pageScale * targetOffset;
 }
-    
+
+template<typename T>
+TextStream& operator<<(TextStream& ts, const ScrollOffsetRange<T>& range)
+{
+    ts << "start: " << range.start << " end: " << range.end;
+    return ts;
+}
+
+TextStream& operator<<(TextStream& ts, const ScrollSnapAnimatorState& state)
+{
+    ts << "ScrollSnapAnimatorState";
+    ts.dumpProperty("snap offsets x", state.snapOffsetsForAxis(ScrollEventAxis::Horizontal));
+    ts.dumpProperty("snap offsets y", state.snapOffsetsForAxis(ScrollEventAxis::Vertical));
+    if (!state.snapOffsetRangesForAxis(ScrollEventAxis::Horizontal).isEmpty())
+        ts.dumpProperty("snap offsets ranges x", state.snapOffsetRangesForAxis(ScrollEventAxis::Horizontal));
+    if (!state.snapOffsetRangesForAxis(ScrollEventAxis::Vertical).isEmpty())
+        ts.dumpProperty("snap offsets ranges y", state.snapOffsetRangesForAxis(ScrollEventAxis::Vertical));
+
+    ts.dumpProperty("active snap index x", state.activeSnapIndexForAxis(ScrollEventAxis::Horizontal));
+    ts.dumpProperty("active snap index y", state.activeSnapIndexForAxis(ScrollEventAxis::Vertical));
+
+    return ts;
+}
+
 } // namespace WebCore
 
 #endif // CSS_SCROLL_SNAP

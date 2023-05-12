@@ -29,12 +29,13 @@
 #include "config.h"
 #include "FormDataStreamCFNet.h"
 
-#include "BlobData.h"
-#include "FileSystem.h"
+#include "BlobRegistryImpl.h"
 #include "FormData.h"
+#include "PlatformStrategies.h"
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <wtf/Assertions.h>
+#include <wtf/FileSystem.h>
 #include <wtf/HashMap.h>
 #include <wtf/MainThread.h>
 #include <wtf/RetainPtr.h>
@@ -42,11 +43,7 @@
 #include <wtf/StdLibExtras.h>
 #include <wtf/Threading.h>
 
-#if PLATFORM(IOS)
-static const int fnfErr = -43;
-#elif PLATFORM(MAC)
-#include <CoreServices/CoreServices.h>
-#endif
+static const SInt32 fileNotFoundError = -43;
 
 #if PLATFORM(COCOA)
 extern "C" void CFURLRequestSetHTTPRequestBody(CFMutableURLRequestRef mutableHTTPRequest, CFDataRef httpBody);
@@ -95,20 +92,23 @@ CFStringRef formDataStreamLengthPropertyName()
 }
 
 struct FormCreationContext {
-    RefPtr<FormData> formData;
+    FormDataForUpload data;
     unsigned long long streamLength;
 };
 
 struct FormStreamFields {
-    RefPtr<FormData> formData;
+    FormStreamFields(FormDataForUpload&& data)
+        : data(WTFMove(data)) { }
+
+    FormDataForUpload data;
     SchedulePairHashSet scheduledRunLoopPairs;
     Vector<FormDataElement> remainingElements; // in reverse order
-    CFReadStreamRef currentStream;
-    long long currentStreamRangeLength;
-    MallocPtr<char> currentData;
-    CFReadStreamRef formStream;
-    unsigned long long streamLength;
-    unsigned long long bytesSent;
+    CFReadStreamRef currentStream { nullptr };
+    long long currentStreamRangeLength { BlobDataItem::toEndOfFile };
+    MallocPtr<char, WTF::VectorMalloc> currentData;
+    CFReadStreamRef formStream { nullptr };
+    unsigned long long streamLength { 0 };
+    unsigned long long bytesSent { 0 };
     Lock streamIsBeingOpenedOrClosedLock;
 };
 
@@ -123,7 +123,6 @@ static void closeCurrentStream(FormStreamFields* form)
         form->currentStream = 0;
         form->currentStreamRangeLength = BlobDataItem::toEndOfFile;
     }
-
     form->currentData = nullptr;
 }
 
@@ -140,30 +139,39 @@ static bool advanceCurrentStream(FormStreamFields* form)
     // Create the new stream.
     FormDataElement& nextInput = form->remainingElements.last();
 
-    if (nextInput.m_type == FormDataElement::Type::Data) {
-        size_t size = nextInput.m_data.size();
-        MallocPtr<char> data = nextInput.m_data.releaseBuffer();
-        form->currentStream = CFReadStreamCreateWithBytesNoCopy(0, reinterpret_cast<const UInt8*>(data.get()), size, kCFAllocatorNull);
-        form->currentData = WTFMove(data);
-    } else {
-        // Check if the file has been changed or not if required.
-        if (isValidFileTime(nextInput.m_expectedFileModificationTime)) {
-            time_t fileModificationTime;
-            if (!getFileModificationTime(nextInput.m_filename, fileModificationTime) || fileModificationTime != static_cast<time_t>(nextInput.m_expectedFileModificationTime))
+    bool success = switchOn(nextInput.data,
+        [form] (Vector<char>& bytes) {
+            size_t size = bytes.size();
+            MallocPtr<char, WTF::VectorMalloc> data = bytes.releaseBuffer();
+            form->currentStream = CFReadStreamCreateWithBytesNoCopy(0, reinterpret_cast<const UInt8*>(data.get()), size, kCFAllocatorNull);
+            form->currentData = WTFMove(data);
+            return true;
+        }, [form] (const FormDataElement::EncodedFileData& fileData) {
+            // Check if the file has been changed.
+            if (!fileData.fileModificationTimeMatchesExpectation())
                 return false;
-        }
-        const String& path = nextInput.m_shouldGenerateFile ? nextInput.m_generatedFilename : nextInput.m_filename;
-        form->currentStream = CFReadStreamCreateWithFile(0, pathAsURL(path).get());
-        if (!form->currentStream) {
-            // The file must have been removed or become unreadable.
+
+            const String& path = fileData.filename;
+            form->currentStream = CFReadStreamCreateWithFile(0, FileSystem::pathAsURL(path).get());
+            if (!form->currentStream) {
+                // The file must have been removed or become unreadable.
+                return false;
+            }
+            if (fileData.fileStart > 0) {
+                RetainPtr<CFNumberRef> position = adoptCF(CFNumberCreate(0, kCFNumberLongLongType, &fileData.fileStart));
+                CFReadStreamSetProperty(form->currentStream, kCFStreamPropertyFileCurrentOffset, position.get());
+            }
+            form->currentStreamRangeLength = fileData.fileLength;
+            return true;
+        }, [] (const FormDataElement::EncodedBlobData&) {
+            ASSERT_NOT_REACHED();
             return false;
         }
-        if (nextInput.m_fileStart > 0) {
-            RetainPtr<CFNumberRef> position = adoptCF(CFNumberCreate(0, kCFNumberLongLongType, &nextInput.m_fileStart));
-            CFReadStreamSetProperty(form->currentStream, kCFStreamPropertyFileCurrentOffset, position.get());
-        }
-        form->currentStreamRangeLength = nextInput.m_fileLength;
-    }
+    );
+
+    if (!success)
+        return false;
+
     form->remainingElements.removeLast();
 
     // Set up the callback.
@@ -198,20 +206,20 @@ static bool openNextStream(FormStreamFields* form)
 static void* formCreate(CFReadStreamRef stream, void* context)
 {
     FormCreationContext* formContext = static_cast<FormCreationContext*>(context);
-
-    FormStreamFields* newInfo = new FormStreamFields;
-    newInfo->formData = WTFMove(formContext->formData);
-    newInfo->currentStream = 0;
-    newInfo->currentStreamRangeLength = BlobDataItem::toEndOfFile;
+    
+    FormStreamFields* newInfo = new FormStreamFields(WTFMove(formContext->data));
     newInfo->formStream = stream; // Don't retain. That would create a reference cycle.
     newInfo->streamLength = formContext->streamLength;
-    newInfo->bytesSent = 0;
+    
+    callOnMainThread([formContext] {
+        delete formContext;
+    });
 
     // Append in reverse order since we remove elements from the end.
-    size_t size = newInfo->formData->elements().size();
+    size_t size = newInfo->data.data().elements().size();
     newInfo->remainingElements.reserveInitialCapacity(size);
     for (size_t i = 0; i < size; ++i)
-        newInfo->remainingElements.uncheckedAppend(newInfo->formData->elements()[size - i - 1]);
+        newInfo->remainingElements.uncheckedAppend(newInfo->data.data().elements()[size - i - 1]);
 
     return newInfo;
 }
@@ -241,7 +249,7 @@ static Boolean formOpen(CFReadStreamRef, CFStreamError* error, Boolean* openComp
 #if PLATFORM(WIN)
         ENOENT;
 #else
-        fnfErr;
+        fileNotFoundError;
 #endif
     return opened;
 }
@@ -303,8 +311,8 @@ static CFTypeRef formCopyProperty(CFReadStreamRef, CFStringRef propertyName, voi
     FormStreamFields* form = static_cast<FormStreamFields*>(context);
 
     if (kCFCompareEqualTo == CFStringCompare(propertyName, formDataPointerPropertyName, 0)) {
-        long formDataAsNumber = static_cast<long>(reinterpret_cast<intptr_t>(form->formData.get()));
-        return CFNumberCreate(0, kCFNumberLongType, &formDataAsNumber);
+        long long formDataAsNumber = static_cast<long long>(reinterpret_cast<intptr_t>(&form->data.data()));
+        return CFNumberCreate(0, kCFNumberLongLongType, &formDataAsNumber);
     }
 
     if (kCFCompareEqualTo == CFStringCompare(propertyName, formDataStreamLengthPropertyName(), 0))
@@ -363,30 +371,22 @@ static void formEventCallback(CFReadStreamRef stream, CFStreamEventType type, vo
 
 RetainPtr<CFReadStreamRef> createHTTPBodyCFReadStream(FormData& formData)
 {
+    if (!hasPlatformStrategies() && formData.containsBlobElement())
+        return nullptr;
+
     auto resolvedFormData = formData.resolveBlobReferences();
+    auto dataForUpload = resolvedFormData->prepareForUpload();
 
     // Precompute the content length so CFNetwork doesn't use chunked mode.
     unsigned long long length = 0;
-
-    for (auto& element : resolvedFormData->elements()) {
-        if (element.m_type == FormDataElement::Type::Data)
-            length += element.m_data.size();
-        else {
-            // If we're sending the file range, use the existing range length for now.
-            // We will detect if the file has been changed right before we read the file and abort the operation if necessary.
-            if (element.m_fileLength != BlobDataItem::toEndOfFile) {
-                length += element.m_fileLength;
-                continue;
-            }
-            long long fileSize;
-            if (getFileSize(element.m_shouldGenerateFile ? element.m_generatedFilename : element.m_filename, fileSize))
-                length += fileSize;
-        }
+    for (auto& element : dataForUpload.data().elements()) {
+        length += element.lengthInBytes([](auto& url) {
+            return blobRegistry().blobRegistryImpl()->blobSize(url);
+        });
     }
-
-    FormCreationContext formContext = { WTFMove(resolvedFormData), length };
+    FormCreationContext* formContext = new FormCreationContext { WTFMove(dataForUpload), length };
     CFReadStreamCallBacksV1 callBacks = { 1, formCreate, formFinalize, nullptr, formOpen, nullptr, formRead, nullptr, formCanRead, formClose, formCopyProperty, nullptr, nullptr, formSchedule, formUnschedule };
-    return adoptCF(CFReadStreamCreate(nullptr, static_cast<const void*>(&callBacks), &formContext));
+    return adoptCF(CFReadStreamCreate(nullptr, static_cast<const void*>(&callBacks), formContext));
 }
 
 void setHTTPBody(CFMutableURLRequestRef request, FormData* formData)
@@ -397,10 +397,8 @@ void setHTTPBody(CFMutableURLRequestRef request, FormData* formData)
     // Handle the common special case of one piece of form data, with no files.
     auto& elements = formData->elements();
     if (elements.size() == 1 && !formData->alwaysStream()) {
-        auto& element = elements[0];
-        if (element.m_type == FormDataElement::Type::Data) {
-            auto& vector = element.m_data;
-            auto data = adoptCF(CFDataCreate(nullptr, reinterpret_cast<const UInt8*>(vector.data()), vector.size()));
+        if (auto* vector = WTF::get_if<Vector<char>>(elements[0].data)) {
+            auto data = adoptCF(CFDataCreate(nullptr, reinterpret_cast<const UInt8*>(vector->data()), vector->size()));
             CFURLRequestSetHTTPRequestBody(request, data.get());
             return;
         }
@@ -412,7 +410,7 @@ void setHTTPBody(CFMutableURLRequestRef request, FormData* formData)
 FormData* httpBodyFromStream(CFReadStreamRef stream)
 {
     if (!stream)
-        return 0;
+        return nullptr;
 
     // Passing the pointer as property appears to be the only way to associate a stream with FormData.
     // A new stream is always created in CFURLRequestCopyHTTPRequestBodyStream (or -[NSURLRequest HTTPBodyStream]),
@@ -421,11 +419,11 @@ FormData* httpBodyFromStream(CFReadStreamRef stream)
 
     RetainPtr<CFNumberRef> formDataPointerAsCFNumber = adoptCF(static_cast<CFNumberRef>(CFReadStreamCopyProperty(stream, formDataPointerPropertyName)));
     if (!formDataPointerAsCFNumber)
-        return 0;
+        return nullptr;
 
     long formDataPointerAsNumber;
     if (!CFNumberGetValue(formDataPointerAsCFNumber.get(), kCFNumberLongType, &formDataPointerAsNumber))
-        return 0;
+        return nullptr;
 
     return reinterpret_cast<FormData*>(static_cast<intptr_t>(formDataPointerAsNumber));
 }

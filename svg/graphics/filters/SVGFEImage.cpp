@@ -31,21 +31,20 @@
 #include "SVGElement.h"
 #include "SVGRenderingContext.h"
 #include "SVGURIReference.h"
-#include "TextStream.h"
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
 FEImage::FEImage(Filter& filter, RefPtr<Image> image, const SVGPreserveAspectRatioValue& preserveAspectRatio)
-    : FilterEffect(filter)
+    : FilterEffect(filter, Type::Image)
     , m_image(image)
-    , m_document(nullptr)
     , m_preserveAspectRatio(preserveAspectRatio)
 {
 }
 
-FEImage::FEImage(Filter& filter, Document& document, const String& href, const SVGPreserveAspectRatioValue& preserveAspectRatio)
-    : FilterEffect(filter)
-    , m_document(&document)
+FEImage::FEImage(Filter& filter, TreeScope& treeScope, const String& href, const SVGPreserveAspectRatioValue& preserveAspectRatio)
+    : FilterEffect(filter, Type::Image)
+    , m_treeScope(&treeScope)
     , m_href(href)
     , m_preserveAspectRatio(preserveAspectRatio)
 {
@@ -56,9 +55,9 @@ Ref<FEImage> FEImage::createWithImage(Filter& filter, RefPtr<Image> image, const
     return adoptRef(*new FEImage(filter, image, preserveAspectRatio));
 }
 
-Ref<FEImage> FEImage::createWithIRIReference(Filter& filter, Document& document, const String& href, const SVGPreserveAspectRatioValue& preserveAspectRatio)
+Ref<FEImage> FEImage::createWithIRIReference(Filter& filter, TreeScope& treeScope, const String& href, const SVGPreserveAspectRatioValue& preserveAspectRatio)
 {
-    return adoptRef(*new FEImage(filter, document, href, preserveAspectRatio));
+    return adoptRef(*new FEImage(filter, treeScope, href, preserveAspectRatio));
 }
 
 void FEImage::determineAbsolutePaintRect()
@@ -80,12 +79,12 @@ void FEImage::determineAbsolutePaintRect()
 
 RenderElement* FEImage::referencedRenderer() const
 {
-    if (!m_document)
-        return 0;
-    Element* hrefElement = SVGURIReference::targetElementFromIRIString(m_href, *m_document);
-    if (!hrefElement || !hrefElement->isSVGElement())
-        return 0;
-    return hrefElement->renderer();
+    if (!m_treeScope)
+        return nullptr;
+    auto target = SVGURIReference::targetElementFromIRIString(m_href, *m_treeScope);
+    if (!is<SVGElement>(target.element))
+        return nullptr;
+    return target.element->renderer();
 }
 
 void FEImage::platformApplySoftware()
@@ -93,6 +92,9 @@ void FEImage::platformApplySoftware()
     RenderElement* renderer = referencedRenderer();
     if (!m_image && !renderer)
         return;
+
+    // FEImage results are always in ColorSpace::SRGB
+    setResultColorSpace(ColorSpace::SRGB);
 
     ImageBuffer* resultImage = createImageBufferResult();
     if (!resultImage)
@@ -111,46 +113,40 @@ void FEImage::platformApplySoftware()
     IntPoint paintLocation = absolutePaintRect().location();
     destRect.move(-paintLocation.x(), -paintLocation.y());
 
-    // FEImage results are always in ColorSpaceSRGB
-    setResultColorSpace(ColorSpaceSRGB);
+    auto& context = resultImage->context();
 
     if (renderer) {
         const AffineTransform& absoluteTransform = filter().absoluteTransform();
-        resultImage->context().concatCTM(absoluteTransform);
+        context.concatCTM(absoluteTransform);
 
-        SVGElement* contextNode = downcast<SVGElement>(renderer->element());
+        auto contextNode = makeRefPtr(downcast<SVGElement>(renderer->element()));
         if (contextNode->hasRelativeLengths()) {
-            SVGLengthContext lengthContext(contextNode);
+            SVGLengthContext lengthContext(contextNode.get());
             FloatSize viewportSize;
 
             // If we're referencing an element with percentage units, eg. <rect with="30%"> those values were resolved against the viewport.
             // Build up a transformation that maps from the viewport space to the filter primitive subregion.
             if (lengthContext.determineViewport(viewportSize))
-                resultImage->context().concatCTM(makeMapBetweenRects(FloatRect(FloatPoint(), viewportSize), destRect));
+                context.concatCTM(makeMapBetweenRects(FloatRect(FloatPoint(), viewportSize), destRect));
         }
 
         AffineTransform contentTransformation;
-        SVGRenderingContext::renderSubtreeToImageBuffer(resultImage, *renderer, contentTransformation);
+        SVGRenderingContext::renderSubtreeToContext(context, *renderer, contentTransformation);
         return;
     }
 
-    resultImage->context().drawImage(*m_image, destRect, srcRect);
+    context.drawImage(*m_image, destRect, srcRect);
 }
 
-void FEImage::dump()
-{
-}
-
-TextStream& FEImage::externalRepresentation(TextStream& ts, int indent) const
+TextStream& FEImage::externalRepresentation(TextStream& ts, RepresentationType representation) const
 {
     FloatSize imageSize;
     if (m_image)
         imageSize = m_image->size();
     else if (RenderObject* renderer = referencedRenderer())
         imageSize = enclosingIntRect(renderer->repaintRectInLocalCoordinates()).size();
-    writeIndent(ts, indent);
-    ts << "[feImage";
-    FilterEffect::externalRepresentation(ts);
+    ts << indent << "[feImage";
+    FilterEffect::externalRepresentation(ts, representation);
     ts << " image-size=\"" << imageSize.width() << "x" << imageSize.height() << "\"]\n";
     // FIXME: should this dump also object returned by SVGFEImage::image() ?
     return ts;

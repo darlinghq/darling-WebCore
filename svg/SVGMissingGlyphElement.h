@@ -19,14 +19,13 @@
 
 #pragma once
 
-#if ENABLE(SVG_FONTS)
-
 #include "SVGElement.h"
 #include "SVGNames.h"
 
 namespace WebCore {
 
 class SVGMissingGlyphElement final : public SVGElement {
+    WTF_MAKE_ISO_ALLOCATED(SVGMissingGlyphElement);
 public:
     static Ref<SVGMissingGlyphElement> create(const QualifiedName&, Document&);
 
@@ -37,5 +36,3 @@ private:
 };
 
 } // namespace WebCore
-
-#endif // ENABLE(SVG_FONTS)

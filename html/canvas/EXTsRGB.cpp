@@ -27,17 +27,18 @@
 
 #if ENABLE(WEBGL)
 #include "EXTsRGB.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(EXTsRGB);
 
 EXTsRGB::EXTsRGB(WebGLRenderingContextBase& context)
     : WebGLExtension(context)
 {
 }
 
-EXTsRGB::~EXTsRGB()
-{
-}
+EXTsRGB::~EXTsRGB() = default;
 
 WebGLExtension::ExtensionName EXTsRGB::getName() const
 {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2015-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,58 +32,66 @@
 
 #if ENABLE(MEDIA_STREAM)
 
-#include "FontCascade.h"
 #include "ImageBuffer.h"
-#include "MockRealtimeMediaSource.h"
+#include "MockMediaDevice.h"
+#include "RealtimeMediaSourceFactory.h"
 #include <wtf/RunLoop.h>
+#include <wtf/WorkQueue.h>
 
 namespace WebCore {
 
-class MockRealtimeAudioSource : public MockRealtimeMediaSource {
+class MockRealtimeAudioSource : public RealtimeMediaSource {
 public:
-
-    static CaptureSourceOrError create(const String& deviceID, const String& name, const MediaConstraints*);
-    static Ref<MockRealtimeAudioSource> createMuted(const String& name);
-
-    static AudioCaptureFactory& factory();
-
+    static CaptureSourceOrError create(String&& deviceID, String&& name, String&& hashSalt, const MediaConstraints*);
     virtual ~MockRealtimeAudioSource();
 
+    WEBCORE_EXPORT void setChannelCount(unsigned);
+
 protected:
-    MockRealtimeAudioSource(const String& deviceID, const String& name);
+    MockRealtimeAudioSource(String&& deviceID, String&& name, String&& hashSalt);
+
+    virtual void render(Seconds) = 0;
+    void settingsDidChange(OptionSet<RealtimeMediaSourceSettings::Flag>) override;
+
+    static Seconds renderInterval() { return 60_ms; }
+
+private:
+    const RealtimeMediaSourceCapabilities& capabilities() final;
+    const RealtimeMediaSourceSettings& settings() final;
 
     void startProducingData() final;
     void stopProducingData() final;
 
-    virtual void render(double) { }
+    bool isCaptureSource() const final { return true; }
+    CaptureDevice::DeviceType deviceType() const final { return CaptureDevice::DeviceType::Microphone; }
 
-    double elapsedTime();
-    static Seconds renderInterval() { return 60_ms; }
-
-private:
-
-    bool applyVolume(double) override { return true; }
-    bool applySampleRate(int) override { return true; }
-    bool applySampleSize(int) override { return true; }
-    bool applyEchoCancellation(bool) override { return true; }
-
-    void updateSettings(RealtimeMediaSourceSettings&) override;
-    void initializeCapabilities(RealtimeMediaSourceCapabilities&) override;
-    void initializeSupportedConstraints(RealtimeMediaSourceSupportedConstraints&) override;
+    void delaySamples(Seconds) final;
+    bool isMockSource() const final { return true; }
 
     void tick();
 
-    bool isCaptureSource() const final { return true; }
+protected:
+    Ref<WorkQueue> m_workQueue;
+    unsigned m_channelCount { 2 };
 
-    void delaySamples(float) final;
+private:
+    Optional<RealtimeMediaSourceCapabilities> m_capabilities;
+    Optional<RealtimeMediaSourceSettings> m_currentSettings;
+    RealtimeMediaSourceSupportedConstraints m_supportedConstraints;
 
     RunLoop::Timer<MockRealtimeAudioSource> m_timer;
-    double m_startTime { NAN };
-    double m_lastRenderTime { NAN };
-    double m_elapsedTime { 0 };
-    double m_delayUntil { 0 };
+    MonotonicTime m_startTime { MonotonicTime::nan() };
+    MonotonicTime m_lastRenderTime { MonotonicTime::nan() };
+    Seconds m_elapsedTime { 0_s };
+    MonotonicTime m_delayUntil;
+    MockMediaDevice m_device;
 };
 
 } // namespace WebCore
+
+SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::MockRealtimeAudioSource)
+    static bool isType(const WebCore::RealtimeMediaSource& source) { return source.isCaptureSource() && source.isMockSource() && source.deviceType() == WebCore::CaptureDevice::DeviceType::Microphone; }
+SPECIALIZE_TYPE_TRAITS_END()
+
 
 #endif // ENABLE(MEDIA_STREAM)

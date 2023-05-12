@@ -58,7 +58,7 @@ GDIObject<HBITMAP> allocImage(HDC dc, IntSize size, CGContextRef *targetRef)
         return hbmp;
 
     CGContextRef bitmapContext = CGBitmapContextCreate(bits, bmpInfo.bmiHeader.biWidth, bmpInfo.bmiHeader.biHeight, 8,
-                                                       bmpInfo.bmiHeader.biWidth * 4, deviceRGBColorSpaceRef(),
+                                                       bmpInfo.bmiHeader.biWidth * 4, sRGBColorSpaceRef(),
                                                        kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst);
     if (!bitmapContext)
         return GDIObject<HBITMAP>();
@@ -74,7 +74,7 @@ static CGContextRef createCgContextFromBitmap(HBITMAP bitmap)
     ASSERT(info.bmBitsPixel == 32);
 
     CGContextRef bitmapContext = CGBitmapContextCreate(info.bmBits, info.bmWidth, info.bmHeight, 8,
-                                                       info.bmWidthBytes, deviceRGBColorSpaceRef(), kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst);
+                                                       info.bmWidthBytes, sRGBColorSpaceRef(), kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst);
     return bitmapContext;
 }
 
@@ -118,7 +118,7 @@ exit:
     return hbmp.leak();
 }
     
-DragImageRef createDragImageFromImage(Image* img, ImageOrientationDescription)
+DragImageRef createDragImageFromImage(Image* img, ImageOrientation)
 {
     HWndDC dc(0);
     auto workingDC = adoptGDIObject(::CreateCompatibleDC(dc));
@@ -139,8 +139,10 @@ DragImageRef createDragImageFromImage(Image* img, ImageOrientationDescription)
     CGContextSetFillColor(drawContext, white);
     CGContextFillRect(drawContext, rect);
     if (auto srcImage = img->nativeImage()) {
-        CGContextSetBlendMode(drawContext, kCGBlendModeNormal);
-        CGContextDrawImage(drawContext, rect, srcImage.get());
+        if (auto platformImage = srcImage->platformImage()) {
+            CGContextSetBlendMode(drawContext, kCGBlendModeNormal);
+            CGContextDrawImage(drawContext, rect, platformImage.get());
+        }
     }
     CGContextRelease(drawContext);
 

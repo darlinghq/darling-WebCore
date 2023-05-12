@@ -25,11 +25,13 @@
 
 #pragma once
 
+#include "DragActions.h"
 #include "DragImage.h"
 #include "FloatPoint.h"
 #include "IntPoint.h"
 #include "IntRect.h"
 #include "PasteboardWriterData.h"
+#include "PromisedAttachmentInfo.h"
 
 namespace WebCore {
 
@@ -39,19 +41,19 @@ struct DragItem final {
     // Where the image should be positioned relative to the cursor.
     FloatPoint imageAnchorPoint;
 
-    DragSourceAction sourceAction { DragSourceActionNone };
+    Optional<DragSourceAction> sourceAction;
     IntPoint eventPositionInContentCoordinates;
     IntPoint dragLocationInContentCoordinates;
-    IntPoint eventPositionInWindowCoordinates;
     IntPoint dragLocationInWindowCoordinates;
     String title;
     URL url;
-    IntRect elementBounds;
+    IntRect dragPreviewFrameInRootViewCoordinates;
 
     PasteboardWriterData data;
+    PromisedAttachmentInfo promisedAttachmentInfo;
 
     template<class Encoder> void encode(Encoder&) const;
-    template<class Decoder> static bool decode(Decoder&, DragItem&);
+    template<class Decoder> static WARN_UNUSED_RETURN bool decode(Decoder&, DragItem&);
 };
 
 template<class Encoder>
@@ -59,18 +61,23 @@ void DragItem::encode(Encoder& encoder) const
 {
     // FIXME(173815): We should encode and decode PasteboardWriterData and platform drag image data
     // here too, as part of moving off of the legacy dragging codepath.
-    encoder.encodeEnum(sourceAction);
-    encoder << imageAnchorPoint << eventPositionInContentCoordinates << dragLocationInContentCoordinates << eventPositionInWindowCoordinates << dragLocationInWindowCoordinates << title << url << elementBounds;
+    encoder << sourceAction;
+    encoder << imageAnchorPoint << eventPositionInContentCoordinates << dragLocationInContentCoordinates << dragLocationInWindowCoordinates << title << url << dragPreviewFrameInRootViewCoordinates;
     bool hasIndicatorData = image.hasIndicatorData();
     encoder << hasIndicatorData;
     if (hasIndicatorData)
         encoder << image.indicatorData().value();
+    bool hasVisiblePath = image.hasVisiblePath();
+    encoder << hasVisiblePath;
+    if (hasVisiblePath)
+        encoder << image.visiblePath().value();
+    encoder << promisedAttachmentInfo;
 }
 
 template<class Decoder>
 bool DragItem::decode(Decoder& decoder, DragItem& result)
 {
-    if (!decoder.decodeEnum(result.sourceAction))
+    if (!decoder.decode(result.sourceAction))
         return false;
     if (!decoder.decode(result.imageAnchorPoint))
         return false;
@@ -78,25 +85,36 @@ bool DragItem::decode(Decoder& decoder, DragItem& result)
         return false;
     if (!decoder.decode(result.dragLocationInContentCoordinates))
         return false;
-    if (!decoder.decode(result.eventPositionInWindowCoordinates))
-        return false;
     if (!decoder.decode(result.dragLocationInWindowCoordinates))
         return false;
     if (!decoder.decode(result.title))
         return false;
     if (!decoder.decode(result.url))
         return false;
-    if (!decoder.decode(result.elementBounds))
+    if (!decoder.decode(result.dragPreviewFrameInRootViewCoordinates))
         return false;
     bool hasIndicatorData;
     if (!decoder.decode(hasIndicatorData))
         return false;
     if (hasIndicatorData) {
-        TextIndicatorData indicatorData;
-        if (!decoder.decode(indicatorData))
+        Optional<TextIndicatorData> indicatorData;
+        decoder >> indicatorData;
+        if (!indicatorData)
             return false;
-        result.image.setIndicatorData(indicatorData);
+        result.image.setIndicatorData(*indicatorData);
     }
+    bool hasVisiblePath;
+    if (!decoder.decode(hasVisiblePath))
+        return false;
+    if (hasVisiblePath) {
+        Optional<Path> visiblePath;
+        decoder >> visiblePath;
+        if (!visiblePath)
+            return false;
+        result.image.setVisiblePath(*visiblePath);
+    }
+    if (!decoder.decode(result.promisedAttachmentInfo))
+        return false;
     return true;
 }
 

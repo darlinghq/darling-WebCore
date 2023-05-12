@@ -28,6 +28,7 @@
 namespace WebCore {
 
 class HTMLStyleElement;
+class Page;
 class StyleSheet;
 
 template<typename T> class EventSender;
@@ -35,6 +36,7 @@ template<typename T> class EventSender;
 using StyleEventSender = EventSender<HTMLStyleElement>;
 
 class HTMLStyleElement final : public HTMLElement {
+    WTF_MAKE_ISO_ALLOCATED(HTMLStyleElement);
 public:
     static Ref<HTMLStyleElement> create(Document&);
     static Ref<HTMLStyleElement> create(const QualifiedName&, Document&, bool createdByParser);
@@ -46,16 +48,16 @@ public:
     WEBCORE_EXPORT void setDisabled(bool);
 
     void dispatchPendingEvent(StyleEventSender*);
-    static void dispatchPendingLoadEvents();
+    static void dispatchPendingLoadEvents(Page*);
 
     void finishParsingChildren() final;
 
 private:
     HTMLStyleElement(const QualifiedName&, Document&, bool createdByParser);
 
-    void parseAttribute(const QualifiedName&, const AtomicString&) final;
-    InsertionNotificationRequest insertedInto(ContainerNode&) final;
-    void removedFrom(ContainerNode&) final;
+    void parseAttribute(const QualifiedName&, const AtomString&) final;
+    InsertedIntoAncestorResult insertedIntoAncestor(InsertionType, ContainerNode&) final;
+    void removedFromAncestor(RemovalType, ContainerNode&) final;
     void childrenChanged(const ChildChange&) final;
 
     bool isLoading() const { return m_styleSheetOwner.isLoading(); }

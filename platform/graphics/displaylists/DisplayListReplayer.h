@@ -23,8 +23,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef DisplayListReplayer_h
-#define DisplayListReplayer_h
+#pragma once
 
 #include "DisplayList.h"
 #include <wtf/Noncopyable.h>
@@ -32,25 +31,54 @@
 
 namespace WebCore {
 
+enum class AlphaPremultiplication : uint8_t;
 class FloatRect;
 class GraphicsContext;
+class ImageData;
 
 namespace DisplayList {
+
+enum class StopReplayReason : uint8_t {
+    ReplayedAllItems,
+    MissingCachedResource,
+    ChangeDestinationImageBuffer,
+    DecodingFailure // FIXME: Propagate decoding errors to display list replay clients through this enum as well.
+};
+
+struct ReplayResult {
+    std::unique_ptr<DisplayList> trackedDisplayList;
+    size_t numberOfBytesRead { 0 };
+    Optional<RenderingResourceIdentifier> nextDestinationImageBuffer;
+    Optional<RenderingResourceIdentifier> missingCachedResourceIdentifier;
+    StopReplayReason reasonForStopping { StopReplayReason::ReplayedAllItems };
+};
 
 class Replayer {
     WTF_MAKE_NONCOPYABLE(Replayer);
 public:
-    Replayer(GraphicsContext&, const DisplayList&);
-    ~Replayer();
+    class Delegate;
+    WEBCORE_EXPORT Replayer(GraphicsContext&, const DisplayList&, const ImageBufferHashMap* = nullptr, const NativeImageHashMap* = nullptr, const FontRenderingResourceMap* = nullptr, Delegate* = nullptr);
+    WEBCORE_EXPORT ~Replayer();
 
-    std::unique_ptr<DisplayList> replay(const FloatRect& initialClip, bool trackReplayList = false);
+    WEBCORE_EXPORT ReplayResult replay(const FloatRect& initialClip = { }, bool trackReplayList = false);
+
+    class Delegate {
+    public:
+        virtual ~Delegate() { }
+        virtual bool apply(ItemHandle, GraphicsContext&) { return false; }
+    };
     
 private:
-    const DisplayList& m_displayList;
+    std::pair<Optional<StopReplayReason>, Optional<RenderingResourceIdentifier>> applyItem(ItemHandle);
+
     GraphicsContext& m_context;
+    const DisplayList& m_displayList;
+    const ImageBufferHashMap& m_imageBuffers;
+    const NativeImageHashMap& m_nativeImages;
+    const FontRenderingResourceMap& m_fonts;
+    Delegate* m_delegate;
 };
 
 }
 }
 
-#endif // DisplayListReplayer_h

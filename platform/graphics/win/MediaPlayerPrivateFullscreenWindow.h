@@ -44,10 +44,11 @@ class MediaPlayerPrivateFullscreenClient {
 public:
     virtual LRESULT fullscreenClientWndProc(HWND, UINT message, WPARAM, LPARAM) = 0;
 protected:
-    virtual ~MediaPlayerPrivateFullscreenClient() {} 
+    virtual ~MediaPlayerPrivateFullscreenClient() = default;
 };
 
 class MediaPlayerPrivateFullscreenWindow {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     MediaPlayerPrivateFullscreenWindow(MediaPlayerPrivateFullscreenClient*);
     ~MediaPlayerPrivateFullscreenWindow();

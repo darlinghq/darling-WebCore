@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2006, 2007, 2008 Apple Inc.  All rights reserved.
+ * Copyright (C) 2006-2017 Apple Inc. All rights reserved.
  * Copyright (C) 2008 Eric Seidel <eric@webkit.org>
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,17 +31,9 @@
 
 #include "AffineTransform.h"
 #include "GraphicsContext.h"
-
 #include <CoreGraphics/CoreGraphics.h>
+#include <pal/spi/cg/CoreGraphicsSPI.h>
 #include <wtf/MainThread.h>
-
-#if PLATFORM(COCOA)
-#include "WebCoreSystemInterface.h"
-#endif
-
-#if PLATFORM(WIN)
-#include <WebKitSystemInterface/WebKitSystemInterface.h>
-#endif
 
 namespace WebCore {
 
@@ -71,10 +63,17 @@ CGPatternRef Pattern::createPlatformPattern(const AffineTransform& userSpaceTran
     patternTransform.scaleNonUniform(1, -1);
     patternTransform.translate(0, -tileRect.height());
 
+    PlatformImagePtr platformImage;
+    if (auto nativeImage = tileImage().nativeImage())
+        platformImage = nativeImage->platformImage();
+    
+    if (!platformImage)
+        return nullptr;
+
     // If we're repeating in both directions, we can use image-backed patterns
     // instead of custom patterns, and avoid tiling-edge pixel cracks.
     if (m_repeatX && m_repeatY)
-        return wkCGPatternCreateWithImageAndTransform(tileImage().nativeImage().get(), patternTransform, wkPatternTilingConstantSpacing);
+        return CGPatternCreateWithImage2(platformImage.get(), patternTransform, kCGPatternTilingConstantSpacing);
 
     // If FLT_MAX should also be used for xStep or yStep, nothing is rendered. Using fractions of FLT_MAX also
     // result in nothing being rendered.
@@ -85,10 +84,10 @@ CGPatternRef Pattern::createPlatformPattern(const AffineTransform& userSpaceTran
     CGFloat yStep = m_repeatY ? tileRect.height() : (1 << 22);
 
     // The pattern will release the CGImageRef when it's done rendering in patternReleaseCallback
-    CGImageRef platformImage = tileImage().nativeImage().leakRef();
+    CGImageRef image = platformImage.leakRef();
 
     const CGPatternCallbacks patternCallbacks = { 0, patternCallback, patternReleaseCallback };
-    return CGPatternCreate(platformImage, tileRect, patternTransform, xStep, yStep, kCGPatternTilingConstantSpacing, TRUE, &patternCallbacks);
+    return CGPatternCreate(image, tileRect, patternTransform, xStep, yStep, kCGPatternTilingConstantSpacing, TRUE, &patternCallbacks);
 }
 
 }

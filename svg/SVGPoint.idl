@@ -21,11 +21,12 @@
  */
 
 [
-    SkipVTableValidation
+    SkipVTableValidation,
+    Exposed=Window
 ] interface SVGPoint {
-    [SetterMayThrowException] attribute unrestricted float x;
-    [SetterMayThrowException] attribute unrestricted float y;
+    attribute unrestricted float x;
+    attribute unrestricted float y;
 
-    [MayThrowException, NewObject] SVGPoint matrixTransform(SVGMatrix matrix);
+    [NewObject] SVGPoint matrixTransform(SVGMatrix matrix);
 };
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2014-2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2014-2017 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,12 +23,13 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef MediaSessionManageriOS_h
-#define MediaSessionManageriOS_h
+#pragma once
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
-#include "PlatformMediaSessionManager.h"
+#include "AudioSession.h"
+#include "MediaSessionHelperIOS.h"
+#include "MediaSessionManagerCocoa.h"
 #include <wtf/RetainPtr.h>
 
 OBJC_CLASS WebMediaSessionHelper;
@@ -42,49 +43,59 @@ extern NSString* WebUIApplicationDidEnterBackgroundNotification;
 
 namespace WebCore {
 
-class MediaSessionManageriOS : public PlatformMediaSessionManager {
+class MediaSessionManageriOS
+    : public MediaSessionManagerCocoa
+    , public MediaSessionHelperClient
+    , public AudioSession::InterruptionObserver {
 public:
     virtual ~MediaSessionManageriOS();
 
-    void externalOutputDeviceAvailableDidChange();
     bool hasWirelessTargetsAvailable() override;
+    static WEBCORE_EXPORT void providePresentingApplicationPID();
+
+    using MediaSessionHelperClient::weakPtrFactory;
 
 private:
     friend class PlatformMediaSessionManager;
 
     MediaSessionManageriOS();
 
-    void removeSession(PlatformMediaSession&) override;
+#if !PLATFORM(MACCATALYST)
+    void resetRestrictions() final;
+#endif
 
-    bool sessionWillBeginPlayback(PlatformMediaSession&) override;
-    void sessionWillEndPlayback(PlatformMediaSession&) override;
-    void clientCharacteristicsChanged(PlatformMediaSession&) override;
+    void configureWireLessTargetMonitoring() final;
+    void providePresentingApplicationPIDIfNecessary() final;
+    bool sessionWillBeginPlayback(PlatformMediaSession&) final;
+    void sessionWillEndPlayback(PlatformMediaSession&, DelayCallingUpdateNowPlaying) final;
 
-    void updateNowPlayingInfo();
-    
-    void resetRestrictions() override;
+    // AudioSession::InterruptionObserver
+    void beginAudioSessionInterruption() final { beginInterruption(PlatformMediaSession::SystemInterruption); }
+    void endAudioSessionInterruption(AudioSession::MayResume mayResume) final { endInterruption(mayResume == AudioSession::MayResume::Yes ? PlatformMediaSession::MayResumePlaying : PlatformMediaSession::NoFlags); }
 
-    void configureWireLessTargetMonitoring() override;
+    // MediaSessionHelperClient
+    void applicationWillEnterForeground(SuspendedUnderLock) final;
+    void applicationDidEnterBackground(SuspendedUnderLock) final;
+    void applicationWillBecomeInactive() final;
+    void applicationDidBecomeActive() final;
+    void mediaServerConnectionDied() final;
+    void externalOutputDeviceAvailableDidChange(HasAvailableTargets) final;
+    void activeAudioRouteDidChange(ShouldPause) final;
+    void activeVideoRouteDidChange(SupportsAirPlayVideo, Ref<MediaPlaybackTarget>&&) final;
+    void isPlayingToAutomotiveHeadUnitDidChange(PlayingToAutomotiveHeadUnit) final;
+#if !RELEASE_LOG_DISABLED
+    const char* logClassName() const final { return "MediaSessionManageriOS"; }
+#endif
 
-    bool sessionCanLoadMedia(const PlatformMediaSession&) const override;
+#if !PLATFORM(WATCHOS)
+    RefPtr<MediaPlaybackTarget> m_playbackTarget;
+    bool m_playbackTargetSupportsAirPlayVideo { false };
+#endif
 
-    bool hasActiveNowPlayingSession() const final { return m_nowPlayingActive; }
-    String lastUpdatedNowPlayingTitle() const final { return m_reportedTitle; }
-    double lastUpdatedNowPlayingDuration() const final { return m_reportedDuration; }
-    double lastUpdatedNowPlayingElapsedTime() const final { return m_reportedCurrentTime; }
-
-    PlatformMediaSession* nowPlayingEligibleSession();
-    
-    RetainPtr<WebMediaSessionHelper> m_objcObserver;
-    double m_reportedRate { 0 };
-    double m_reportedDuration { 0 };
-    double m_reportedCurrentTime { 0 };
-    String m_reportedTitle;
-    bool m_nowPlayingActive { false };
+    bool m_isMonitoringWirelessRoutes { false };
+    bool m_havePresentedApplicationPID { false };
 };
 
 } // namespace WebCore
 
-#endif // MediaSessionManageriOS_h
-
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY)

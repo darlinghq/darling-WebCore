@@ -22,7 +22,7 @@
 #include "config.h"
 #include "ClipStack.h"
 
-#include "GraphicsContext3D.h"
+#include "TextureMapperGLHeaders.h"
 
 namespace WebCore {
 
@@ -62,29 +62,60 @@ void ClipStack::setStencilIndex(int stencilIndex)
     clipStateDirty = true;
 }
 
-void ClipStack::apply(GraphicsContext3D& context)
+void ClipStack::addRoundedRect(const FloatRoundedRect& roundedRect, const TransformationMatrix& matrix)
+{
+    if (clipState.roundedRectCount >= s_roundedRectMaxClips)
+        return;
+
+    // Ensure that the vectors holding the components have the required size.
+    m_roundedRectComponents.grow(s_roundedRectComponentsArraySize);
+    m_roundedRectInverseTransformComponents.grow(s_roundedRectInverseTransformComponentsArraySize);
+
+    // Copy the RoundedRect components to the appropriate position in the array.
+    int basePosition = clipState.roundedRectCount * s_roundedRectComponentsPerRect;
+    m_roundedRectComponents[basePosition] = roundedRect.rect().x();
+    m_roundedRectComponents[basePosition + 1] = roundedRect.rect().y();
+    m_roundedRectComponents[basePosition + 2] = roundedRect.rect().width();
+    m_roundedRectComponents[basePosition + 3] = roundedRect.rect().height();
+    m_roundedRectComponents[basePosition + 4] = roundedRect.radii().topLeft().width();
+    m_roundedRectComponents[basePosition + 5] = roundedRect.radii().topLeft().height();
+    m_roundedRectComponents[basePosition + 6] = roundedRect.radii().topRight().width();
+    m_roundedRectComponents[basePosition + 7] = roundedRect.radii().topRight().height();
+    m_roundedRectComponents[basePosition + 8] = roundedRect.radii().bottomLeft().width();
+    m_roundedRectComponents[basePosition + 9] = roundedRect.radii().bottomLeft().height();
+    m_roundedRectComponents[basePosition + 10] = roundedRect.radii().bottomRight().width();
+    m_roundedRectComponents[basePosition + 11] = roundedRect.radii().bottomRight().height();
+
+    // Copy the TransformationMatrix components to the appropriate position in the array.
+    basePosition = clipState.roundedRectCount * s_roundedRectInverseTransformComponentsPerRect;
+    memcpy(m_roundedRectInverseTransformComponents.data() + basePosition, matrix.toColumnMajorFloatArray().data(), s_roundedRectInverseTransformComponentsPerRect * sizeof(float));
+
+    clipState.roundedRectCount++;
+}
+
+void ClipStack::apply()
 {
     if (clipState.scissorBox.isEmpty())
         return;
 
-    context.scissor(clipState.scissorBox.x(),
+    glScissor(clipState.scissorBox.x(),
         (yAxisMode == YAxisMode::Inverted) ? size.height() - clipState.scissorBox.maxY() : clipState.scissorBox.y(),
         clipState.scissorBox.width(), clipState.scissorBox.height());
-    context.stencilOp(GraphicsContext3D::KEEP, GraphicsContext3D::KEEP, GraphicsContext3D::KEEP);
-    context.stencilFunc(GraphicsContext3D::EQUAL, clipState.stencilIndex - 1, clipState.stencilIndex - 1);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    glStencilFunc(GL_EQUAL, clipState.stencilIndex - 1, clipState.stencilIndex - 1);
     if (clipState.stencilIndex == 1)
-        context.disable(GraphicsContext3D::STENCIL_TEST);
+        glDisable(GL_STENCIL_TEST);
     else
-        context.enable(GraphicsContext3D::STENCIL_TEST);
+        glEnable(GL_STENCIL_TEST);
 }
 
-void ClipStack::applyIfNeeded(GraphicsContext3D& context)
+void ClipStack::applyIfNeeded()
 {
     if (!clipStateDirty)
         return;
 
     clipStateDirty = false;
-    apply(context);
+    apply();
 }
 
 } // namespace WebCore

@@ -23,24 +23,35 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "ScrollingStateNode.h"
+#import "config.h"
+#import "ScrollingStateNode.h"
 
-#include "GraphicsLayer.h"
-#include "ScrollingStateTree.h"
+#import "PlatformLayer.h"
 
 #if ENABLE(ASYNC_SCROLLING)
 
 namespace WebCore {
 
-void LayerRepresentation::retainPlatformLayer(PlatformLayer* layer)
+void LayerRepresentation::retainPlatformLayer(void* typelessLayer)
 {
-    [layer retain];
+    if (typelessLayer)
+        CFRetain(typelessLayer);
 }
 
-void LayerRepresentation::releasePlatformLayer(PlatformLayer* layer)
+void LayerRepresentation::releasePlatformLayer(void* typelessLayer)
 {
-    [layer release];
+    if (typelessLayer)
+        CFRelease(typelessLayer);
+}
+
+CALayer *LayerRepresentation::makePlatformLayerTyped(void* typelessLayer)
+{
+    return (__bridge CALayer *)typelessLayer;
+}
+
+void* LayerRepresentation::makePlatformLayerTypeless(CALayer *layer)
+{
+    return (__bridge void*)layer;
 }
 
 } // namespace WebCore

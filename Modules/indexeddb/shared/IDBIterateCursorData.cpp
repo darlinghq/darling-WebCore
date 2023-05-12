@@ -25,6 +25,7 @@
 
 #include "config.h"
 #include "IDBIterateCursorData.h"
+#include <wtf/text/StringConcatenateNumbers.h>
 
 #if ENABLE(INDEXED_DATABASE)
 
@@ -32,14 +33,16 @@ namespace WebCore {
 
 IDBIterateCursorData IDBIterateCursorData::isolatedCopy() const
 {
-    return { keyData.isolatedCopy(), primaryKeyData.isolatedCopy(), count };
+    return { keyData.isolatedCopy(), primaryKeyData.isolatedCopy(), count, option };
 }
 
 #if !LOG_DISABLED
+
 String IDBIterateCursorData::loggingString() const
 {
-    return String::format("<Itr8Crsr: key %s, primaryKey %s, count %u>", keyData.loggingString().utf8().data(), primaryKeyData.loggingString().utf8().data(), count);
+    return makeString("<Itr8Crsr: key ", keyData.loggingString(), ", primaryKey ", primaryKeyData.loggingString(), ", count ", count, '>');
 }
+
 #endif
 
 } // namespace WebCore

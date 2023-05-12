@@ -25,15 +25,17 @@
 
 #pragma once
 
+#include <wtf/WeakPtr.h>
+
 namespace WebCore {
 
 class Document;
 
-class MediaCanStartListener {
+class MediaCanStartListener : public CanMakeWeakPtr<MediaCanStartListener> {
 public:
     virtual void mediaCanStart(Document&) = 0;
 protected:
-    virtual ~MediaCanStartListener() { }
+    virtual ~MediaCanStartListener() = default;
 };
 
 } // namespace WebCore

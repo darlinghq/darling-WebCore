@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007 Apple Inc.  All rights reserved.
+ * Copyright (C) 2007, 2018 Apple Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -20,7 +20,7 @@
  * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #pragma once
@@ -30,6 +30,7 @@
 #include <wtf/HashMap.h>
 #include <wtf/Noncopyable.h>
 #include <wtf/RefPtr.h>
+#include <wtf/UniqueRef.h>
 
 namespace WebCore {
 
@@ -39,10 +40,13 @@ class ProgressTrackerClient;
 struct ProgressItem;
 
 class ProgressTracker {
-    WTF_MAKE_NONCOPYABLE(ProgressTracker); WTF_MAKE_FAST_ALLOCATED;
+    WTF_MAKE_NONCOPYABLE(ProgressTracker);
+    WTF_MAKE_FAST_ALLOCATED;
 public:
-    explicit ProgressTracker(ProgressTrackerClient&);
+    explicit ProgressTracker(UniqueRef<ProgressTrackerClient>&&);
     ~ProgressTracker();
+
+    ProgressTrackerClient& client() { return m_client.get(); }
 
     static unsigned long createUniqueIdentifier();
 
@@ -50,7 +54,7 @@ public:
 
     void progressStarted(Frame&);
     void progressCompleted(Frame&);
-    
+
     void incrementProgress(unsigned long identifier, const ResourceResponse&);
     void incrementProgress(unsigned long identifier, unsigned bytesReceived);
     void completeProgress(unsigned long identifier);
@@ -65,10 +69,11 @@ private:
     void finalProgressComplete();
 
     void progressHeartbeatTimerFired();
-    
+    bool isAlwaysOnLoggingAllowed() const;
+
     static unsigned long s_uniqueIdentifier;
-    
-    ProgressTrackerClient& m_client;
+
+    UniqueRef<ProgressTrackerClient> m_client;
     RefPtr<Frame> m_originatingProgressFrame;
     HashMap<unsigned long, std::unique_ptr<ProgressItem>> m_progressItems;
     Timer m_progressHeartbeatTimer;
@@ -89,5 +94,5 @@ private:
     bool m_finalProgressChangedSent { false };
     bool m_isMainLoad { false };
 };
-    
+
 } // namespace WebCore

@@ -32,41 +32,45 @@
 namespace WebCore {
 
 template<typename T> struct Converter<IDLPromise<T>> : DefaultConverter<IDLPromise<T>> {
-    using ReturnType = JSC::JSPromise*;
+    using ReturnType = RefPtr<DOMPromise>;
 
     // https://heycam.github.io/webidl/#es-promise
     template<typename ExceptionThrower = DefaultExceptionThrower>
-    static ReturnType convert(JSC::ExecState& state, JSC::JSValue value, ExceptionThrower&& exceptionThrower = ExceptionThrower())
+    static ReturnType convert(JSC::JSGlobalObject& lexicalGlobalObject, JSC::JSValue value, ExceptionThrower&& exceptionThrower = ExceptionThrower())
     {
-        JSC::VM& vm = state.vm();
+        JSC::VM& vm = JSC::getVM(&lexicalGlobalObject);
         auto scope = DECLARE_THROW_SCOPE(vm);
-        auto* globalObject = jsDynamicDowncast<JSDOMGlobalObject*>(vm, state.lexicalGlobalObject());
+        auto* globalObject = JSC::jsDynamicCast<JSDOMGlobalObject*>(vm, &lexicalGlobalObject);
         if (!globalObject)
             return nullptr;
 
         // 1. Let resolve be the original value of %Promise%.resolve.
         // 2. Let promise be the result of calling resolve with %Promise% as the this value and V as the single argument value.
-        auto* promise = JSC::JSPromise::resolve(*globalObject, value);
+        auto* promise = JSC::JSPromise::resolvedPromise(globalObject, value);
         if (scope.exception()) {
-            exceptionThrower(state, scope);
+            exceptionThrower(lexicalGlobalObject, scope);
             return nullptr;
         }
         ASSERT(promise);
 
         // 3. Return the IDL promise type value that is a reference to the same object as promise.
-        return promise;
+        return DOMPromise::create(*globalObject, *promise);
     }
 };
 
 template<typename T> struct JSConverter<IDLPromise<T>> {
-    static constexpr bool needsState = false;
-    static constexpr bool needsGlobalObject = false;
+    static constexpr bool needsState = true;
+    static constexpr bool needsGlobalObject = true;
 
-    static JSC::JSValue convert(JSC::JSPromise& promise)
+    static JSC::JSValue convert(JSC::JSGlobalObject&, JSDOMGlobalObject&, DOMPromise& promise)
     {
-        // The result of converting an IDL promise type value to an ECMAScript value is the Promise value
-        // that represents a reference to the same object that the IDL promise type represents.
-        return &promise;
+        return promise.promise();
+    }
+
+    template<template<typename> class U>
+    static JSC::JSValue convert(JSC::JSGlobalObject& lexicalGlobalObject, JSDOMGlobalObject& globalObject, U<T>& promiseProxy)
+    {
+        return promiseProxy.promise(lexicalGlobalObject, globalObject);
     }
 };
 

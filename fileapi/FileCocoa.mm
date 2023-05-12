@@ -28,9 +28,9 @@
 
 #if ENABLE(FILE_REPLACEMENT)
 
-#import "FileSystem.h"
+#import <wtf/FileSystem.h>
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 #import <MobileCoreServices/MobileCoreServices.h>
 #endif
 
@@ -54,14 +54,16 @@ bool File::shouldReplaceFile(const String& path)
         return false;
     }
 
-    return UTTypeConformsTo((CFStringRef)uti, kUTTypePackage);
+ALLOW_DEPRECATED_DECLARATIONS_BEGIN
+    return UTTypeConformsTo((__bridge CFStringRef)uti, kUTTypePackage);
+ALLOW_DEPRECATED_DECLARATIONS_END
 }
 
 void File::computeNameAndContentTypeForReplacedFile(const String& path, const String& nameOverride, String& effectiveName, String& effectiveContentType)
 {
-    ASSERT(!pathGetFileName(path).endsWith('/')); // Expecting to get a path without trailing slash, even for directories.
-    effectiveContentType = ASCIILiteral("application/zip");
-    effectiveName = (nameOverride.isNull() ? pathGetFileName(path) : nameOverride) + ASCIILiteral(".zip");
+    ASSERT(!FileSystem::pathGetFileName(path).endsWith('/')); // Expecting to get a path without trailing slash, even for directories.
+    effectiveContentType = "application/zip"_s;
+    effectiveName = makeString((nameOverride.isNull() ? FileSystem::pathGetFileName(path) : nameOverride), ".zip"_s);
 }
 
 }

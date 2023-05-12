@@ -2,7 +2,7 @@
  * Copyright (C) 1999 Lars Knoll (knoll@kde.org)
  *           (C) 1999 Antti Koivisto (koivisto@kde.org)
  *           (C) 2001 Dirk Mueller (mueller@kde.org)
- * Copyright (C) 2004, 2005, 2006, 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2004-2018 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -24,12 +24,15 @@
 #include "DocumentFragment.h"
 
 #include "Document.h"
-#include "ElementDescendantIterator.h"
+#include "ElementIterator.h"
 #include "HTMLDocumentParser.h"
 #include "Page.h"
 #include "XMLDocumentParser.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(DocumentFragment);
 
 DocumentFragment::DocumentFragment(Document& document, ConstructionType constructionType)
     : ContainerNode(document, constructionType)
@@ -43,7 +46,7 @@ Ref<DocumentFragment> DocumentFragment::create(Document& document)
 
 String DocumentFragment::nodeName() const
 {
-    return ASCIILiteral("#document-fragment");
+    return "#document-fragment"_s;
 }
 
 Node::NodeType DocumentFragment::nodeType() const
@@ -76,7 +79,7 @@ Ref<Node> DocumentFragment::cloneNodeInternal(Document& targetDocument, CloningO
         cloneChildNodes(clone);
         break;
     }
-    return WTFMove(clone);
+    return clone;
 }
 
 void DocumentFragment::parseHTML(const String& source, Element* contextElement, ParserContentPolicy parserContentPolicy)
@@ -90,9 +93,9 @@ bool DocumentFragment::parseXML(const String& source, Element* contextElement, P
     return XMLDocumentParser::parseDocumentFragment(source, *this, contextElement, parserContentPolicy);
 }
 
-Element* DocumentFragment::getElementById(const AtomicString& id) const
+Element* DocumentFragment::getElementById(const AtomString& id) const
 {
-    if (id.isNull())
+    if (id.isEmpty())
         return nullptr;
 
     // Fast path for ShadowRoot, where we are both a DocumentFragment and a TreeScope.
@@ -100,7 +103,7 @@ Element* DocumentFragment::getElementById(const AtomicString& id) const
         return treeScope().getElementById(id);
 
     // Otherwise, fall back to iterating all of the element descendants.
-    for (auto& element : elementDescendants(*this)) {
+    for (auto& element : descendantsOfType<Element>(*this)) {
         if (element.getIdAttribute() == id)
             return const_cast<Element*>(&element);
     }

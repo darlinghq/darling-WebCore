@@ -21,8 +21,8 @@
 
 #pragma once
 
+#include <wtf/Forward.h>
 #include <wtf/RefCounted.h>
-#include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -41,6 +41,8 @@ public:
 
     const String& openQuote(unsigned index) const;
     const String& closeQuote(unsigned index) const;
+
+    unsigned size() const { return m_quoteCount; }
 
 private:
     explicit QuotesData(const Vector<std::pair<String, String>>& quotes);

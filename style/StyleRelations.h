@@ -25,7 +25,7 @@
 
 #pragma once
 
-#include <wtf/Vector.h>
+#include <wtf/Forward.h>
 
 namespace WebCore {
 
@@ -38,15 +38,15 @@ class Update;
 
 struct Relation {
     enum Type {
-        AffectedByActive,
-        AffectedByDrag,
         AffectedByEmpty,
-        AffectedByFocusWithin,
-        AffectedByHover,
         AffectedByPreviousSibling,
+        DescendantsAffectedByPreviousSibling,
         // For AffectsNextSibling 'value' tells how many element siblings to mark starting with 'element'.
         AffectsNextSibling,
+        ChildrenAffectedByForwardPositionalRules,
+        DescendantsAffectedByForwardPositionalRules,
         ChildrenAffectedByBackwardPositionalRules,
+        DescendantsAffectedByBackwardPositionalRules,
         ChildrenAffectedByFirstChildRules,
         ChildrenAffectedByPropertyBasedBackwardPositionalRules,
         ChildrenAffectedByLastChildRules,

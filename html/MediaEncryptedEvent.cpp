@@ -32,11 +32,16 @@
 #if ENABLE(ENCRYPTED_MEDIA)
 
 #include "NotImplemented.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
-MediaEncryptedEvent::MediaEncryptedEvent(const AtomicString& type, const MediaEncryptedEventInit& initializer, IsTrusted isTrusted)
+WTF_MAKE_ISO_ALLOCATED_IMPL(MediaEncryptedEvent);
+
+MediaEncryptedEvent::MediaEncryptedEvent(const AtomString& type, const MediaEncryptedEventInit& initializer, IsTrusted isTrusted)
     : Event(type, initializer, isTrusted)
+    , m_initDataType(initializer.initDataType)
+    , m_initData(initializer.initData)
 {
 }
 
@@ -45,18 +50,6 @@ MediaEncryptedEvent::~MediaEncryptedEvent() = default;
 EventInterface MediaEncryptedEvent::eventInterface() const
 {
     return MediaEncryptedEventInterfaceType;
-}
-
-String MediaEncryptedEvent::initDataType()
-{
-    notImplemented();
-    return emptyString();
-}
-
-ArrayBuffer* MediaEncryptedEvent::initData()
-{
-    notImplemented();
-    return nullptr;
 }
 
 } // namespace WebCore

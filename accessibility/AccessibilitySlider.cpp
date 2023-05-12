@@ -54,7 +54,15 @@ AccessibilityOrientation AccessibilitySlider::orientation() const
 {
     // Default to horizontal in the unknown case.
     if (!m_renderer)
-        return AccessibilityOrientationHorizontal;
+        return AccessibilityOrientation::Horizontal;
+    
+    auto ariaOrientation = getAttribute(aria_orientationAttr);
+    if (equalLettersIgnoringASCIICase(ariaOrientation, "horizontal"))
+        return AccessibilityOrientation::Horizontal;
+    if (equalLettersIgnoringASCIICase(ariaOrientation, "vertical"))
+        return AccessibilityOrientation::Vertical;
+    if (equalLettersIgnoringASCIICase(ariaOrientation, "undefined"))
+        return AccessibilityOrientation::Undefined;
     
     const RenderStyle& style = m_renderer->style();
 
@@ -64,15 +72,15 @@ AccessibilityOrientation AccessibilitySlider::orientation() const
     case SliderHorizontalPart:
     case MediaSliderPart:
     case MediaFullScreenVolumeSliderPart:
-        return AccessibilityOrientationHorizontal;
+        return AccessibilityOrientation::Horizontal;
     
     case SliderThumbVerticalPart: 
     case SliderVerticalPart:
     case MediaVolumeSliderPart:
-        return AccessibilityOrientationVertical;
+        return AccessibilityOrientation::Vertical;
         
     default:
-        return AccessibilityOrientationHorizontal;
+        return AccessibilityOrientation::Horizontal;
     }
 }
     
@@ -84,23 +92,23 @@ void AccessibilitySlider::addChildren()
 
     AXObjectCache* cache = m_renderer->document().axObjectCache();
 
-    auto& thumb = downcast<AccessibilitySliderThumb>(*cache->getOrCreate(SliderThumbRole));
+    auto& thumb = downcast<AccessibilitySliderThumb>(*cache->create(AccessibilityRole::SliderThumb));
     thumb.setParent(this);
 
     // Before actually adding the value indicator to the hierarchy,
     // allow the platform to make a final decision about it.
     if (thumb.accessibilityIsIgnored())
-        cache->remove(thumb.axObjectID());
+        cache->remove(thumb.objectID());
     else
         m_children.append(&thumb);
 }
 
-const AtomicString& AccessibilitySlider::getAttribute(const QualifiedName& attribute) const
+const AtomString& AccessibilitySlider::getAttribute(const QualifiedName& attribute) const
 {
     return inputElement()->getAttribute(attribute);
 }
     
-AccessibilityObject* AccessibilitySlider::elementAccessibilityHitTest(const IntPoint& point) const
+AXCoreObject* AccessibilitySlider::elementAccessibilityHitTest(const IntPoint& point) const
 {
     if (m_children.size()) {
         ASSERT(m_children.size() == 1);
@@ -108,7 +116,7 @@ AccessibilityObject* AccessibilitySlider::elementAccessibilityHitTest(const IntP
             return m_children[0].get();
     }
     
-    return axObjectCache()->getOrCreate(m_renderer);
+    return axObjectCache()->getOrCreate(renderer());
 }
 
 float AccessibilitySlider::valueForRange() const
@@ -126,14 +134,15 @@ float AccessibilitySlider::minValueForRange() const
     return static_cast<float>(inputElement()->minimum());
 }
 
-void AccessibilitySlider::setValue(const String& value)
+bool AccessibilitySlider::setValue(const String& value)
 {
     HTMLInputElement* input = inputElement();
     
     if (input->value() == value)
-        return;
+        return true;
 
     input->setValue(value, DispatchChangeEvent);
+    return true;
 }
 
 HTMLInputElement* AccessibilitySlider::inputElement() const

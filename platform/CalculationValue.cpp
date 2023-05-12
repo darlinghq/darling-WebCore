@@ -31,10 +31,10 @@
 
 #include "config.h"
 #include "CalculationValue.h"
-#include "LengthFunctions.h"
-#include "TextStream.h"
 
+#include "LengthFunctions.h"
 #include <limits>
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -55,7 +55,7 @@ void CalcExpressionNumber::dump(TextStream& ts) const
 
 bool CalcExpressionNumber::operator==(const CalcExpressionNode& other) const
 {
-    return other.type() == CalcExpressionNodeNumber && *this == toCalcExpressionNumber(other);
+    return is<CalcExpressionNumber>(other) && *this == downcast<CalcExpressionNumber>(other);
 }
 
 float CalculationValue::evaluate(float maxValue) const
@@ -68,28 +68,74 @@ float CalculationValue::evaluate(float maxValue) const
     return m_shouldClampToNonNegative && result < 0 ? 0 : result;
 }
 
+float CalcExpressionNegation::evaluate(float maxValue) const
+{
+    return -m_child->evaluate(maxValue);
+}
+
+bool CalcExpressionNegation::operator==(const CalcExpressionNode& other) const
+{
+    return is<CalcExpressionNegation>(other) && *this == downcast<CalcExpressionNegation>(other);
+}
+
+void CalcExpressionNegation::dump(TextStream& ts) const
+{
+    ts << "-(";
+    ts << *m_child;
+    ts << ")";
+}
+
+bool operator==(const CalcExpressionNegation& a, const CalcExpressionNegation& b)
+{
+    return *a.child() == *b.child();
+}
+
+float CalcExpressionInversion::evaluate(float maxValue) const
+{
+    return 1.0f / m_child->evaluate(maxValue);
+}
+
+void CalcExpressionInversion::dump(TextStream& ts) const
+{
+    ts << "1.0 / " << "(";
+    ts << *m_child;
+    ts << ")";
+}
+
+bool CalcExpressionInversion::operator==(const CalcExpressionNode& other) const
+{
+    return is<CalcExpressionInversion>(other) && *this == downcast<CalcExpressionInversion>(other);
+}
+
+bool operator==(const CalcExpressionInversion& a, const CalcExpressionInversion& b)
+{
+    return *a.child() == *b.child();
+}
+
 float CalcExpressionOperation::evaluate(float maxValue) const
 {
     switch (m_operator) {
-    case CalcAdd: {
-        ASSERT(m_children.size() == 2);
-        float left = m_children[0]->evaluate(maxValue);
-        float right = m_children[1]->evaluate(maxValue);
-        return left + right;
+    case CalcOperator::Add: {
+        float sum = 0;
+        for (auto& child : m_children)
+            sum += child->evaluate(maxValue);
+        return sum;
     }
-    case CalcSubtract: {
+    case CalcOperator::Subtract: {
+        // FIXME
         ASSERT(m_children.size() == 2);
         float left = m_children[0]->evaluate(maxValue);
         float right = m_children[1]->evaluate(maxValue);
         return left - right;
     }
-    case CalcMultiply: {
-        ASSERT(m_children.size() == 2);
-        float left = m_children[0]->evaluate(maxValue);
-        float right = m_children[1]->evaluate(maxValue);
-        return left * right;
+    case CalcOperator::Multiply: {
+        float product = 1;
+        for (auto& child : m_children)
+            product *= child->evaluate(maxValue);
+        return product;
     }
-    case CalcDivide: {
+    case CalcOperator::Divide: {
+        // FIXME
         ASSERT(m_children.size() == 1 || m_children.size() == 2);
         if (m_children.size() == 1)
             return std::numeric_limits<float>::quiet_NaN();
@@ -97,7 +143,7 @@ float CalcExpressionOperation::evaluate(float maxValue) const
         float right = m_children[1]->evaluate(maxValue);
         return left / right;
     }
-    case CalcMin: {
+    case CalcOperator::Min: {
         if (m_children.isEmpty())
             return std::numeric_limits<float>::quiet_NaN();
         float minimum = m_children[0]->evaluate(maxValue);
@@ -105,13 +151,22 @@ float CalcExpressionOperation::evaluate(float maxValue) const
             minimum = std::min(minimum, child->evaluate(maxValue));
         return minimum;
     }
-    case CalcMax: {
+    case CalcOperator::Max: {
         if (m_children.isEmpty())
             return std::numeric_limits<float>::quiet_NaN();
         float maximum = m_children[0]->evaluate(maxValue);
         for (auto& child : m_children)
             maximum = std::max(maximum, child->evaluate(maxValue));
         return maximum;
+    }
+    case CalcOperator::Clamp: {
+        if (m_children.size() != 3)
+            return std::numeric_limits<float>::quiet_NaN();
+
+        float min = m_children[0]->evaluate(maxValue);
+        float value = m_children[1]->evaluate(maxValue);
+        float max = m_children[2]->evaluate(maxValue);
+        return std::max(min, std::min(value, max));
     }
     }
     ASSERT_NOT_REACHED();
@@ -120,7 +175,7 @@ float CalcExpressionOperation::evaluate(float maxValue) const
 
 bool CalcExpressionOperation::operator==(const CalcExpressionNode& other) const
 {
-    return other.type() == CalcExpressionNodeOperation && *this == toCalcExpressionOperation(other);
+    return is<CalcExpressionOperation>(other) && *this == downcast<CalcExpressionOperation>(other);
 }
 
 bool operator==(const CalcExpressionOperation& a, const CalcExpressionOperation& b)
@@ -139,7 +194,7 @@ bool operator==(const CalcExpressionOperation& a, const CalcExpressionOperation&
 
 void CalcExpressionOperation::dump(TextStream& ts) const
 {
-    if (m_operator == CalcMin || m_operator == CalcMax) {
+    if (m_operator == CalcOperator::Min || m_operator == CalcOperator::Max) {
         ts << m_operator << "(";
         size_t childrenCount = m_children.size();
         for (size_t i = 0; i < childrenCount; i++) {
@@ -159,12 +214,26 @@ float CalcExpressionLength::evaluate(float maxValue) const
 
 bool CalcExpressionLength::operator==(const CalcExpressionNode& other) const
 {
-    return other.type() == CalcExpressionNodeLength && *this == toCalcExpressionLength(other);
+    return is<CalcExpressionLength>(other) && *this == downcast<CalcExpressionLength>(other);
 }
 
 void CalcExpressionLength::dump(TextStream& ts) const
 {
     ts << m_length;
+}
+
+CalcExpressionBlendLength::CalcExpressionBlendLength(Length from, Length to, float progress)
+    : CalcExpressionNode(CalcExpressionNodeType::BlendLength)
+    , m_from(from)
+    , m_to(to)
+    , m_progress(progress)
+{
+    // Flatten nesting of CalcExpressionBlendLength as a speculative fix for rdar://problem/30533005.
+    // CalcExpressionBlendLength is only used as a result of animation and they don't nest in normal cases.
+    if (m_from.isCalculated() && m_from.calculationValue().expression().type() == CalcExpressionNodeType::BlendLength)
+        m_from = downcast<CalcExpressionBlendLength>(m_from.calculationValue().expression()).from();
+    if (m_to.isCalculated() && m_to.calculationValue().expression().type() == CalcExpressionNodeType::BlendLength)
+        m_to = downcast<CalcExpressionBlendLength>(m_to.calculationValue().expression()).to();
 }
 
 float CalcExpressionBlendLength::evaluate(float maxValue) const
@@ -174,7 +243,7 @@ float CalcExpressionBlendLength::evaluate(float maxValue) const
 
 bool CalcExpressionBlendLength::operator==(const CalcExpressionNode& other) const
 {
-    return other.type() == CalcExpressionNodeBlendLength && *this == toCalcExpressionBlendLength(other);
+    return is<CalcExpressionBlendLength>(other) && *this == downcast<CalcExpressionBlendLength>(other);
 }
 
 void CalcExpressionBlendLength::dump(TextStream& ts) const
@@ -185,12 +254,13 @@ void CalcExpressionBlendLength::dump(TextStream& ts) const
 TextStream& operator<<(TextStream& ts, CalcOperator op)
 {
     switch (op) {
-    case CalcAdd: ts << "+"; break;
-    case CalcSubtract: ts << "-"; break;
-    case CalcMultiply: ts << "*"; break;
-    case CalcDivide: ts << "/"; break;
-    case CalcMin: ts << "max"; break;
-    case CalcMax: ts << "min"; break;
+    case CalcOperator::Add: ts << "+"; break;
+    case CalcOperator::Subtract: ts << "-"; break;
+    case CalcOperator::Multiply: ts << "*"; break;
+    case CalcOperator::Divide: ts << "/"; break;
+    case CalcOperator::Min: ts << "min"; break;
+    case CalcOperator::Max: ts << "max"; break;
+    case CalcOperator::Clamp: ts << "clamp"; break;
     }
     return ts;
 }

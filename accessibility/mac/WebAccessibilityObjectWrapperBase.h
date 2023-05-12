@@ -26,14 +26,13 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef WebAccessibilityObjectWrapperBase_h
-#define WebAccessibilityObjectWrapperBase_h
-
-#include "AccessibilityObject.h"
-#include <CoreGraphics/CoreGraphics.h>
+#import "AccessibilityObjectInterface.h"
+#import <CoreGraphics/CoreGraphics.h>
+#import <wtf/RefPtr.h>
+#import <wtf/Variant.h>
+#import <wtf/WeakPtr.h>
 
 namespace WebCore {
-class AccessibilityObject;
 struct AccessibilitySearchCriteria;
 class IntRect;
 class FloatPoint;
@@ -43,18 +42,36 @@ class VisiblePosition;
 }
 
 @interface WebAccessibilityObjectWrapperBase : NSObject {
-    WebCore::AccessibilityObject* m_object;
+    WebCore::AXCoreObject* m_axObject;
+#if ENABLE(ACCESSIBILITY_ISOLATED_TREE)
+    WebCore::AXCoreObject* m_isolatedObject;
+#endif
+    WebCore::AXID _identifier;
 }
- 
-- (id)initWithAccessibilityObject:(WebCore::AccessibilityObject*)axObject;
+
+- (id)initWithAccessibilityObject:(WebCore::AXCoreObject*)axObject;
+#if ENABLE(ACCESSIBILITY_ISOLATED_TREE)
+- (void)attachIsolatedObject:(WebCore::AXCoreObject*)isolatedObject;
+#endif
+
 - (void)detach;
-- (WebCore::AccessibilityObject*)accessibilityObject;
-- (BOOL)updateObjectBackingStore;
+#if ENABLE(ACCESSIBILITY_ISOLATED_TREE)
+- (void)detachIsolatedObject:(WebCore::AccessibilityDetachmentType)detachmentType;
+#endif
+
+@property (nonatomic, assign) WebCore::AXID identifier;
+
+// Updates the underlying object and accessibility hierarchy , and returns the
+// corresponding AXCoreObject.
+- (WebCore::AXCoreObject*)updateObjectBackingStore;
+
+// This can be either an AccessibilityObject or an AXIsolatedObject
+- (WebCore::AXCoreObject*)axBackingObject;
 
 // These are pre-fixed with base so that AppKit does not end up calling into these directly (bypassing safety checks).
-- (NSString *)baseAccessibilityTitle;
 - (NSString *)baseAccessibilityDescription;
 - (NSString *)baseAccessibilityHelpText;
+- (NSArray<NSString *> *)baseAccessibilitySpeechHint;
 
 - (NSString *)ariaLandmarkRoleDescription;
 
@@ -63,16 +80,22 @@ class VisiblePosition;
 - (void)accessibilityPostedNotification:(NSString *)notificationName;
 - (void)accessibilityPostedNotification:(NSString *)notificationName userInfo:(NSDictionary *)userInfo;
 
-- (CGPathRef)convertPathToScreenSpace:(WebCore::Path &)path;
-- (CGPoint)convertPointToScreenSpace:(WebCore::FloatPoint &)point;
+- (CGPathRef)convertPathToScreenSpace:(const WebCore::Path&)path;
+
+- (CGRect)convertRectToSpace:(const WebCore::FloatRect&)rect space:(WebCore::AccessibilityConversionSpace)space;
 
 // Math related functions
 - (NSArray *)accessibilityMathPostscriptPairs;
 - (NSArray *)accessibilityMathPrescriptPairs;
 
+- (NSDictionary<NSString *, id> *)baseAccessibilityResolvedEditingStyles;
+
 extern WebCore::AccessibilitySearchCriteria accessibilitySearchCriteriaForSearchPredicateParameterizedAttribute(const NSDictionary *);
-extern NSArray *convertToNSArray(const WebCore::AccessibilityObject::AccessibilityChildrenVector&);
+
+extern NSArray *convertToNSArray(const WebCore::AXCoreObject::AccessibilityChildrenVector&);
+
+#if PLATFORM(IOS_FAMILY)
+- (id)_accessibilityWebDocumentView;
+#endif
 
 @end
-
-#endif // WebAccessibilityObjectWrapperBase_h

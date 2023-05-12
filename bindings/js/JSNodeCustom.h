@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2007, 2009, 2010 Apple Inc. All rights reserved.
+ * Copyright (C) 2007-2019 Apple Inc. All rights reserved.
+ * Copyright (C) 2018 Yusuke Suzuki <utatane.tea@gmail.com>.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,12 +29,29 @@
 #include "JSDOMBinding.h"
 #include "JSNode.h"
 
+namespace JSC {
+namespace JSCastingHelpers {
+
+template<>
+struct InheritsTraits<WebCore::JSNode> {
+    static constexpr Optional<JSTypeRange> typeRange { { static_cast<JSType>(WebCore::JSNodeType), static_cast<JSType>(WebCore::JSNodeType + WebCore::JSNodeTypeMask) } };
+    static_assert(std::numeric_limits<uint8_t>::max() == typeRange->last);
+    template<typename From>
+    static inline bool inherits(VM& vm, From* from)
+    {
+        return inheritsJSTypeImpl<WebCore::JSNode>(vm, from, *typeRange);
+    }
+};
+
+} // namespace JSCastingHelpers
+} // namespace JSC
+
 namespace WebCore {
 
-WEBCORE_EXPORT JSC::JSValue createWrapper(JSC::ExecState*, JSDOMGlobalObject*, Ref<Node>&&);
+WEBCORE_EXPORT JSC::JSValue createWrapper(JSC::JSGlobalObject*, JSDOMGlobalObject*, Ref<Node>&&);
 WEBCORE_EXPORT JSC::JSObject* getOutOfLineCachedWrapper(JSDOMGlobalObject*, Node&);
 
-inline JSC::JSValue toJS(JSC::ExecState* exec, JSDOMGlobalObject* globalObject, Node& node)
+inline JSC::JSValue toJS(JSC::JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject* globalObject, Node& node)
 {
     if (LIKELY(globalObject->worldIsNormal())) {
         if (auto* wrapper = node.wrapper())
@@ -43,7 +61,7 @@ inline JSC::JSValue toJS(JSC::ExecState* exec, JSDOMGlobalObject* globalObject, 
             return wrapper;
     }
 
-    return createWrapper(exec, globalObject, node);
+    return createWrapper(lexicalGlobalObject, globalObject, node);
 }
 
 // In the C++ DOM, a node tree survives as long as there is a reference to its
@@ -64,7 +82,7 @@ inline void willCreatePossiblyOrphanedTreeByRemoval(Node* root)
 
 inline void* root(Node* node)
 {
-    return node->opaqueRoot();
+    return node ? node->opaqueRoot() : nullptr;
 }
 
 inline void* root(Node& node)
@@ -72,13 +90,7 @@ inline void* root(Node& node)
     return root(&node);
 }
 
-template<typename From>
-ALWAYS_INLINE JSDynamicCastResult<JSNode, From> jsNodeCast(From* value)
-{
-    return value->type() >= JSNodeType ? JSC::jsCast<JSDynamicCastResult<JSNode, From>>(value) : nullptr;
-}
-
-ALWAYS_INLINE JSC::JSValue JSNode::nodeType(JSC::ExecState&) const
+ALWAYS_INLINE JSC::JSValue JSNode::nodeType(JSC::JSGlobalObject&) const
 {
     return JSC::jsNumber(static_cast<uint8_t>(type()) & JSNodeTypeMask);
 }

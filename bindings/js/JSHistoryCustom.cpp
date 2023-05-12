@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008, 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2008-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,87 +29,24 @@
 #include "config.h"
 #include "JSHistory.h"
 
-#include "ExceptionCode.h"
-#include "Frame.h"
-#include "JSDOMConvertNullable.h"
-#include "JSDOMConvertStrings.h"
 #include "SerializedScriptValue.h"
-#include <runtime/JSFunction.h>
-
-using namespace JSC;
+#include <JavaScriptCore/JSCInlines.h>
 
 namespace WebCore {
 
-JSValue JSHistory::state(ExecState& state) const
+using namespace JSC;
+
+JSValue JSHistory::state(JSGlobalObject& lexicalGlobalObject) const
 {
-    History& history = wrapped();
-
-    JSValue cachedValue = m_state.get();
-    if (!cachedValue.isEmpty() && !history.stateChanged())
-        return cachedValue;
-
-    RefPtr<SerializedScriptValue> serialized = history.state();
-    JSValue result = serialized ? serialized->deserialize(state, globalObject()) : jsNull();
-    m_state.set(state.vm(), this, result);
-    return result;
+    return cachedPropertyValue(lexicalGlobalObject, *this, wrapped().cachedState(), [this, &lexicalGlobalObject] {
+        auto* serialized = wrapped().state();
+        return serialized ? serialized->deserialize(lexicalGlobalObject, globalObject()) : jsNull();
+    });
 }
 
-JSValue JSHistory::pushState(ExecState& state)
+void JSHistory::visitAdditionalChildren(SlotVisitor& visitor)
 {
-    VM& vm = state.vm();
-    auto scope = DECLARE_THROW_SCOPE(vm);
-
-    auto argCount = state.argumentCount();
-    if (UNLIKELY(argCount < 2))
-        return throwException(&state, scope, createNotEnoughArgumentsError(&state));
-
-    auto historyState = SerializedScriptValue::create(state, state.uncheckedArgument(0));
-    RETURN_IF_EXCEPTION(scope, JSValue());
-
-    // FIXME: title should not be nullable.
-    String title = convert<IDLNullable<IDLDOMString>>(state, state.uncheckedArgument(1));
-    RETURN_IF_EXCEPTION(scope, JSValue());
-
-    String url;
-    if (argCount > 2) {
-        url = convert<IDLNullable<IDLUSVString>>(state, state.uncheckedArgument(2));
-        RETURN_IF_EXCEPTION(scope, JSValue());
-    }
-
-    propagateException(state, scope, wrapped().stateObjectAdded(WTFMove(historyState), title, url, History::StateObjectType::Push));
-
-    m_state.clear();
-
-    return jsUndefined();
-}
-
-JSValue JSHistory::replaceState(ExecState& state)
-{
-    VM& vm = state.vm();
-    auto scope = DECLARE_THROW_SCOPE(vm);
-
-    auto argCount = state.argumentCount();
-    if (UNLIKELY(argCount < 2))
-        return throwException(&state, scope, createNotEnoughArgumentsError(&state));
-
-    auto historyState = SerializedScriptValue::create(state, state.uncheckedArgument(0));
-    RETURN_IF_EXCEPTION(scope, JSValue());
-
-    // FIXME: title should not be nullable.
-    String title = convert<IDLNullable<IDLDOMString>>(state, state.uncheckedArgument(1));
-    RETURN_IF_EXCEPTION(scope, JSValue());
-
-    String url;
-    if (argCount > 2) {
-        url = convert<IDLNullable<IDLUSVString>>(state, state.uncheckedArgument(2));
-        RETURN_IF_EXCEPTION(scope, JSValue());
-    }
-
-    propagateException(state, scope, wrapped().stateObjectAdded(WTFMove(historyState), title, url, History::StateObjectType::Replace));
-
-    m_state.clear();
-
-    return jsUndefined();
+    wrapped().cachedStateForGC().visit(visitor);
 }
 
 } // namespace WebCore

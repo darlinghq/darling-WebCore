@@ -26,8 +26,8 @@
 #include "config.h"
 #include "PluginInfoProvider.h"
 
+#include "Frame.h"
 #include "FrameLoader.h"
-#include "MainFrame.h"
 #include "Page.h"
 #include "SubframeLoader.h"
 
@@ -35,24 +35,30 @@ namespace WebCore {
 
 PluginInfoProvider::~PluginInfoProvider()
 {
-    ASSERT(m_pages.isEmpty());
+    ASSERT(m_pages.computesEmpty());
+}
+
+void PluginInfoProvider::clearPagesPluginData()
+{
+    for (auto& page : m_pages)
+        page.clearPluginData();
 }
 
 void PluginInfoProvider::refresh(bool reloadPages)
 {
     refreshPlugins();
 
-    Vector<Ref<MainFrame>> framesNeedingReload;
+    Vector<Ref<Frame>> framesNeedingReload;
 
     for (auto& page : m_pages) {
-        page->clearPluginData();
+        page.clearPluginData();
 
         if (!reloadPages)
             continue;
 
-        for (Frame* frame = &page->mainFrame(); frame; frame = frame->tree().traverseNext()) {
+        for (auto* frame = &page.mainFrame(); frame; frame = frame->tree().traverseNext()) {
             if (frame->loader().subframeLoader().containsPlugins())
-                framesNeedingReload.append(page->mainFrame());
+                framesNeedingReload.append(page.mainFrame());
         }
     }
 
@@ -62,16 +68,16 @@ void PluginInfoProvider::refresh(bool reloadPages)
 
 void PluginInfoProvider::addPage(Page& page)
 {
-    ASSERT(!m_pages.contains(&page));
+    ASSERT(!m_pages.contains(page));
 
-    m_pages.add(&page);
+    m_pages.add(page);
 }
 
 void PluginInfoProvider::removePage(Page& page)
 {
-    ASSERT(m_pages.contains(&page));
+    ASSERT(m_pages.contains(page));
 
-    m_pages.remove(&page);
+    m_pages.remove(page);
 }
 
 }

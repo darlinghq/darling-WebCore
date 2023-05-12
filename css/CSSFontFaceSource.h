@@ -27,8 +27,9 @@
 
 #include "CachedFontClient.h"
 #include "CachedResourceHandle.h"
-#include <runtime/ArrayBufferView.h>
-#include <wtf/text/AtomicString.h>
+#include <JavaScriptCore/ArrayBufferView.h>
+#include <wtf/WeakPtr.h>
+#include <wtf/text/AtomString.h>
 
 namespace WebCore {
 
@@ -64,23 +65,26 @@ public:
     };
     Status status() const { return m_status; }
 
-    const AtomicString& familyNameOrURI() const { return m_familyNameOrURI; }
+    const AtomString& familyNameOrURI() const { return m_familyNameOrURI; }
+
+    void opportunisticallyStartFontDataURLLoading(CSSFontSelector&);
 
     void load(CSSFontSelector*);
-    RefPtr<Font> font(const FontDescription&, bool syntheticBold, bool syntheticItalic, const FontFeatureSettings&, const FontVariantSettings&, FontSelectionSpecifiedCapabilities);
+    RefPtr<Font> font(const FontDescription&, bool syntheticBold, bool syntheticItalic, const FontFeatureSettings&, FontSelectionSpecifiedCapabilities);
 
+    CachedFont* cachedFont() const { return m_font.get(); }
     bool requiresExternalResource() const { return m_font; }
 
-#if ENABLE(SVG_FONTS)
     bool isSVGFontFaceSource() const;
-#endif
 
 private:
+    bool shouldIgnoreFontLoadCompletions() const;
+
     void fontLoaded(CachedFont&) override;
 
     void setStatus(Status);
 
-    AtomicString m_familyNameOrURI; // URI for remote, built-in font name for local.
+    AtomString m_familyNameOrURI; // URI for remote, built-in font name for local.
     CachedResourceHandle<CachedFont> m_font; // For remote fonts, a pointer to our cached resource.
     CSSFontFace& m_face; // Our owning font face.
 
@@ -88,12 +92,11 @@ private:
     RefPtr<JSC::ArrayBufferView> m_immediateSource;
     std::unique_ptr<FontCustomPlatformData> m_immediateFontCustomPlatformData;
 
-#if ENABLE(SVG_FONTS)
-    RefPtr<SVGFontFaceElement> m_svgFontFaceElement;
-#endif
+    WeakPtr<SVGFontFaceElement> m_svgFontFaceElement;
     std::unique_ptr<FontCustomPlatformData> m_inDocumentCustomPlatformData;
 
     Status m_status { Status::Pending };
+    bool m_hasSVGFontFaceElement;
 };
 
 } // namespace WebCore

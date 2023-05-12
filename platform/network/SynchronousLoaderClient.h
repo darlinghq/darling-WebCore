@@ -23,45 +23,60 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef SynchronousLoaderClient_h
-#define SynchronousLoaderClient_h
+#pragma once
 
 #include "ResourceError.h"
 #include "ResourceHandleClient.h"
 #include "ResourceResponse.h"
+#include <wtf/Function.h>
+#include <wtf/MessageQueue.h>
+#include <wtf/ThreadSafeRefCounted.h>
 
 namespace WebCore {
 
+class SynchronousLoaderMessageQueue : public ThreadSafeRefCounted<SynchronousLoaderMessageQueue> {
+public:
+    static Ref<SynchronousLoaderMessageQueue> create() { return adoptRef(*new SynchronousLoaderMessageQueue); }
+
+    void append(std::unique_ptr<Function<void()>>&& task) { m_queue.append(WTFMove(task)); }
+    void kill() { m_queue.kill(); }
+    bool killed() const { return m_queue.killed(); }
+    std::unique_ptr<Function<void()>> waitForMessage() { return m_queue.waitForMessage(); }
+
+private:
+    SynchronousLoaderMessageQueue() = default;
+    MessageQueue<Function<void()>> m_queue;
+};
+
 class SynchronousLoaderClient final : public ResourceHandleClient {
 public:
+    SynchronousLoaderClient();
     virtual ~SynchronousLoaderClient();
 
     void setAllowStoredCredentials(bool allow) { m_allowStoredCredentials = allow; }
     const ResourceResponse& response() const { return m_response; }
     Vector<char>& mutableData() { return m_data; }
     const ResourceError& error() const { return m_error; }
-    bool isDone() { return m_isDone; }
+    SynchronousLoaderMessageQueue& messageQueue() { return m_messageQueue.get(); }
 
     WEBCORE_EXPORT static ResourceError platformBadResponseError();
 
 private:
-    ResourceRequest willSendRequest(ResourceHandle*, ResourceRequest&&, ResourceResponse&&) override;
+    void willSendRequestAsync(ResourceHandle*, ResourceRequest&&, ResourceResponse&&, CompletionHandler<void(ResourceRequest&&)>&&) override;
     bool shouldUseCredentialStorage(ResourceHandle*) override;
     void didReceiveAuthenticationChallenge(ResourceHandle*, const AuthenticationChallenge&) override;
-    void didReceiveResponse(ResourceHandle*, ResourceResponse&&) override;
+    void didReceiveResponseAsync(ResourceHandle*, ResourceResponse&&, CompletionHandler<void()>&&) override;
     void didReceiveData(ResourceHandle*, const char*, unsigned, int /*encodedDataLength*/) override;
     void didFinishLoading(ResourceHandle*) override;
     void didFail(ResourceHandle*, const ResourceError&) override;
 #if USE(PROTECTION_SPACE_AUTH_CALLBACK)
-    bool canAuthenticateAgainstProtectionSpace(ResourceHandle*, const ProtectionSpace&) override;
+    void canAuthenticateAgainstProtectionSpaceAsync(ResourceHandle*, const ProtectionSpace&, CompletionHandler<void(bool)>&&) override;
 #endif
 
     bool m_allowStoredCredentials { false };
     ResourceResponse m_response;
     Vector<char> m_data;
     ResourceError m_error;
-    bool m_isDone { false };
+    Ref<SynchronousLoaderMessageQueue> m_messageQueue;
 };
 }
-
-#endif // SynchronousLoaderClient_h

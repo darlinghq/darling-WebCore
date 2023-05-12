@@ -29,14 +29,13 @@
 
 #import "WebCoreMotionManager.h"
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY) && ENABLE(DEVICE_ORIENTATION)
 
 namespace WebCore {
 
-DeviceMotionClientIOS::DeviceMotionClientIOS()
+DeviceMotionClientIOS::DeviceMotionClientIOS(RefPtr<DeviceOrientationUpdateProvider>&& deviceOrientationUpdateProvider)
     : DeviceMotionClient()
-    , m_motionManager(nullptr)
-    , m_updating(0)
+    , m_deviceOrientationUpdateProvider(WTFMove(deviceOrientationUpdateProvider))
 {
 }
 
@@ -53,6 +52,11 @@ void DeviceMotionClientIOS::startUpdating()
 {
     m_updating = true;
 
+    if (m_deviceOrientationUpdateProvider) {
+        m_deviceOrientationUpdateProvider->startUpdatingDeviceMotion(*this);
+        return;
+    }
+
     if (!m_motionManager)
         m_motionManager = [WebCoreMotionManager sharedManager];
 
@@ -62,6 +66,11 @@ void DeviceMotionClientIOS::startUpdating()
 void DeviceMotionClientIOS::stopUpdating()
 {
     m_updating = false;
+
+    if (m_deviceOrientationUpdateProvider) {
+        m_deviceOrientationUpdateProvider->stopUpdatingDeviceMotion(*this);
+        return;
+    }
 
     // Remove ourselves as the motion client so we won't get updates.
     [m_motionManager removeMotionClient:this];
@@ -74,15 +83,20 @@ DeviceMotionData* DeviceMotionClientIOS::lastMotion() const
 
 void DeviceMotionClientIOS::deviceMotionControllerDestroyed()
 {
+    if (m_deviceOrientationUpdateProvider) {
+        m_deviceOrientationUpdateProvider->stopUpdatingDeviceMotion(*this);
+        return;
+    }
+
     [m_motionManager removeMotionClient:this];
 }
 
-void DeviceMotionClientIOS::motionChanged(double xAcceleration, double yAcceleration, double zAcceleration, double xAccelerationIncludingGravity, double yAccelerationIncludingGravity, double zAccelerationIncludingGravity, double xRotationRate, double yRotationRate, double zRotationRate)
+void DeviceMotionClientIOS::motionChanged(double xAcceleration, double yAcceleration, double zAcceleration, double xAccelerationIncludingGravity, double yAccelerationIncludingGravity, double zAccelerationIncludingGravity, Optional<double> xRotationRate, Optional<double> yRotationRate, Optional<double> zRotationRate)
 {
     if (!m_updating)
         return;
 
-#if PLATFORM(IOS_SIMULATOR)
+#if PLATFORM(IOS_FAMILY_SIMULATOR)
     UNUSED_PARAM(xAcceleration);
     UNUSED_PARAM(yAcceleration);
     UNUSED_PARAM(zAcceleration);
@@ -99,13 +113,12 @@ void DeviceMotionClientIOS::motionChanged(double xAcceleration, double yAccelera
 #else
     auto accelerationIncludingGravity = DeviceMotionData::Acceleration::create(xAccelerationIncludingGravity, yAccelerationIncludingGravity, zAccelerationIncludingGravity);
 
-    RefPtr<DeviceMotionData::Acceleration> acceleration;
+    RefPtr<DeviceMotionData::Acceleration> acceleration = DeviceMotionData::Acceleration::create(xAcceleration, yAcceleration, zAcceleration);
     RefPtr<DeviceMotionData::RotationRate> rotationRate;
-    if ([m_motionManager gyroAvailable]) {
-        acceleration = DeviceMotionData::Acceleration::create(xAcceleration, yAcceleration, zAcceleration);
-        rotationRate = DeviceMotionData::RotationRate::create(xRotationRate, yRotationRate, zRotationRate);
-    }
-#endif // PLATFORM(IOS_SIMULATOR)
+    // Not all devices have a gyroscope.
+    if (xRotationRate && yRotationRate && zRotationRate)
+        rotationRate = DeviceMotionData::RotationRate::create(*xRotationRate, *yRotationRate, *zRotationRate);
+#endif // PLATFORM(IOS_FAMILY_SIMULATOR)
 
     m_currentDeviceMotionData = DeviceMotionData::create(WTFMove(acceleration), WTFMove(accelerationIncludingGravity), WTFMove(rotationRate), kMotionUpdateInterval);
     m_controller->didChangeDeviceMotion(m_currentDeviceMotionData.get());
@@ -113,4 +126,4 @@ void DeviceMotionClientIOS::motionChanged(double xAcceleration, double yAccelera
 
 } // namespace WebCore
 
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY) && ENABLE(DEVICE_ORIENTATION)

@@ -1,6 +1,7 @@
 /*
  * Copyright (C) 2004, 2005, 2007, 2008 Nikolas Zimmermann <zimmermann@kde.org>
  * Copyright (C) 2004, 2005, 2006 Rob Buis <buis@kde.org>
+ * Copyright (C) 2018-2019 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -20,14 +21,12 @@
 
 #pragma once
 
-#include "SVGAnimatedBoolean.h"
-#include "SVGExternalResourcesRequired.h"
 #include "SVGGraphicsElement.h"
 
 namespace WebCore {
 
-class SVGGElement final : public SVGGraphicsElement,
-                          public SVGExternalResourcesRequired {
+class SVGGElement final : public SVGGraphicsElement {
+    WTF_MAKE_ISO_ALLOCATED(SVGGElement);
 public:
     static Ref<SVGGElement> create(const QualifiedName&, Document&);
     static Ref<SVGGElement> create(Document&);
@@ -37,17 +36,13 @@ private:
 
     RenderPtr<RenderElement> createElementRenderer(RenderStyle&&, const RenderTreePosition&) final;
 
+    using PropertyRegistry = SVGPropertyOwnerRegistry<SVGGElement, SVGGraphicsElement>;
+    const SVGPropertyRegistry& propertyRegistry() const final { return m_propertyRegistry; }
+
     bool isValid() const final { return SVGTests::isValid(); }
-
-    static bool isSupportedAttribute(const QualifiedName&);
-    void parseAttribute(const QualifiedName&, const AtomicString&) final;
-    void svgAttributeChanged(const QualifiedName&) final;
-
     bool rendererIsNeeded(const RenderStyle&) final;
 
-    BEGIN_DECLARE_ANIMATED_PROPERTIES(SVGGElement)
-        DECLARE_ANIMATED_BOOLEAN_OVERRIDE(ExternalResourcesRequired, externalResourcesRequired)
-    END_DECLARE_ANIMATED_PROPERTIES
+    PropertyRegistry m_propertyRegistry { *this };
 };
 
 } // namespace WebCore

@@ -28,12 +28,14 @@
 namespace WebCore {
 
 class PlatformAudioData {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     virtual ~PlatformAudioData() = default;
 
     enum class Kind {
         None,
         WebAudioBufferList,
+        GStreamerAudioData,
     };
 
     virtual Kind kind() const { return Kind::None; }

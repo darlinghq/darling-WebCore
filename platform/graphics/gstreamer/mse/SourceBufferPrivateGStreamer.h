@@ -2,8 +2,8 @@
  * Copyright (C) 2013 Google Inc. All rights reserved.
  * Copyright (C) 2013 Orange
  * Copyright (C) 2014 Sebastian Dröge <sebastian@centricular.com>
- * Copyright (C) 2015, 2016 Metrological Group B.V.
- * Copyright (C) 2015, 2016 Igalia, S.L
+ * Copyright (C) 2015, 2016, 2017 Metrological Group B.V.
+ * Copyright (C) 2015, 2016, 2017 Igalia, S.L
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -41,52 +41,73 @@
 #include "SourceBufferPrivate.h"
 #include "SourceBufferPrivateClient.h"
 #include "WebKitMediaSourceGStreamer.h"
+#include <wtf/LoggerHelper.h>
 
 namespace WebCore {
 
-class MediaSourceGStreamer;
+class MediaSourcePrivateGStreamer;
 
 class SourceBufferPrivateGStreamer final : public SourceBufferPrivate {
-
 public:
-    static Ref<SourceBufferPrivateGStreamer> create(MediaSourceGStreamer*, Ref<MediaSourceClientGStreamerMSE>, const ContentType&);
+    static Ref<SourceBufferPrivateGStreamer> create(MediaSourcePrivateGStreamer*, const ContentType&, MediaPlayerPrivateGStreamerMSE&);
     virtual ~SourceBufferPrivateGStreamer() = default;
 
     void clearMediaSource() { m_mediaSource = nullptr; }
 
-    void setClient(SourceBufferPrivateClient*) final;
-    void append(const unsigned char*, unsigned) final;
+    void append(Vector<unsigned char>&&) final;
     void abort() final;
     void resetParserState() final;
     void removedFromMediaSource() final;
     MediaPlayer::ReadyState readyState() const final;
     void setReadyState(MediaPlayer::ReadyState) final;
 
-    void flush(const AtomicString&) final;
-    void enqueueSample(Ref<MediaSample>&&, const AtomicString&) final;
-    bool isReadyForMoreSamples(const AtomicString&) final;
+    void flush(const AtomString&) final;
+    void enqueueSample(Ref<MediaSample>&&, const AtomString&) final;
+    void allSamplesInTrackEnqueued(const AtomString&) final;
+    bool isReadyForMoreSamples(const AtomString&) final;
     void setActive(bool) final;
-    void stopAskingForMoreSamples(const AtomicString&) final;
-    void notifyClientWhenReadyForMoreSamples(const AtomicString&) final;
+    bool isActive() const final;
+    void notifyClientWhenReadyForMoreSamples(const AtomString&) final;
 
     void setReadyForMoreSamples(bool);
     void notifyReadyForMoreSamples();
 
-    void didReceiveInitializationSegment(const SourceBufferPrivateClient::InitializationSegment&);
+    void didReceiveInitializationSegment(SourceBufferPrivateClient::InitializationSegment&&, CompletionHandler<void()>&&);
     void didReceiveSample(MediaSample&);
     void didReceiveAllPendingSamples();
+    void appendParsingFailed();
+
+    bool isSeeking() const final;
+    MediaTime currentMediaTime() const final;
+    MediaTime duration() const final;
+
+    ContentType type() const { return m_type; }
+
+#if !RELEASE_LOG_DISABLED
+    const Logger& logger() const final { return m_logger.get(); }
+    const char* logClassName() const override { return "SourceBufferPrivateGStreamer"; }
+    const void* logIdentifier() const final { return m_logIdentifier; }
+    WTFLogChannel& logChannel() const final;
+    const Logger& sourceBufferLogger() const final { return m_logger; }
+    const void* sourceBufferLogIdentifier() final { return logIdentifier(); }
+#endif
 
 private:
-    SourceBufferPrivateGStreamer(MediaSourceGStreamer*, Ref<MediaSourceClientGStreamerMSE>, const ContentType&);
-    friend class MediaSourceClientGStreamerMSE;
+    SourceBufferPrivateGStreamer(MediaSourcePrivateGStreamer*, const ContentType&, MediaPlayerPrivateGStreamerMSE&);
 
-    MediaSourceGStreamer* m_mediaSource;
+    MediaSourcePrivateGStreamer* m_mediaSource;
+    bool m_isActive { false };
     ContentType m_type;
-    Ref<MediaSourceClientGStreamerMSE> m_client;
-    SourceBufferPrivateClient* m_sourceBufferPrivateClient;
+    MediaPlayerPrivateGStreamerMSE& m_playerPrivate;
+    UniqueRef<AppendPipeline> m_appendPipeline;
     bool m_isReadyForMoreSamples = true;
     bool m_notifyWhenReadyForMoreSamples = false;
-    AtomicString m_trackId;
+    AtomString m_trackId;
+
+#if !RELEASE_LOG_DISABLED
+    Ref<const Logger> m_logger;
+    const void* m_logIdentifier;
+#endif
 };
 
 }

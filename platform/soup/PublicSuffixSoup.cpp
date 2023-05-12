@@ -38,23 +38,39 @@ bool isPublicSuffix(const String& domain)
     if (domain.isEmpty())
         return false;
 
-    return soup_tld_domain_is_public_suffix(domain.utf8().data());
+    return soup_tld_domain_is_public_suffix(domain.convertToASCIILowercase().utf8().data());
 }
 
 String topPrivatelyControlledDomain(const String& domain)
 {
     if (domain.isEmpty())
         return String();
+    if (!domain.isAllASCII())
+        return domain;
 
-    GUniqueOutPtr<GError> error;
-    CString domainUTF8 = domain.utf8();
-    if (const char* baseDomain = soup_tld_get_base_domain(domainUTF8.data(), &error.outPtr()))
-        return String::fromUTF8(baseDomain);
+    String lowercaseDomain = domain.convertToASCIILowercase();
 
-    if (g_error_matches(error.get(), SOUP_TLD_ERROR, SOUP_TLD_ERROR_NO_BASE_DOMAIN) || g_error_matches(error.get(), SOUP_TLD_ERROR, SOUP_TLD_ERROR_NOT_ENOUGH_DOMAINS))
+    if (lowercaseDomain == "localhost")
+        return lowercaseDomain;
+
+    CString domainUTF8 = lowercaseDomain.utf8();
+
+    // This function is expected to work with the format used by cookies, so skip any leading dots.
+    unsigned position = 0;
+    while (domainUTF8.data()[position] == '.')
+        position++;
+
+    if (position == domainUTF8.length())
         return String();
 
-    if (g_error_matches(error.get(), SOUP_TLD_ERROR, SOUP_TLD_ERROR_IS_IP_ADDRESS) || g_error_matches(error.get(), SOUP_TLD_ERROR, SOUP_TLD_ERROR_INVALID_HOSTNAME))
+    GUniqueOutPtr<GError> error;
+    if (const char* baseDomain = soup_tld_get_base_domain(domainUTF8.data() + position, &error.outPtr()))
+        return String::fromUTF8(baseDomain);
+
+    if (g_error_matches(error.get(), SOUP_TLD_ERROR, SOUP_TLD_ERROR_INVALID_HOSTNAME) || g_error_matches(error.get(), SOUP_TLD_ERROR, SOUP_TLD_ERROR_NOT_ENOUGH_DOMAINS) || g_error_matches(error.get(), SOUP_TLD_ERROR, SOUP_TLD_ERROR_NO_BASE_DOMAIN))
+        return String();
+
+    if (g_error_matches(error.get(), SOUP_TLD_ERROR, SOUP_TLD_ERROR_IS_IP_ADDRESS))
         return domain;
 
     ASSERT_NOT_REACHED();

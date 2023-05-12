@@ -32,9 +32,10 @@
 namespace WebCore {
 
 class XErrorTrapper {
+    WTF_MAKE_NONCOPYABLE(XErrorTrapper);
 public:
     enum class Policy { Ignore, Warn, Crash };
-    XErrorTrapper(Display*, Policy = Policy::Ignore, Vector<unsigned char>&& expectedErrors = { });
+    XErrorTrapper(::Display*, Policy = Policy::Ignore, Vector<unsigned char>&& expectedErrors = { });
     ~XErrorTrapper();
 
     unsigned char errorCode() const;
@@ -42,7 +43,7 @@ public:
 private:
     void errorEvent(XErrorEvent*);
 
-    Display* m_display { nullptr };
+    ::Display* m_display { nullptr };
     Policy m_policy { Policy::Ignore };
     Vector<unsigned char> m_expectedErrors;
     XErrorHandler m_previousErrorHandler { nullptr };

@@ -51,10 +51,10 @@ public:
             && namedGridColumnLines == o.namedGridColumnLines && namedGridRowLines == o.namedGridRowLines
             && autoRepeatNamedGridColumnLines == o.autoRepeatNamedGridColumnLines && autoRepeatNamedGridRowLines == o.autoRepeatNamedGridRowLines
             && autoRepeatOrderedNamedGridColumnLines == o.autoRepeatOrderedNamedGridColumnLines && autoRepeatOrderedNamedGridRowLines == o.autoRepeatOrderedNamedGridRowLines
+            && implicitNamedGridColumnLines == o.implicitNamedGridColumnLines && implicitNamedGridRowLines == o.implicitNamedGridRowLines
             && namedGridArea == o.namedGridArea && namedGridArea == o.namedGridArea
             && namedGridAreaRowCount == o.namedGridAreaRowCount && namedGridAreaColumnCount == o.namedGridAreaColumnCount
             && orderedNamedGridRowLines == o.orderedNamedGridRowLines && orderedNamedGridColumnLines == o.orderedNamedGridColumnLines
-            && gridColumnGap == o.gridColumnGap && gridRowGap == o.gridRowGap
             && gridAutoRepeatColumns == o.gridAutoRepeatColumns && gridAutoRepeatRows == o.gridAutoRepeatRows
             && autoRepeatColumnsInsertionPoint == o.autoRepeatColumnsInsertionPoint && autoRepeatRowsInsertionPoint == o.autoRepeatRowsInsertionPoint
             && autoRepeatColumnsType == o.autoRepeatColumnsType && autoRepeatRowsType == o.autoRepeatRowsType;
@@ -79,6 +79,9 @@ public:
     OrderedNamedGridLinesMap autoRepeatOrderedNamedGridColumnLines;
     OrderedNamedGridLinesMap autoRepeatOrderedNamedGridRowLines;
 
+    NamedGridLinesMap implicitNamedGridColumnLines;
+    NamedGridLinesMap implicitNamedGridRowLines;
+
     unsigned gridAutoFlow : GridAutoFlowBits;
 
     Vector<GridTrackSize> gridAutoRows;
@@ -89,9 +92,6 @@ public:
     // of the explicit grid size defined by both named and unnamed grid areas.
     unsigned namedGridAreaRowCount;
     unsigned namedGridAreaColumnCount;
-
-    Length gridColumnGap;
-    Length gridRowGap;
 
     Vector<GridTrackSize> gridAutoRepeatColumns;
     Vector<GridTrackSize> gridAutoRepeatRows;

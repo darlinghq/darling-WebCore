@@ -33,44 +33,31 @@ namespace WebCore {
 
 class PlatformWheelEvent;
 class ScrollingTree;
-class ScrollingStateScrollingNode;
 
-class ScrollingTreeFrameScrollingNode : public ScrollingTreeScrollingNode {
+class WEBCORE_EXPORT ScrollingTreeFrameScrollingNode : public ScrollingTreeScrollingNode {
 public:
     virtual ~ScrollingTreeFrameScrollingNode();
 
     void commitStateBeforeChildren(const ScrollingStateNode&) override;
     
-    // FIXME: We should implement this when we support ScrollingTreeScrollingNodes as children.
-    void updateLayersAfterAncestorChange(const ScrollingTreeNode& /*changedNode*/, const FloatRect& /*fixedPositionRect*/, const FloatSize& /*cumulativeDelta*/) override { }
-
-    void handleWheelEvent(const PlatformWheelEvent&) override = 0;
-    void setScrollPosition(const FloatPoint&) override;
-    void setScrollPositionWithoutContentEdgeConstraints(const FloatPoint&) override = 0;
-
-    void updateLayersAfterViewportChange(const FloatRect& fixedPositionRect, double scale) override = 0;
-    void updateLayersAfterDelegatedScroll(const FloatPoint&) override { }
-
-    SynchronousScrollingReasons synchronousScrollingReasons() const { return m_synchronousScrollingReasons; }
-    bool shouldUpdateScrollLayerPositionSynchronously() const { return m_synchronousScrollingReasons; }
     bool fixedElementsLayoutRelativeToFrame() const { return m_fixedElementsLayoutRelativeToFrame; }
+    bool visualViewportIsSmallerThanLayoutViewport() const { return m_visualViewportIsSmallerThanLayoutViewport; }
 
     FloatSize viewToContentsOffset(const FloatPoint& scrollPosition) const;
-    FloatRect layoutViewportForScrollPosition(const FloatPoint& visibleContentOrigin, float scale) const;
-
-protected:
-    ScrollingTreeFrameScrollingNode(ScrollingTree&, ScrollingNodeID);
-
-    void scrollBy(const FloatSize&);
-    void scrollByWithoutContentEdgeConstraints(const FloatSize&);
-
-    float frameScaleFactor() const { return m_frameScaleFactor; }
-    int headerHeight() const { return m_headerHeight; }
-    int footerHeight() const { return m_footerHeight; }
-    float topContentInset() const { return m_topContentInset; }
 
     FloatRect layoutViewport() const { return m_layoutViewport; };
     void setLayoutViewport(const FloatRect& r) { m_layoutViewport = r; };
+
+    FloatRect layoutViewportRespectingRubberBanding() const;
+
+    float frameScaleFactor() const { return m_frameScaleFactor; }
+
+protected:
+    ScrollingTreeFrameScrollingNode(ScrollingTree&, ScrollingNodeType, ScrollingNodeID);
+
+    int headerHeight() const { return m_headerHeight; }
+    int footerHeight() const { return m_footerHeight; }
+    float topContentInset() const { return m_topContentInset; }
 
     FloatPoint minLayoutViewportOrigin() const { return m_minLayoutViewportOrigin; }
     FloatPoint maxLayoutViewportOrigin() const { return m_maxLayoutViewportOrigin; }
@@ -78,11 +65,16 @@ protected:
     ScrollBehaviorForFixedElements scrollBehaviorForFixedElements() const { return m_behaviorForFixed; }
 
 private:
-    void dumpProperties(TextStream&, ScrollingStateTreeAsTextBehavior) const override;
+    void updateViewportForCurrentScrollPosition(Optional<FloatRect>) override;
+    bool scrollPositionAndLayoutViewportMatch(const FloatPoint& position, Optional<FloatRect> overrideLayoutViewport) override;
+    FloatRect layoutViewportForScrollPosition(const FloatPoint&, float scale, ScrollBehaviorForFixedElements = StickToDocumentBounds) const;
+
+    void dumpProperties(WTF::TextStream&, ScrollingStateTreeAsTextBehavior) const override;
 
     FloatRect m_layoutViewport;
     FloatPoint m_minLayoutViewportOrigin;
     FloatPoint m_maxLayoutViewportOrigin;
+    Optional<FloatSize> m_overrideVisualViewportSize;
     
     float m_frameScaleFactor { 1 };
     float m_topContentInset { 0 };
@@ -90,10 +82,10 @@ private:
     int m_headerHeight { 0 };
     int m_footerHeight { 0 };
     
-    SynchronousScrollingReasons m_synchronousScrollingReasons { 0 };
     ScrollBehaviorForFixedElements m_behaviorForFixed { StickToDocumentBounds };
     
     bool m_fixedElementsLayoutRelativeToFrame { false };
+    bool m_visualViewportIsSmallerThanLayoutViewport { false };
 };
 
 } // namespace WebCore

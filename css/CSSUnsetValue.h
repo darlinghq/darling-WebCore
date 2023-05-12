@@ -35,16 +35,12 @@ public:
 
     bool equals(const CSSUnsetValue&) const { return true; }
 
-#if COMPILER(MSVC)
-    // FIXME: This should be private, but for some reason MSVC then fails to invoke it from LazyNeverDestroyed::construct.
-public:
-#else
 private:
-    friend class LazyNeverDestroyed<CSSUnsetValue>;
-#endif
-    CSSUnsetValue()
+    friend LazyNeverDestroyed<CSSUnsetValue>;
+    CSSUnsetValue(StaticCSSValueTag)
         : CSSValue(UnsetClass)
     {
+        makeStatic();
     }
 };
 

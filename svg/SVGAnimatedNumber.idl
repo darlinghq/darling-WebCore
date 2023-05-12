@@ -25,9 +25,10 @@
  */
 
 [
-    SkipVTableValidation
+    SkipVTableValidation,
+    Exposed=Window
 ] interface SVGAnimatedNumber {
-    [SetterMayThrowException] attribute unrestricted float baseVal;
+    attribute unrestricted float baseVal;
     readonly attribute unrestricted float animVal;
 };
 

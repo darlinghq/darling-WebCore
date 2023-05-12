@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2010 Google Inc. All rights reserved.
+ * Copyright (C) 2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -35,11 +36,11 @@
 #include "HTMLParserIdioms.h"
 #include "InputTypeNames.h"
 #include "LocalizedStrings.h"
-#include "URL.h"
+#include <wtf/URL.h>
 
 namespace WebCore {
 
-const AtomicString& URLInputType::formControlType() const
+const AtomString& URLInputType::formControlType() const
 {
     return InputTypeNames::url();
 }
@@ -51,17 +52,13 @@ bool URLInputType::typeMismatchFor(const String& value) const
 
 bool URLInputType::typeMismatch() const
 {
-    return typeMismatchFor(element().value());
+    ASSERT(element());
+    return typeMismatchFor(element()->value());
 }
 
 String URLInputType::typeMismatchText() const
 {
     return validationMessageTypeMismatchForURLText();
-}
-
-bool URLInputType::isURLField() const
-{
-    return true;
 }
 
 String URLInputType::sanitizeValue(const String& proposedValue) const

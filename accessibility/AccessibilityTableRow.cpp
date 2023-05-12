@@ -47,9 +47,7 @@ AccessibilityTableRow::AccessibilityTableRow(RenderObject* renderer)
 {
 }
 
-AccessibilityTableRow::~AccessibilityTableRow()
-{
-}
+AccessibilityTableRow::~AccessibilityTableRow() = default;
 
 Ref<AccessibilityTableRow> AccessibilityTableRow::create(RenderObject* renderer)
 {
@@ -61,16 +59,16 @@ AccessibilityRole AccessibilityTableRow::determineAccessibilityRole()
     if (!isTableRow())
         return AccessibilityRenderObject::determineAccessibilityRole();
 
-    if ((m_ariaRole = determineAriaRoleAttribute()) != UnknownRole)
+    if ((m_ariaRole = determineAriaRoleAttribute()) != AccessibilityRole::Unknown)
         return m_ariaRole;
 
-    return RowRole;
+    return AccessibilityRole::Row;
 }
 
 bool AccessibilityTableRow::isTableRow() const
 {
     AccessibilityObject* table = parentTable();
-    return is<AccessibilityTable>(table)  && downcast<AccessibilityTable>(*table).isExposableThroughAccessibility();
+    return is<AccessibilityTable>(table) && downcast<AccessibilityTable>(*table).isExposable();
 }
     
 AccessibilityObject* AccessibilityTableRow::observableObject() const
@@ -82,9 +80,9 @@ AccessibilityObject* AccessibilityTableRow::observableObject() const
 bool AccessibilityTableRow::computeAccessibilityIsIgnored() const
 {    
     AccessibilityObjectInclusion decision = defaultObjectInclusion();
-    if (decision == IncludeObject)
+    if (decision == AccessibilityObjectInclusion::IncludeObject)
         return false;
-    if (decision == IgnoreObject)
+    if (decision == AccessibilityObjectInclusion::IgnoreObject)
         return true;
     
     if (!isTableRow())
@@ -102,7 +100,7 @@ AccessibilityTable* AccessibilityTableRow::parentTable() const
         // choose another ancestor table as this row's table.
         if (is<AccessibilityTable>(*parent)) {
             auto& parentTable = downcast<AccessibilityTable>(*parent);
-            if (parentTable.isExposableThroughAccessibility())
+            if (parentTable.isExposable())
                 return &parentTable;
             if (parentTable.node())
                 break;
@@ -112,7 +110,7 @@ AccessibilityTable* AccessibilityTableRow::parentTable() const
     return nullptr;
 }
     
-AccessibilityObject* AccessibilityTableRow::headerObject()
+AXCoreObject* AccessibilityTableRow::headerObject()
 {
     if (!m_renderer || !m_renderer->isTableRow())
         return nullptr;
@@ -122,7 +120,7 @@ AccessibilityObject* AccessibilityTableRow::headerObject()
         return nullptr;
     
     // check the first element in the row to see if it is a TH element
-    AccessibilityObject* cell = rowChildren[0].get();
+    AXCoreObject* cell = rowChildren[0].get();
     if (!is<AccessibilityTableCell>(*cell))
         return nullptr;
     
@@ -134,6 +132,18 @@ AccessibilityObject* AccessibilityTableRow::headerObject()
     if (!cellNode || !cellNode->hasTagName(thTag))
         return nullptr;
     
+    // Verify that the row header is not part of an entire row of headers.
+    // In that case, it is unlikely this is a row header.
+    bool allHeadersInRow = true;
+    for (const auto& cell : rowChildren) {
+        if (cell->node() && !cell->node()->hasTagName(thTag)) {
+            allHeadersInRow = false;
+            break;
+        }
+    }
+    if (allHeadersInRow)
+        return nullptr;
+    
     return cell;
 }
     
@@ -143,32 +153,32 @@ void AccessibilityTableRow::addChildren()
     
     // "ARIA 1.1, If the set of columns which is present in the DOM is contiguous, and if there are no cells which span more than one row or
     // column in that set, then authors may place aria-colindex on each row, setting the value to the index of the first column of the set."
-    // Update child cells' ariaColIndex if there's an aria-colindex value set for the row. So the cell doesn't have to go through the siblings
+    // Update child cells' axColIndex if there's an aria-colindex value set for the row. So the cell doesn't have to go through the siblings
     // to calculate the index.
-    int colIndex = ariaColumnIndex();
+    int colIndex = axColumnIndex();
     if (colIndex == -1)
         return;
     
     unsigned index = 0;
     for (const auto& cell : children()) {
         if (is<AccessibilityTableCell>(*cell))
-            downcast<AccessibilityTableCell>(*cell).setARIAColIndexFromRow(colIndex + index);
+            downcast<AccessibilityTableCell>(*cell).setAXColIndexFromRow(colIndex + index);
         index++;
     }
 }
 
-int AccessibilityTableRow::ariaColumnIndex() const
+int AccessibilityTableRow::axColumnIndex() const
 {
-    const AtomicString& colIndexValue = getAttribute(aria_colindexAttr);
+    const AtomString& colIndexValue = getAttribute(aria_colindexAttr);
     if (colIndexValue.toInt() >= 1)
         return colIndexValue.toInt();
     
     return -1;
 }
 
-int AccessibilityTableRow::ariaRowIndex() const
+int AccessibilityTableRow::axRowIndex() const
 {
-    const AtomicString& rowIndexValue = getAttribute(aria_rowindexAttr);
+    const AtomString& rowIndexValue = getAttribute(aria_rowindexAttr);
     if (rowIndexValue.toInt() >= 1)
         return rowIndexValue.toInt();
     

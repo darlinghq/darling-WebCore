@@ -25,7 +25,7 @@
 
 #include "config.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "TrackListBase.h"
 
@@ -33,15 +33,18 @@
 #include "HTMLMediaElement.h"
 #include "ScriptExecutionContext.h"
 #include "TrackEvent.h"
+#include <wtf/IsoMallocInlines.h>
 
-using namespace WebCore;
+namespace WebCore {
 
-TrackListBase::TrackListBase(HTMLMediaElement* element, ScriptExecutionContext* context)
-    : ContextDestructionObserver(context)
+WTF_MAKE_ISO_ALLOCATED_IMPL(TrackListBase);
+
+TrackListBase::TrackListBase(WeakPtr<HTMLMediaElement> element, ScriptExecutionContext* context)
+    : ActiveDOMObject(context)
     , m_element(element)
-    , m_asyncEventQueue(*this)
+    , m_asyncEventQueue(MainThreadGenericEventQueue::create(*this))
 {
-    ASSERT(is<Document>(context));
+    ASSERT(!context || is<Document>(context));
 }
 
 TrackListBase::~TrackListBase()
@@ -60,7 +63,7 @@ void TrackListBase::clearElement()
 
 Element* TrackListBase::element() const
 {
-    return m_element;
+    return m_element.get();
 }
 
 unsigned TrackListBase::length() const
@@ -92,9 +95,9 @@ bool TrackListBase::contains(TrackBase& track) const
     return m_inbandTracks.find(&track) != notFound;
 }
 
-void TrackListBase::scheduleTrackEvent(const AtomicString& eventName, Ref<TrackBase>&& track)
+void TrackListBase::scheduleTrackEvent(const AtomString& eventName, Ref<TrackBase>&& track)
 {
-    m_asyncEventQueue.enqueueEvent(TrackEvent::create(eventName, false, false, WTFMove(track)));
+    m_asyncEventQueue->enqueueEvent(TrackEvent::create(eventName, Event::CanBubble::No, Event::IsCancelable::No, WTFMove(track)));
 }
 
 void TrackListBase::scheduleAddTrackEvent(Ref<TrackBase>&& track)
@@ -157,12 +160,12 @@ void TrackListBase::scheduleChangeEvent()
     // Whenever a track in a VideoTrackList that was previously not selected is
     // selected, the user agent must queue a task to fire a simple event named
     // change at the VideoTrackList object.
-    m_asyncEventQueue.enqueueEvent(Event::create(eventNames().changeEvent, false, false));
+    m_asyncEventQueue->enqueueEvent(Event::create(eventNames().changeEvent, Event::CanBubble::No, Event::IsCancelable::No));
 }
 
 bool TrackListBase::isChangeEventScheduled() const
 {
-    return m_asyncEventQueue.hasPendingEventsOfType(eventNames().changeEvent);
+    return m_asyncEventQueue->hasPendingEventsOfType(eventNames().changeEvent);
 }
 
 bool TrackListBase::isAnyTrackEnabled() const
@@ -173,5 +176,12 @@ bool TrackListBase::isAnyTrackEnabled() const
     }
     return false;
 }
+
+bool TrackListBase::virtualHasPendingActivity() const
+{
+    return m_asyncEventQueue->hasPendingActivity();
+}
+
+} // namespace WebCore
 
 #endif

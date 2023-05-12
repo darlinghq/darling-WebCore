@@ -33,12 +33,12 @@
 #include "LayerPool.h"
 #include "Logging.h"
 #include "PlatformCALayer.h"
-#include "TextStream.h"
 #include "TileController.h"
 #include <wtf/MainThread.h>
 #include <wtf/text/CString.h>
+#include <wtf/text/TextStream.h>
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 #include "TileControllerMemoryHandlerIOS.h"
 #endif
 
@@ -368,7 +368,7 @@ void TileGrid::revalidateTiles(TileValidationPolicy validationPolicy)
     Seconds minimumRevalidationTimerDuration = Seconds::infinity();
     bool needsTileRevalidation = false;
     
-    auto tileSize = m_controller.tileSize();
+    auto tileSize = m_controller.computeTileSize();
     if (tileSize != m_tileSize) {
         removeAllTiles();
         m_tileSize = tileSize;
@@ -402,9 +402,9 @@ void TileGrid::revalidateTiles(TileValidationPolicy validationPolicy)
                 for (auto& cohort : m_cohortList) {
                     if (cohort.cohort != tileInfo.cohort)
                         continue;
-                    double timeUntilCohortExpires = cohort.timeUntilExpiration();
-                    if (timeUntilCohortExpires > 0) {
-                        minimumRevalidationTimerDuration = std::min(minimumRevalidationTimerDuration, Seconds { timeUntilCohortExpires });
+                    Seconds timeUntilCohortExpires = cohort.timeUntilExpiration();
+                    if (timeUntilCohortExpires > 0_s) {
+                        minimumRevalidationTimerDuration = std::min(minimumRevalidationTimerDuration, timeUntilCohortExpires);
                         needsTileRevalidation = true;
                     } else
                         tileLayer->removeFromSuperlayer();
@@ -504,8 +504,8 @@ TileGrid::TileCohort TileGrid::nextTileCohort() const
 
 void TileGrid::startedNewCohort(TileCohort cohort)
 {
-    m_cohortList.append(TileCohortInfo(cohort, monotonicallyIncreasingTime()));
-#if PLATFORM(IOS)
+    m_cohortList.append(TileCohortInfo(cohort, MonotonicTime::now()));
+#if PLATFORM(IOS_FAMILY)
     if (!m_controller.isInWindow())
         tileControllerMemoryHandler().tileControllerGainedUnparentedTiles(&m_controller);
 #endif
@@ -530,10 +530,10 @@ void TileGrid::scheduleCohortRemoval()
         m_cohortRemovalTimer.startRepeating(cohortRemovalTimerSeconds);
 }
 
-double TileGrid::TileCohortInfo::timeUntilExpiration()
+Seconds TileGrid::TileCohortInfo::timeUntilExpiration()
 {
-    double cohortLifeTimeSeconds = 2;
-    double timeThreshold = monotonicallyIncreasingTime() - cohortLifeTimeSeconds;
+    Seconds cohortLifeTimeSeconds = 2_s;
+    MonotonicTime timeThreshold = MonotonicTime::now() - cohortLifeTimeSeconds;
     return creationTime - timeThreshold;
 }
 
@@ -544,7 +544,7 @@ void TileGrid::cohortRemovalTimerFired()
         return;
     }
 
-    while (!m_cohortList.isEmpty() && m_cohortList.first().timeUntilExpiration() < 0) {
+    while (!m_cohortList.isEmpty() && m_cohortList.first().timeUntilExpiration() < 0_s) {
         TileCohortInfo firstCohort = m_cohortList.takeFirst();
         removeTilesInCohort(firstCohort.cohort);
     }
@@ -556,8 +556,6 @@ IntRect TileGrid::ensureTilesForRect(const FloatRect& rect, CoverageType newTile
 {
     if (!m_controller.isInWindow())
         return IntRect();
-
-    LOG_WITH_STREAM(Tiling, stream << "TileGrid " << this << " ensureTilesForRect: " << rect);
 
     FloatRect scaledRect(rect);
     scaledRect.scale(m_scale);
@@ -608,9 +606,11 @@ IntRect TileGrid::ensureTilesForRect(const FloatRect& rect, CoverageType newTile
                 m_containerLayer.get().appendSublayer(*tileInfo.layer);
         }
     }
-    
+
     if (tilesInCohort)
         startedNewCohort(currCohort);
+
+    LOG_WITH_STREAM(Tiling, stream << "TileGrid " << this << " (bounds " << m_controller.bounds() << ") ensureTilesForRect: " << rect << " covered " << coverageRect);
 
     return coverageRect;
 }
@@ -714,7 +714,7 @@ void TileGrid::drawTileMapContents(CGContextRef context, CGRect layerBounds) con
 
 void TileGrid::platformCALayerPaintContents(PlatformCALayer* platformCALayer, GraphicsContext& context, const FloatRect&, GraphicsLayerPaintBehavior layerPaintBehavior)
 {
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     if (pthread_main_np())
         WebThreadLock();
 #endif
@@ -729,15 +729,15 @@ void TileGrid::platformCALayerPaintContents(PlatformCALayer* platformCALayer, Gr
         context.translate(-layerOrigin.x(), -layerOrigin.y());
         context.scale(m_scale);
 
-        PlatformCALayer::RepaintRectList dirtyRects = PlatformCALayer::collectRectsToPaint(context.platformContext(), platformCALayer);
-        PlatformCALayer::drawLayerContents(context.platformContext(), &m_controller.rootLayer(), dirtyRects, layerPaintBehavior);
+        PlatformCALayer::RepaintRectList dirtyRects = PlatformCALayer::collectRectsToPaint(context, platformCALayer);
+        PlatformCALayer::drawLayerContents(context, &m_controller.rootLayer(), dirtyRects, layerPaintBehavior);
     }
 
     int repaintCount = platformCALayerIncrementRepaintCount(platformCALayer);
     if (m_controller.rootLayer().owner()->platformCALayerShowRepaintCounter(0))
-        PlatformCALayer::drawRepaintIndicator(context.platformContext(), platformCALayer, repaintCount, cachedCGColor(m_controller.tileDebugBorderColor()));
+        PlatformCALayer::drawRepaintIndicator(context, platformCALayer, repaintCount, m_controller.tileDebugBorderColor());
 
-    if (m_controller.scrollingPerformanceLoggingEnabled()) {
+    if (m_controller.scrollingPerformanceTestingEnabled()) {
         FloatRect visiblePart(platformCALayer->position().x(), platformCALayer->position().y(), platformCALayer->bounds().size().width(), platformCALayer->bounds().size().height());
         visiblePart.intersect(m_controller.visibleRect());
 
@@ -748,22 +748,30 @@ void TileGrid::platformCALayerPaintContents(PlatformCALayer* platformCALayer, Gr
 
 float TileGrid::platformCALayerDeviceScaleFactor() const
 {
-    return m_controller.rootLayer().owner()->platformCALayerDeviceScaleFactor();
+    if (auto* layerOwner = m_controller.rootLayer().owner())
+        return layerOwner->platformCALayerDeviceScaleFactor();
+    return 1.0f;
 }
 
 bool TileGrid::platformCALayerShowDebugBorders() const
 {
-    return m_controller.rootLayer().owner()->platformCALayerShowDebugBorders();
+    if (auto* layerOwner = m_controller.rootLayer().owner())
+        return layerOwner->platformCALayerShowDebugBorders();
+    return false;
 }
 
 bool TileGrid::platformCALayerShowRepaintCounter(PlatformCALayer*) const
 {
-    return m_controller.rootLayer().owner()->platformCALayerShowRepaintCounter(nullptr);
+    if (auto* layerOwner = m_controller.rootLayer().owner())
+        return layerOwner->platformCALayerShowRepaintCounter(nullptr);
+    return false;
 }
 
 bool TileGrid::isUsingDisplayListDrawing(PlatformCALayer*) const
 {
-    return m_controller.rootLayer().owner()->isUsingDisplayListDrawing(nullptr);
+    if (auto* layerOwner = m_controller.rootLayer().owner())
+        return layerOwner->isUsingDisplayListDrawing(nullptr);
+    return false;
 }
 
 bool TileGrid::platformCALayerContentsOpaque() const
@@ -789,7 +797,7 @@ int TileGrid::platformCALayerIncrementRepaintCount(PlatformCALayer* platformCALa
     return repaintCount;
 }
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 void TileGrid::removeUnparentedTilesNow()
 {
     while (!m_cohortList.isEmpty()) {

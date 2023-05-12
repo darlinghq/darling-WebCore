@@ -26,23 +26,26 @@
 #import "config.h"
 #import "ImageSourceCG.h"
 
+#import "UTIUtilities.h"
 #import <wtf/RetainPtr.h>
 #import <wtf/text/WTFString.h>
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 #import <MobileCoreServices/MobileCoreServices.h>
 #endif
 
 namespace WebCore {
 
-String MIMETypeForImageSourceType(const String& uti)
+String MIMETypeForImageType(const String& uti)
 {
-    return adoptCF(UTTypeCopyPreferredTagWithClass(uti.createCFString().get(), kUTTagClassMIMEType)).get();
+    return MIMETypeFromUTI(uti);
 }
 
-String preferredExtensionForImageSourceType(const String& uti)
+String preferredExtensionForImageType(const String& uti)
 {
+ALLOW_DEPRECATED_DECLARATIONS_BEGIN
     return adoptCF(UTTypeCopyPreferredTagWithClass(uti.createCFString().get(), kUTTagClassFilenameExtension)).get();
+ALLOW_DEPRECATED_DECLARATIONS_END
 }
 
 } // namespace WebCore

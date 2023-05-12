@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011 Apple Inc. All rights reserved.
+ * Copyright (C) 2011-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,8 +26,15 @@
 #pragma once
 
 #include <wtf/OptionSet.h>
+#include <wtf/WallTime.h>
 
 namespace WebCore {
+
+enum class EventHandling : uint8_t {
+    DispatchedToDOM     = 1 << 0,
+    DefaultPrevented    = 1 << 1,
+    DefaultHandled      = 1 << 2,
+};
 
 class PlatformEvent {
 public:
@@ -69,68 +76,83 @@ public:
 #endif
     };
 
-    enum class Modifier {
+    enum class Modifier : uint8_t {
         AltKey      = 1 << 0,
-        CtrlKey     = 1 << 1,
+        ControlKey  = 1 << 1,
         MetaKey     = 1 << 2,
         ShiftKey    = 1 << 3,
         CapsLockKey = 1 << 4,
+
+        // Never used in native platforms but added for initEvent
+        AltGraphKey = 1 << 5,
     };
 
     Type type() const { return static_cast<Type>(m_type); }
 
     bool shiftKey() const { return m_modifiers.contains(Modifier::ShiftKey); }
-    bool ctrlKey() const { return m_modifiers.contains(Modifier::CtrlKey); }
+    bool controlKey() const { return m_modifiers.contains(Modifier::ControlKey); }
     bool altKey() const { return m_modifiers.contains(Modifier::AltKey); }
     bool metaKey() const { return m_modifiers.contains(Modifier::MetaKey); }
 
     OptionSet<Modifier> modifiers() const { return m_modifiers; }
 
-    double timestamp() const { return m_timestamp; }
+    WallTime timestamp() const { return m_timestamp; }
 
 protected:
     PlatformEvent()
         : m_type(NoType)
-        , m_timestamp(0)
     {
     }
 
     explicit PlatformEvent(Type type)
         : m_type(type)
-        , m_timestamp(0)
     {
     }
 
-    PlatformEvent(Type type, OptionSet<Modifier> modifiers, double timestamp)
-        : m_type(type)
+    PlatformEvent(Type type, OptionSet<Modifier> modifiers, WallTime timestamp)
+        : m_timestamp(timestamp)
+        , m_type(type)
         , m_modifiers(modifiers)
-        , m_timestamp(timestamp)
     {
     }
 
-    PlatformEvent(Type type, bool shiftKey, bool ctrlKey, bool altKey, bool metaKey, double timestamp)
-        : m_type(type)
-        , m_timestamp(timestamp)
+    PlatformEvent(Type type, bool shiftKey, bool ctrlKey, bool altKey, bool metaKey, WallTime timestamp)
+        : m_timestamp(timestamp)
+        , m_type(type)
     {
         if (shiftKey)
-            m_modifiers |= Modifier::ShiftKey;
+            m_modifiers.add(Modifier::ShiftKey);
         if (ctrlKey)
-            m_modifiers |= Modifier::CtrlKey;
+            m_modifiers.add(Modifier::ControlKey);
         if (altKey)
-            m_modifiers |= Modifier::AltKey;
+            m_modifiers.add(Modifier::AltKey);
         if (metaKey)
-            m_modifiers |= Modifier::MetaKey;
+            m_modifiers.add(Modifier::MetaKey);
     }
 
     // Explicit protected destructor so that people don't accidentally
     // delete a PlatformEvent.
-    ~PlatformEvent()
-    {
-    }
+    ~PlatformEvent() = default;
 
+    WallTime m_timestamp;
     unsigned m_type;
     OptionSet<Modifier> m_modifiers;
-    double m_timestamp;
 };
 
 } // namespace WebCore
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::PlatformEvent::Modifier> {
+    using values = EnumValues<
+        WebCore::PlatformEvent::Modifier,
+        WebCore::PlatformEvent::Modifier::AltKey,
+        WebCore::PlatformEvent::Modifier::ControlKey,
+        WebCore::PlatformEvent::Modifier::MetaKey,
+        WebCore::PlatformEvent::Modifier::ShiftKey,
+        WebCore::PlatformEvent::Modifier::CapsLockKey,
+        WebCore::PlatformEvent::Modifier::AltGraphKey
+    >;
+};
+
+} // namespace WTF

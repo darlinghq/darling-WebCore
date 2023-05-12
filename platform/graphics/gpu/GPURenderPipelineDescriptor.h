@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -10,63 +10,61 @@
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY APPLE INC. ``AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL APPLE INC. OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+ * THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
+ * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #pragma once
 
 #if ENABLE(WEBGPU)
 
-#include "GPUEnums.h"
-#include <wtf/RefCounted.h>
-#include <wtf/RefPtr.h>
-#include <wtf/RetainPtr.h>
+#include "GPUColorStateDescriptor.h"
+#include "GPUDepthStencilStateDescriptor.h"
+#include "GPUPipelineDescriptorBase.h"
+#include "GPUProgrammableStageDescriptor.h"
+#include "GPUVertexInputDescriptor.h"
+#include <wtf/Optional.h>
 #include <wtf/Vector.h>
-
-#if PLATFORM(COCOA)
-OBJC_CLASS MTLRenderPipelineDescriptor;
-#endif
 
 namespace WebCore {
 
-class GPUFunction;
-class GPURenderPipelineColorAttachmentDescriptor;
-
-class GPURenderPipelineDescriptor : public RefCounted<GPURenderPipelineDescriptor> {
-public:
-    static RefPtr<GPURenderPipelineDescriptor> create();
-    WEBCORE_EXPORT ~GPURenderPipelineDescriptor();
-
-    WEBCORE_EXPORT void setVertexFunction(RefPtr<GPUFunction>);
-    WEBCORE_EXPORT void setFragmentFunction(RefPtr<GPUFunction>);
-
-    WEBCORE_EXPORT unsigned long depthAttachmentPixelFormat() const;
-    WEBCORE_EXPORT void setDepthAttachmentPixelFormat(unsigned long);
-
-    WEBCORE_EXPORT Vector<RefPtr<GPURenderPipelineColorAttachmentDescriptor>> colorAttachments();
-
-    WEBCORE_EXPORT void reset();
-
-#if PLATFORM(COCOA)
-    WEBCORE_EXPORT MTLRenderPipelineDescriptor *platformRenderPipelineDescriptor();
-#endif
-
-private:
-    GPURenderPipelineDescriptor();
-#if PLATFORM(COCOA)
-    RetainPtr<MTLRenderPipelineDescriptor> m_renderPipelineDescriptor;
-#endif
+enum class GPUPrimitiveTopology {
+    PointList,
+    LineList,
+    LineStrip,
+    TriangleList,
+    TriangleStrip
 };
-    
+
+struct GPURenderPipelineDescriptorBase {
+    GPUPrimitiveTopology primitiveTopology;
+    Vector<GPUColorStateDescriptor> colorStates;
+    Optional<GPUDepthStencilStateDescriptor> depthStencilState;
+    GPUVertexInputDescriptor vertexInput;
+};
+
+struct GPURenderPipelineDescriptor : GPUPipelineDescriptorBase, GPURenderPipelineDescriptorBase {
+    GPURenderPipelineDescriptor(RefPtr<GPUPipelineLayout>&& layout, GPUProgrammableStageDescriptor&& vertex, Optional<GPUProgrammableStageDescriptor>&& fragment, const GPURenderPipelineDescriptorBase& base)
+        : GPUPipelineDescriptorBase { WTFMove(layout) }
+        , GPURenderPipelineDescriptorBase(base)
+        , vertexStage(WTFMove(vertex))
+        , fragmentStage(WTFMove(fragment))
+    {
+    }
+
+    GPUProgrammableStageDescriptor vertexStage;
+    Optional<GPUProgrammableStageDescriptor> fragmentStage;
+};
+
 } // namespace WebCore
-#endif
+
+#endif // ENABLE(WEBGPU)

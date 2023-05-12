@@ -23,10 +23,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#include "config.h"
-#include "HistoryItem.h"
+#import "config.h"
+#import "HistoryItem.h"
 
-#include <wtf/text/StringHash.h>
+#import <wtf/text/StringHash.h>
 
 namespace WebCore {
 
@@ -40,28 +40,6 @@ void HistoryItem::setViewState(id statePList)
     id newState = [statePList copy];
     m_viewState = newState;
     [newState release];
-}
-
-id HistoryItem::getTransientProperty(const String& key) const
-{
-    if (!m_transientProperties)
-        return nil;
-    return m_transientProperties->get(key).get();
-}
-
-void HistoryItem::setTransientProperty(const String& key, id value)
-{
-    if (!value) {
-        if (m_transientProperties) {
-            m_transientProperties->remove(key);
-            if (m_transientProperties->isEmpty())
-                m_transientProperties = nullptr;
-        }
-    } else {
-        if (!m_transientProperties)
-            m_transientProperties = std::make_unique<HashMap<String, RetainPtr<id>>>();
-        m_transientProperties->set(key, value);
-    }
 }
 
 } // namespace WebCore

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008 Apple Inc. All Rights Reserved.
+ * Copyright (C) 2008-2020 Apple Inc. All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,28 +26,77 @@
 
 #pragma once
 
-#include "ResourceHandleTypes.h"
+#include "HTTPHeaderNames.h"
+#include "ReferrerPolicy.h"
+#include "StoredCredentialsPolicy.h"
+#include <wtf/Expected.h>
 #include <wtf/Forward.h>
+#include <wtf/OptionSet.h>
 
 namespace WebCore {
 
+class CachedResourceRequest;
+class Document;
 class HTTPHeaderMap;
-enum class HTTPHeaderName;
+class ResourceError;
 class ResourceRequest;
 class ResourceResponse;
 class SecurityOrigin;
-class URL;
 
-bool isSimpleCrossOriginAccessRequest(const String& method, const HTTPHeaderMap&);
-bool isOnAccessControlSimpleRequestMethodWhitelist(const String&);
-bool isOnAccessControlResponseHeaderWhitelist(const String&);
+struct ResourceLoaderOptions;
 
-void updateRequestForAccessControl(ResourceRequest&, SecurityOrigin&, StoredCredentials);
-ResourceRequest createAccessControlPreflightRequest(const ResourceRequest&, SecurityOrigin&, const String&);
+WEBCORE_EXPORT bool isSimpleCrossOriginAccessRequest(const String& method, const HTTPHeaderMap&);
+bool isOnAccessControlSimpleRequestMethodAllowlist(const String&);
 
-bool isValidCrossOriginRedirectionURL(const URL&);
-void cleanRedirectedRequestForAccessControl(ResourceRequest&);
+void updateRequestReferrer(ResourceRequest&, ReferrerPolicy, const String&);
+    
+WEBCORE_EXPORT void updateRequestForAccessControl(ResourceRequest&, SecurityOrigin&, StoredCredentialsPolicy);
 
-bool passesAccessControlCheck(const ResourceResponse&, StoredCredentials, SecurityOrigin&, String& errorDescription);
+WEBCORE_EXPORT ResourceRequest createAccessControlPreflightRequest(const ResourceRequest&, SecurityOrigin&, const String&);
+enum class SameOriginFlag { No, Yes };
+CachedResourceRequest createPotentialAccessControlRequest(ResourceRequest&&, ResourceLoaderOptions&&, Document&, const String& crossOriginAttribute, SameOriginFlag = SameOriginFlag::No);
+
+enum class HTTPHeadersToKeepFromCleaning : uint8_t {
+    ContentType = 1 << 0,
+    Referer = 1 << 1,
+    Origin = 1 << 2,
+    UserAgent = 1 << 3,
+    AcceptEncoding = 1 << 4
+};
+
+OptionSet<HTTPHeadersToKeepFromCleaning> httpHeadersToKeepFromCleaning(const HTTPHeaderMap&);
+WEBCORE_EXPORT void cleanHTTPRequestHeadersForAccessControl(ResourceRequest&, OptionSet<HTTPHeadersToKeepFromCleaning>);
+
+class WEBCORE_EXPORT CrossOriginAccessControlCheckDisabler {
+public:
+    static CrossOriginAccessControlCheckDisabler& singleton();
+    virtual ~CrossOriginAccessControlCheckDisabler() = default;
+    void setCrossOriginAccessControlCheckEnabled(bool);
+    virtual bool crossOriginAccessControlCheckEnabled() const;
+private:
+    bool m_accessControlCheckEnabled { true };
+};
+
+WEBCORE_EXPORT Expected<void, String> passesAccessControlCheck(const ResourceResponse&, StoredCredentialsPolicy, const SecurityOrigin&, const CrossOriginAccessControlCheckDisabler*);
+WEBCORE_EXPORT Expected<void, String> validatePreflightResponse(const ResourceRequest&, const ResourceResponse&, StoredCredentialsPolicy, const SecurityOrigin&, const CrossOriginAccessControlCheckDisabler*);
+
+WEBCORE_EXPORT Optional<ResourceError> validateCrossOriginResourcePolicy(const SecurityOrigin&, const URL&, const ResourceResponse&);
+Optional<ResourceError> validateRangeRequestedFlag(const ResourceRequest&, const ResourceResponse&);
+String validateCrossOriginRedirectionURL(const URL&);
 
 } // namespace WebCore
+
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::HTTPHeadersToKeepFromCleaning> {
+    using values = EnumValues<
+        WebCore::HTTPHeadersToKeepFromCleaning,
+        WebCore::HTTPHeadersToKeepFromCleaning::ContentType,
+        WebCore::HTTPHeadersToKeepFromCleaning::Referer,
+        WebCore::HTTPHeadersToKeepFromCleaning::Origin,
+        WebCore::HTTPHeadersToKeepFromCleaning::UserAgent,
+        WebCore::HTTPHeadersToKeepFromCleaning::AcceptEncoding
+    >;
+};
+
+} // namespace WTF

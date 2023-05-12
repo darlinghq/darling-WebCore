@@ -35,15 +35,18 @@
 #include "FrameSelection.h"
 #include "HTMLDivElement.h"
 #include "Page.h"
-#include "Range.h"
 #include "RenderBlockFlow.h"
 #include "RenderStyle.h"
 #include "RenderTheme.h"
 #include "ShadowRoot.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
+WTF_MAKE_ISO_ALLOCATED_IMPL(ImageControlsButtonElementMac);
+
 class RenderImageControlsButton final : public RenderBlockFlow {
+    WTF_MAKE_ISO_ALLOCATED_INLINE(RenderImageControlsButton);
 public:
     RenderImageControlsButton(HTMLElement&, RenderStyle&&);
     virtual ~RenderImageControlsButton();
@@ -60,9 +63,7 @@ RenderImageControlsButton::RenderImageControlsButton(HTMLElement& element, Rende
 {
 }
 
-RenderImageControlsButton::~RenderImageControlsButton()
-{
-}
+RenderImageControlsButton::~RenderImageControlsButton() = default;
 
 void RenderImageControlsButton::updateLogicalWidth()
 {
@@ -85,23 +86,23 @@ ImageControlsButtonElementMac::ImageControlsButtonElementMac(Document& document)
 {
 }
 
-ImageControlsButtonElementMac::~ImageControlsButtonElementMac()
-{
-}
+ImageControlsButtonElementMac::~ImageControlsButtonElementMac() = default;
 
 RefPtr<ImageControlsButtonElementMac> ImageControlsButtonElementMac::tryCreate(Document& document)
 {
     if (!document.page())
         return nullptr;
 
+    static MainThreadNeverDestroyed<const AtomString> xWebkitImageControlsButtonName("x-webkit-image-controls-button", AtomString::ConstructFromLiteral);
+
     auto button = adoptRef(*new ImageControlsButtonElementMac(document));
-    button->setAttributeWithoutSynchronization(HTMLNames::classAttr, AtomicString("x-webkit-image-controls-button", AtomicString::ConstructFromLiteral));
+    button->setAttributeWithoutSynchronization(HTMLNames::classAttr, xWebkitImageControlsButtonName);
 
     IntSize positionOffset = RenderTheme::singleton().imageControlsButtonPositionOffset();
-    button->setInlineStyleProperty(CSSPropertyTop, positionOffset.height(), CSSPrimitiveValue::CSS_PX);
+    button->setInlineStyleProperty(CSSPropertyTop, positionOffset.height(), CSSUnitType::CSS_PX);
 
     // FIXME: Why is right: 0px off the right edge of the parent?
-    button->setInlineStyleProperty(CSSPropertyRight, positionOffset.width(), CSSPrimitiveValue::CSS_PX);
+    button->setInlineStyleProperty(CSSPropertyRight, positionOffset.width(), CSSUnitType::CSS_PX);
 
     return WTFMove(button);
 }
@@ -109,7 +110,7 @@ RefPtr<ImageControlsButtonElementMac> ImageControlsButtonElementMac::tryCreate(D
 void ImageControlsButtonElementMac::defaultEventHandler(Event& event)
 {
     if (event.type() == eventNames().clickEvent) {
-        Frame* frame = document().frame();
+        RefPtr<Frame> frame = document().frame();
         if (!frame)
             return;
 

@@ -25,14 +25,24 @@
 #pragma once
 
 #include "Color.h"
-#include "DataRef.h"
 #include "Length.h"
+#include "RenderStyleConstants.h"
 #include "StyleCustomPropertyData.h"
+#include "TabSize.h"
+#include "TextDecorationThickness.h"
+#include "TextUnderlineOffset.h"
+#include "TouchAction.h"
+#include <wtf/DataRef.h>
+#include <wtf/OptionSet.h>
 #include <wtf/RefCounted.h>
-#include <wtf/text/AtomicString.h>
+#include <wtf/text/AtomString.h>
 
 #if ENABLE(TEXT_AUTOSIZING)
 #include "TextSizeAdjustment.h"
+#endif
+
+#if ENABLE(DARK_MODE_CSS)
+#include "StyleColorScheme.h"
 #endif
 
 namespace WebCore {
@@ -40,12 +50,15 @@ namespace WebCore {
 class CursorList;
 class QuotesData;
 class ShadowData;
+class StyleFilterData;
 class StyleImage;
 
 // This struct is for rarely used inherited CSS3, CSS2, and WebKit-specific properties.
 // By grouping them together, we save space, and only allocate this object when someone
 // actually uses one of these properties.
+DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(StyleRareInheritedData);
 class StyleRareInheritedData : public RefCounted<StyleRareInheritedData> {
+    WTF_MAKE_FAST_ALLOCATED_WITH_HEAP_IDENTIFIER(StyleRareInheritedData);
 public:
     static Ref<StyleRareInheritedData> create() { return adoptRef(*new StyleRareInheritedData); }
     Ref<StyleRareInheritedData> copy() const;
@@ -57,7 +70,10 @@ public:
         return !(*this == o);
     }
 
+    bool hasColorFilters() const;
+
     RefPtr<StyleImage> listStyleImage;
+    AtomString listStyleStringValue;
 
     Color textStrokeColor;
     float textStrokeWidth;
@@ -66,13 +82,19 @@ public:
     
     Color visitedLinkTextStrokeColor;
     Color visitedLinkTextFillColor;
-    Color visitedLinkTextEmphasisColor;    
+    Color visitedLinkTextEmphasisColor;
+
+    Color caretColor;
+    Color visitedLinkCaretColor;
 
     std::unique_ptr<ShadowData> textShadow; // Our text shadow information for shadowed text drawing.
     
     RefPtr<CursorList> cursorData;
     Length indent;
     float effectiveZoom;
+
+    TextUnderlineOffset textUnderlineOffset;
+    TextDecorationThickness textDecorationThickness;
     
     Length wordSpacing;
 
@@ -84,15 +106,15 @@ public:
     unsigned hasAutoWidows : 1;
     unsigned hasAutoOrphans : 1;
     
-    unsigned textSecurity : 2; // ETextSecurity
-    unsigned userModify : 2; // EUserModify (editing)
-    unsigned wordBreak : 2; // EWordBreak
-    unsigned overflowWrap : 1; // EOverflowWrap
-    unsigned nbspMode : 1; // ENBSPMode
+    unsigned textSecurity : 2; // TextSecurity
+    unsigned userModify : 2; // UserModify (editing)
+    unsigned wordBreak : 2; // WordBreak
+    unsigned overflowWrap : 1; // OverflowWrap
+    unsigned nbspMode : 1; // NBSPMode
     unsigned lineBreak : 3; // LineBreak
-    unsigned userSelect : 2; // EUserSelect
+    unsigned userSelect : 2; // UserSelect
     unsigned colorSpace : 1; // ColorSpace
-    unsigned speak : 3; // ESpeak
+    unsigned speakAs : 4; // ESpeakAs
     unsigned hyphens : 2; // Hyphens
     unsigned textEmphasisFill : 1; // TextEmphasisFill
     unsigned textEmphasisMark : 3; // TextEmphasisMark
@@ -102,15 +124,13 @@ public:
     unsigned textIndentLine : 1; // TextIndentLine
     unsigned textIndentType : 1; // TextIndentType
 #endif
-    unsigned lineBoxContain: 7; // LineBoxContain
+    unsigned lineBoxContain: 7; // OptionSet<LineBoxContain>
     // CSS Image Values Level 3
-#if ENABLE(CSS_IMAGE_ORIENTATION)
-    unsigned imageOrientation : 4; // ImageOrientationEnum
-#endif
-    unsigned imageRendering : 3; // EImageRendering
+    unsigned imageOrientation : 1; // ImageOrientation
+    unsigned imageRendering : 3; // ImageRendering
     unsigned lineSnap : 2; // LineSnap
     unsigned lineAlign : 1; // LineAlign
-#if ENABLE(ACCELERATED_OVERFLOW_SCROLLING)
+#if ENABLE(OVERFLOW_SCROLLING_TOUCH)
     unsigned useTouchOverflowScrolling: 1;
 #endif
 #if ENABLE(CSS_IMAGE_RESOLUTION)
@@ -122,16 +142,12 @@ public:
     unsigned textJustify : 2; // TextJustify
 #endif
     unsigned textDecorationSkip : 5; // TextDecorationSkip
-    unsigned textUnderlinePosition : 3; // TextUnderlinePosition
+    unsigned textUnderlinePosition : 2; // TextUnderlinePosition
     unsigned rubyPosition : 2; // RubyPosition
     unsigned textZoom: 1; // TextZoom
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     unsigned touchCalloutEnabled : 1;
-#endif
-
-#if ENABLE(CSS_TRAILING_WORD)
-    unsigned trailingWord : 1;
 #endif
 
     unsigned hangingPunctuation : 4;
@@ -141,21 +157,28 @@ public:
     unsigned joinStyle : 2; // LineJoin
     unsigned hasSetStrokeWidth : 1;
     unsigned hasSetStrokeColor : 1;
+
+    unsigned mathStyle : 1;
+
+    OptionSet<TouchAction> effectiveTouchActions;
+    OptionSet<EventListenerRegionType> eventListenerRegionTypes;
+
     Length strokeWidth;
     Color strokeColor;
     Color visitedLinkStrokeColor;
     float miterLimit;
 
-    AtomicString hyphenationString;
+    AtomString hyphenationString;
     short hyphenationLimitBefore;
     short hyphenationLimitAfter;
     short hyphenationLimitLines;
 
-    AtomicString textEmphasisCustomMark;
+    AtomString textEmphasisCustomMark;
     RefPtr<QuotesData> quotes;
+    DataRef<StyleFilterData> appleColorFilter;
 
-    AtomicString lineGrid;
-    unsigned tabSize;
+    AtomString lineGrid;
+    TabSize tabSize;
 
 #if ENABLE(TEXT_AUTOSIZING)
     TextSizeAdjustment textSizeAdjust;
@@ -167,6 +190,10 @@ public:
 
 #if ENABLE(TOUCH_EVENTS)
     Color tapHighlightColor;
+#endif
+
+#if ENABLE(DARK_MODE_CSS)
+    StyleColorScheme colorScheme;
 #endif
 
 private:

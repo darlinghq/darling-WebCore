@@ -26,32 +26,19 @@ namespace WebCore {
 
 class CSSInitialValue final : public CSSValue {
 public:
-    static Ref<CSSInitialValue> createExplicit()
-    {
-        return adoptRef(*new CSSInitialValue(/* implicit */ false));
-    }
-    static Ref<CSSInitialValue> createImplicit()
-    {
-        return adoptRef(*new CSSInitialValue(/* implicit */ true));
-    }
-
     String customCSSText() const;
 
     bool isImplicit() const { return m_isImplicit; }
 
     bool equals(const CSSInitialValue&) const { return true; }
 
-#if COMPILER(MSVC)
-    // FIXME: This should be private, but for some reason MSVC then fails to invoke it from LazyNeverDestroyed::construct.
-public:
-#else
 private:
-    friend class LazyNeverDestroyed<CSSInitialValue>;
-#endif
-    CSSInitialValue(bool implicit)
+    friend LazyNeverDestroyed<CSSInitialValue>;
+    CSSInitialValue(StaticCSSValueTag, bool implicit)
         : CSSValue(InitialClass)
         , m_isImplicit(implicit)
     {
+        makeStatic();
     }
 
 private:

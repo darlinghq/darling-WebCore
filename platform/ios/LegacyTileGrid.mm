@@ -23,21 +23,21 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "LegacyTileGrid.h"
+#import "config.h"
+#import "LegacyTileGrid.h"
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 
-#include "CoreGraphicsSPI.h"
-#include "LegacyTileGridTile.h"
-#include "LegacyTileLayer.h"
-#include "LegacyTileLayerPool.h"
-#include "QuartzCoreSPI.h"
-#include "SystemMemory.h"
-#include "WAKWindow.h"
-#include <algorithm>
-#include <functional>
-#include <wtf/MemoryPressureHandler.h>
+#import "LegacyTileGridTile.h"
+#import "LegacyTileLayer.h"
+#import "LegacyTileLayerPool.h"
+#import "SystemMemory.h"
+#import "WAKWindow.h"
+#import <algorithm>
+#import <functional>
+#import <pal/spi/cg/CoreGraphicsSPI.h>
+#import <pal/spi/cocoa/QuartzCoreSPI.h>
+#import <wtf/MemoryPressureHandler.h>
 
 namespace WebCore {
 
@@ -130,11 +130,13 @@ bool LegacyTileGrid::dropDistantTiles(unsigned tilesNeeded, double shortestDista
         if (distance <= shortestDistance)
             continue;
         toRemove.append(std::make_pair(distance, index));
-        std::push_heap(toRemove.begin(), toRemove.end(), std::ptr_fun(isFartherAway<TileIndex>));
+        ALLOW_DEPRECATED_DECLARATIONS_BEGIN
+        std::push_heap(toRemove.begin(), toRemove.end(), isFartherAway<TileIndex>);
         if (toRemove.size() > tilesToRemoveCount) {
-            std::pop_heap(toRemove.begin(), toRemove.end(), std::ptr_fun(isFartherAway<TileIndex>));
+            std::pop_heap(toRemove.begin(), toRemove.end(), isFartherAway<TileIndex>);
             toRemove.removeLast();
         }
+        ALLOW_DEPRECATED_DECLARATIONS_END
     }
     size_t removeCount = toRemove.size();
     for (size_t n = 0; n < removeCount; ++n)
@@ -563,4 +565,4 @@ void LegacyTileGrid::dumpTiles()
 
 } // namespace WebCore
 
-#endif // PLATFORM(IOS)
+#endif // PLATFORM(IOS_FAMILY)

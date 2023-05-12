@@ -37,6 +37,7 @@ namespace WebCore {
 class Document;
 
 class XMLErrors {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     explicit XMLErrors(Document&);
 
@@ -51,7 +52,7 @@ private:
 
     Document& m_document;
     int m_errorCount { 0 };
-    std::optional<TextPosition> m_lastErrorPosition;
+    Optional<TextPosition> m_lastErrorPosition;
     StringBuilder m_errorMessages;
 };
 

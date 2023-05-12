@@ -24,32 +24,38 @@
 
 #include "CachedImageClient.h"
 #include "CachedResourceHandle.h"
+#include "Element.h"
 #include "Timer.h"
-#include <wtf/text/AtomicString.h>
+#include <wtf/Vector.h>
+#include <wtf/text/AtomString.h>
 
 namespace WebCore {
 
-class Element;
+class DeferredPromise;
+class Document;
 class ImageLoader;
+class Page;
 class RenderImageResource;
 
 template<typename T> class EventSender;
 typedef EventSender<ImageLoader> ImageEventSender;
 
-class ImageLoader : public CachedImageClient {
+enum class RelevantMutation : bool { Yes, No };
+
+class ImageLoader : public CachedImageClient, public CanMakeWeakPtr<ImageLoader> {
     WTF_MAKE_FAST_ALLOCATED;
 public:
     virtual ~ImageLoader();
 
     // This function should be called when the element is attached to a document; starts
     // loading if a load hasn't already been started.
-    void updateFromElement();
+    void updateFromElement(RelevantMutation = RelevantMutation::No);
 
     // This function should be called whenever the 'src' attribute is set, even if its value
     // doesn't change; starts new load unconditionally (matches Firefox and Opera behavior).
-    void updateFromElementIgnoringPreviousError();
+    void updateFromElementIgnoringPreviousError(RelevantMutation = RelevantMutation::No);
 
-    void elementDidMoveToNewDocument();
+    void elementDidMoveToNewDocument(Document&);
 
     Element& element() { return m_element; }
     const Element& element() const { return m_element; }
@@ -58,25 +64,37 @@ public:
 
     CachedImage* image() const { return m_image.get(); }
     void clearImage(); // Cancels pending beforeload and load events, and doesn't dispatch new ones.
+    
+    size_t pendingDecodePromisesCountForTesting() const { return m_decodingPromises.size(); }
+    void decode(Ref<DeferredPromise>&&);
 
     void setLoadManually(bool loadManually) { m_loadManually = loadManually; }
 
-    bool hasPendingBeforeLoadEvent() const { return m_hasPendingBeforeLoadEvent; }
-    bool hasPendingActivity() const { return m_hasPendingLoadEvent || m_hasPendingErrorEvent; }
+    bool hasPendingBeforeLoadEvent() const { return m_pendingBeforeLoadEventCount; }
+    bool hasPendingActivity() const { return m_pendingLoadEventCount || m_pendingErrorEventCount; }
 
     void dispatchPendingEvent(ImageEventSender*);
 
-    static void dispatchPendingBeforeLoadEvents();
-    static void dispatchPendingLoadEvents();
-    static void dispatchPendingErrorEvents();
+    static void dispatchPendingBeforeLoadEvents(Page*);
+    static void dispatchPendingLoadEvents(Page*);
+    static void dispatchPendingErrorEvents(Page*);
+
+    void loadDeferredImage();
+
+    bool isDeferred() const { return m_lazyImageLoadState == LazyImageLoadState::Deferred || m_lazyImageLoadState == LazyImageLoadState::LoadImmediately; }
+
+    Document& document() { return m_element.document(); }
 
 protected:
     explicit ImageLoader(Element&);
-    void notifyFinished(CachedResource&) override;
+    void notifyFinished(CachedResource&, const NetworkLoadMetrics&) override;
 
 private:
+    void resetLazyImageLoading(Document&);
+    enum class LazyImageLoadState : uint8_t { None, Deferred, LoadImmediately, FullImage };
+
     virtual void dispatchLoadEvent() = 0;
-    virtual String sourceURI(const AtomicString&) const = 0;
+    virtual String sourceURI(const AtomString&) const = 0;
 
     void updatedHasPendingEvent();
 
@@ -90,19 +108,26 @@ private:
     void clearImageWithoutConsideringPendingLoadEvent();
     void clearFailedLoadURL();
 
+    bool hasPendingDecodePromises() const { return !m_decodingPromises.isEmpty(); }
+    void resolveDecodePromises();
+    void rejectDecodePromises(const char* message);
+    void decode();
+    
     void timerFired();
 
     Element& m_element;
     CachedResourceHandle<CachedImage> m_image;
     Timer m_derefElementTimer;
     RefPtr<Element> m_protectedElement;
-    AtomicString m_failedLoadURL;
-    bool m_hasPendingBeforeLoadEvent : 1;
-    bool m_hasPendingLoadEvent : 1;
-    bool m_hasPendingErrorEvent : 1;
+    AtomString m_failedLoadURL;
+    Vector<RefPtr<DeferredPromise>> m_decodingPromises;
+    unsigned m_pendingBeforeLoadEventCount { 0 };
+    unsigned m_pendingErrorEventCount { 0 };
+    unsigned m_pendingLoadEventCount { 0 };
     bool m_imageComplete : 1;
     bool m_loadManually : 1;
     bool m_elementIsProtected : 1;
+    LazyImageLoadState m_lazyImageLoadState { LazyImageLoadState::None };
 };
 
 }

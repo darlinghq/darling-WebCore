@@ -25,23 +25,29 @@
 
 #pragma once
 
-#include "SessionID.h"
+#include "WebSocketIdentifier.h"
+#include <pal/SessionID.h>
 #include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
+class Document;
+class ThreadableWebSocketChannel;
+class ScriptExecutionContext;
+class StorageSessionProvider;
 class ScriptExecutionContext;
 class SocketStreamHandle;
 class SocketStreamHandleClient;
-class URL;
+class WebSocketChannelClient;
 
 class WEBCORE_EXPORT SocketProvider : public ThreadSafeRefCounted<SocketProvider> {
 public:
     static Ref<SocketProvider> create() { return adoptRef(*new SocketProvider); }
-#if ENABLE(WEB_SOCKETS)
-    virtual Ref<SocketStreamHandle> createSocketStreamHandle(const URL&, SocketStreamHandleClient&, SessionID, const String& credentialPartition);
-#endif
+    virtual Ref<SocketStreamHandle> createSocketStreamHandle(const URL&, SocketStreamHandleClient&, WebSocketIdentifier, PAL::SessionID, const String& credentialPartition, const StorageSessionProvider*);
+
+    virtual RefPtr<ThreadableWebSocketChannel> createWebSocketChannel(Document&, WebSocketChannelClient&);
+
     virtual ~SocketProvider() { };
 };
 

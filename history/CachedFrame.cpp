@@ -26,26 +26,30 @@
 #include "config.h"
 #include "CachedFrame.h"
 
-#include "CSSAnimationController.h"
+#include "BackForwardCache.h"
 #include "CachedFramePlatformData.h"
 #include "CachedPage.h"
 #include "DOMWindow.h"
 #include "Document.h"
 #include "DocumentLoader.h"
+#include "DocumentTimeline.h"
+#include "Frame.h"
 #include "FrameLoader.h"
 #include "FrameLoaderClient.h"
 #include "FrameView.h"
 #include "Logging.h"
-#include "MainFrame.h"
+#include "NavigationDisabler.h"
 #include "Page.h"
-#include "PageCache.h"
+#include "RenderWidget.h"
 #include "SVGDocumentExtensions.h"
 #include "ScriptController.h"
 #include "SerializedScriptValue.h"
+#include "StyleTreeResolver.h"
+#include "WindowEventLoop.h"
 #include <wtf/RefCountedLeakCounter.h>
 #include <wtf/text/CString.h>
 
-#if PLATFORM(IOS) || ENABLE(TOUCH_EVENTS)
+#if PLATFORM(IOS_FAMILY) || ENABLE(TOUCH_EVENTS)
 #include "Chrome.h"
 #include "ChromeClient.h"
 #endif
@@ -74,13 +78,12 @@ CachedFrameBase::~CachedFrameBase()
 
 void CachedFrameBase::pruneDetachedChildFrames()
 {
-    for (size_t i = m_childFrames.size(); i;) {
-        --i;
-        if (m_childFrames[i]->view()->frame().page())
-            continue;
-        m_childFrames[i]->destroy();
-        m_childFrames.remove(i);
-    }
+    m_childFrames.removeAllMatching([] (auto& childFrame) {
+        if (childFrame->view()->frame().page())
+            return false;
+        childFrame->destroy();
+        return true;
+    });
 }
 
 void CachedFrameBase::restore()
@@ -90,46 +93,50 @@ void CachedFrameBase::restore()
     if (m_isMainFrame)
         m_view->setParentVisible(true);
 
-    Frame& frame = m_view->frame();
-    m_cachedFrameScriptData->restore(frame);
+    auto frame = makeRef(m_view->frame());
+    {
+        Style::PostResolutionCallbackDisabler disabler(*m_document);
+        WidgetHierarchyUpdatesSuspensionScope suspendWidgetHierarchyUpdates;
+        NavigationDisabler disableNavigation { nullptr }; // Disable navigation globally.
 
-    if (m_document->svgExtensions())
-        m_document->accessSVGExtensions().unpauseAnimations();
+        m_cachedFrameScriptData->restore(frame.get());
 
-    frame.animation().resumeAnimationsForDocument(m_document.get());
+        if (m_document->svgExtensions())
+            m_document->accessSVGExtensions().unpauseAnimations();
 
-    m_document->resume(ActiveDOMObject::PageCache);
+        m_document->resume(ReasonForSuspension::BackForwardCache);
 
-    // It is necessary to update any platform script objects after restoring the
-    // cached page.
-    frame.script().updatePlatformScriptObjects();
+        // It is necessary to update any platform script objects after restoring the
+        // cached page.
+        frame->script().updatePlatformScriptObjects();
 
-    frame.loader().client().didRestoreFromPageCache();
+        frame->loader().client().didRestoreFromBackForwardCache();
 
-    pruneDetachedChildFrames();
+        pruneDetachedChildFrames();
 
-    // Reconstruct the FrameTree. And open the child CachedFrames in their respective FrameLoaders.
-    for (auto& childFrame : m_childFrames) {
-        ASSERT(childFrame->view()->frame().page());
-        frame.tree().appendChild(childFrame->view()->frame());
-        childFrame->open();
-        ASSERT_WITH_SECURITY_IMPLICATION(m_document == frame.document());
+        // Reconstruct the FrameTree. And open the child CachedFrames in their respective FrameLoaders.
+        for (auto& childFrame : m_childFrames) {
+            ASSERT(childFrame->view()->frame().page());
+            frame->tree().appendChild(childFrame->view()->frame());
+            childFrame->open();
+            ASSERT_WITH_SECURITY_IMPLICATION(m_document == frame->document());
+        }
     }
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     if (m_isMainFrame) {
-        frame.loader().client().didRestoreFrameHierarchyForCachedFrame();
+        frame->loader().client().didRestoreFrameHierarchyForCachedFrame();
 
         if (DOMWindow* domWindow = m_document->domWindow()) {
             // FIXME: Add SCROLL_LISTENER to the list of event types on Document, and use m_document->hasListenerType(). See <rdar://problem/9615482>.
             // FIXME: Can use Document::hasListenerType() now.
-            if (domWindow->scrollEventListenerCount() && frame.page())
-                frame.page()->chrome().client().setNeedsScrollNotifications(frame, true);
+            if (domWindow->scrollEventListenerCount() && frame->page())
+                frame->page()->chrome().client().setNeedsScrollNotifications(frame, true);
         }
     }
 #endif
 
-    frame.view()->didRestoreFromPageCache();
+    frame->view()->didRestoreFromBackForwardCache();
 }
 
 CachedFrame::CachedFrame(Frame& frame)
@@ -141,44 +148,59 @@ CachedFrame::CachedFrame(Frame& frame)
     ASSERT(m_document);
     ASSERT(m_documentLoader);
     ASSERT(m_view);
-    ASSERT(m_document->pageCacheState() == Document::InPageCache);
+    ASSERT(m_document->backForwardCacheState() == Document::InBackForwardCache);
+
+    RELEASE_ASSERT(m_document->domWindow());
+    RELEASE_ASSERT(m_document->frame());
+    RELEASE_ASSERT(m_document->domWindow()->frame());
+
+    // FIXME: We have evidence that constructing CachedFrames for descendant frames may detach the document from its frame (rdar://problem/49877867).
+    // This sets the flag to help find the guilty code.
+    m_document->setMayBeDetachedFromFrame(false);
 
     // Create the CachedFrames for all Frames in the FrameTree.
     for (Frame* child = frame.tree().firstChild(); child; child = child->tree().nextSibling())
-        m_childFrames.append(std::make_unique<CachedFrame>(*child));
+        m_childFrames.append(makeUniqueRef<CachedFrame>(*child));
+
+    RELEASE_ASSERT(m_document->domWindow());
+    RELEASE_ASSERT(m_document->frame());
+    RELEASE_ASSERT(m_document->domWindow()->frame());
 
     // Active DOM objects must be suspended before we cache the frame script data.
-    m_document->suspend(ActiveDOMObject::PageCache);
+    m_document->suspend(ReasonForSuspension::BackForwardCache);
 
-    m_cachedFrameScriptData = std::make_unique<ScriptCachedFrameData>(frame);
+    m_cachedFrameScriptData = makeUnique<ScriptCachedFrameData>(frame);
 
-    m_document->domWindow()->suspendForDocumentSuspension();
+    m_document->domWindow()->suspendForBackForwardCache();
+
+    // Clear FrameView to reset flags such as 'firstVisuallyNonEmptyLayoutCallbackPending' so that the
+    // 'DidFirstVisuallyNonEmptyLayout' callback gets called against when restoring from the BackForwardCache.
+    m_view->resetLayoutMilestones();
+
+    // The main frame is reused for the navigation and the opener link to its should thus persist.
+    if (!frame.isMainFrame())
+        frame.loader().detachFromAllOpenedFrames();
 
     frame.loader().client().savePlatformDataToCachedFrame(this);
 
-    // documentWillSuspendForPageCache() can set up a layout timer on the FrameView, so clear timers after that.
+    // documentWillSuspendForBackForwardCache() can set up a layout timer on the FrameView, so clear timers after that.
     frame.clearTimers();
 
     // Deconstruct the FrameTree, to restore it later.
     // We do this for two reasons:
     // 1 - We reuse the main frame, so when it navigates to a new page load it needs to start with a blank FrameTree.
-    // 2 - It's much easier to destroy a CachedFrame while it resides in the PageCache if it is disconnected from its parent.
+    // 2 - It's much easier to destroy a CachedFrame while it resides in the BackForwardCache if it is disconnected from its parent.
     for (unsigned i = 0; i < m_childFrames.size(); ++i)
         frame.tree().removeChild(m_childFrames[i]->view()->frame());
 
-    if (!m_isMainFrame)
-        frame.page()->decrementSubframeCount();
-
-    frame.loader().client().didSaveToPageCache();
-
 #ifndef NDEBUG
     if (m_isMainFrame)
-        LOG(PageCache, "Finished creating CachedFrame for main frame url '%s' and DocumentLoader %p\n", m_url.string().utf8().data(), m_documentLoader.get());
+        LOG(BackForwardCache, "Finished creating CachedFrame for main frame url '%s' and DocumentLoader %p\n", m_url.string().utf8().data(), m_documentLoader.get());
     else
-        LOG(PageCache, "Finished creating CachedFrame for child frame with url '%s' and DocumentLoader %p\n", m_url.string().utf8().data(), m_documentLoader.get());
+        LOG(BackForwardCache, "Finished creating CachedFrame for child frame with url '%s' and DocumentLoader %p\n", m_url.string().utf8().data(), m_documentLoader.get());
 #endif
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     if (m_isMainFrame) {
         if (DOMWindow* domWindow = m_document->domWindow()) {
             if (domWindow->scrollEventListenerCount() && frame.page())
@@ -187,6 +209,7 @@ CachedFrame::CachedFrame(Frame& frame)
     }
 #endif
 
+    m_document->setMayBeDetachedFromFrame(true);
     m_document->detachFromCachedFrame(*this);
 
     ASSERT_WITH_SECURITY_IMPLICATION(!m_documentLoader->isLoading());
@@ -196,10 +219,6 @@ void CachedFrame::open()
 {
     ASSERT(m_view);
     ASSERT(m_document);
-    if (!m_isMainFrame)
-        m_view->frame().page()->incrementSubframeCount();
-
-    m_document->attachToCachedFrame(*this);
 
     m_view->frame().loader().open(*this);
 }
@@ -209,11 +228,11 @@ void CachedFrame::clear()
     if (!m_document)
         return;
 
-    // clear() should only be called for Frames representing documents that are no longer in the page cache.
+    // clear() should only be called for Frames representing documents that are no longer in the back/forward cache.
     // This means the CachedFrame has been:
     // 1 - Successfully restore()'d by going back/forward.
-    // 2 - destroy()'ed because the PageCache is pruning or the WebView was closed.
-    ASSERT(m_document->pageCacheState() == Document::NotInPageCache);
+    // 2 - destroy()'ed because the BackForwardCache is pruning or the WebView was closed.
+    ASSERT(m_document->backForwardCacheState() == Document::NotInBackForwardCache);
     ASSERT(m_view);
     ASSERT(!m_document->frame() || m_document->frame() == &m_view->frame());
 
@@ -233,8 +252,8 @@ void CachedFrame::destroy()
     if (!m_document)
         return;
     
-    // Only CachedFrames that are still in the PageCache should be destroyed in this manner
-    ASSERT(m_document->pageCacheState() == Document::InPageCache);
+    // Only CachedFrames that are still in the BackForwardCache should be destroyed in this manner
+    ASSERT(m_document->backForwardCacheState() == Document::InBackForwardCache);
     ASSERT(m_view);
     ASSERT(!m_document->frame());
 
@@ -253,14 +272,12 @@ void CachedFrame::destroy()
 
     Frame::clearTimers(m_view.get(), m_document.get());
 
-    m_view->frame().animation().detachFromDocument(m_document.get());
-
-    // FIXME: Why do we need to call removeAllEventListeners here? When the document is in page cache, this method won't work
+    // FIXME: Why do we need to call removeAllEventListeners here? When the document is in back/forward cache, this method won't work
     // fully anyway, because the document won't be able to access its DOMWindow object (due to being frameless).
     m_document->removeAllEventListeners();
 
-    m_document->setPageCacheState(Document::NotInPageCache);
-    m_document->prepareForDestruction();
+    m_document->setBackForwardCacheState(Document::NotInBackForwardCache);
+    m_document->willBeRemovedFromFrame();
 
     clear();
 }
@@ -275,18 +292,42 @@ CachedFramePlatformData* CachedFrame::cachedFramePlatformData()
     return m_cachedFramePlatformData.get();
 }
 
-void CachedFrame::setHasInsecureContent(HasInsecureContent hasInsecureContent)
+size_t CachedFrame::descendantFrameCount() const
 {
-    m_hasInsecureContent = hasInsecureContent;
+    size_t count = m_childFrames.size();
+    for (const auto& childFrame : m_childFrames)
+        count += childFrame->descendantFrameCount();
+    return count;
 }
 
-int CachedFrame::descendantFrameCount() const
+UsedLegacyTLS CachedFrame::usedLegacyTLS() const
 {
-    int count = m_childFrames.size();
-    for (size_t i = 0; i < m_childFrames.size(); ++i)
-        count += m_childFrames[i]->descendantFrameCount();
+    if (auto* document = this->document()) {
+        if (document->usedLegacyTLS())
+            return UsedLegacyTLS::Yes;
+    }
     
-    return count;
+    for (const auto& cachedFrame : m_childFrames) {
+        if (cachedFrame->usedLegacyTLS() == UsedLegacyTLS::Yes)
+            return UsedLegacyTLS::Yes;
+    }
+    
+    return UsedLegacyTLS::No;
+}
+
+HasInsecureContent CachedFrame::hasInsecureContent() const
+{
+    if (auto* document = this->document()) {
+        if (!document->isSecureContext() || !document->foundMixedContent().isEmpty())
+            return HasInsecureContent::Yes;
+    }
+    
+    for (const auto& cachedFrame : m_childFrames) {
+        if (cachedFrame->hasInsecureContent() == HasInsecureContent::Yes)
+            return HasInsecureContent::Yes;
+    }
+    
+    return HasInsecureContent::No;
 }
 
 } // namespace WebCore

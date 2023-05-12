@@ -32,24 +32,28 @@
 #include "CommandLineAPIHost.h"
 
 #include "Database.h"
-#include "InspectorDOMAgent.h"
+#include "Document.h"
+#include "EventTarget.h"
 #include "InspectorDOMStorageAgent.h"
 #include "InspectorDatabaseAgent.h"
 #include "JSCommandLineAPIHost.h"
 #include "JSDOMGlobalObject.h"
+#include "JSEventListener.h"
 #include "Pasteboard.h"
 #include "Storage.h"
-#include <inspector/InspectorValues.h>
-#include <inspector/agents/InspectorAgent.h>
-#include <inspector/agents/InspectorConsoleAgent.h>
-#include <runtime/JSCInlines.h>
+#include "WebConsoleAgent.h"
+#include <JavaScriptCore/InspectorAgent.h>
+#include <JavaScriptCore/JSCInlines.h>
+#include <JavaScriptCore/JSLock.h>
+#include <JavaScriptCore/ScriptValue.h>
+#include <wtf/JSONValues.h>
 #include <wtf/RefPtr.h>
 #include <wtf/StdLibExtras.h>
 
+namespace WebCore {
+
 using namespace JSC;
 using namespace Inspector;
-
-namespace WebCore {
 
 Ref<CommandLineAPIHost> CommandLineAPIHost::create()
 {
@@ -57,48 +61,90 @@ Ref<CommandLineAPIHost> CommandLineAPIHost::create()
 }
 
 CommandLineAPIHost::CommandLineAPIHost()
-    : m_inspectedObject(std::make_unique<InspectableObject>())
+    : m_inspectedObject(makeUnique<InspectableObject>())
 {
 }
 
-CommandLineAPIHost::~CommandLineAPIHost()
-{
-}
+CommandLineAPIHost::~CommandLineAPIHost() = default;
 
 void CommandLineAPIHost::disconnect()
 {
-    m_inspectorAgent = nullptr;
-    m_consoleAgent = nullptr;
-    m_domAgent = nullptr;
-    m_domStorageAgent = nullptr;
-    m_databaseAgent = nullptr;
+
+    m_instrumentingAgents = nullptr;
 }
 
-void CommandLineAPIHost::inspectImpl(RefPtr<InspectorValue>&& object, RefPtr<InspectorValue>&& hints)
+void CommandLineAPIHost::inspect(JSC::JSGlobalObject& lexicalGlobalObject, JSC::JSValue object, JSC::JSValue hints)
 {
-    if (!m_inspectorAgent)
+    if (!m_instrumentingAgents)
         return;
 
-    RefPtr<InspectorObject> hintsObject;
-    if (!hints->asObject(hintsObject))
+    auto* inspectorAgent = m_instrumentingAgents->persistentInspectorAgent();
+    if (!inspectorAgent)
         return;
 
-    auto remoteObject = BindingTraits<Inspector::Protocol::Runtime::RemoteObject>::runtimeCast(WTFMove(object));
-    m_inspectorAgent->inspect(WTFMove(remoteObject), WTFMove(hintsObject));
+    auto objectValue = Inspector::toInspectorValue(&lexicalGlobalObject, object);
+    if (!objectValue)
+        return;
+
+    auto hintsValue = Inspector::toInspectorValue(&lexicalGlobalObject, hints);
+    if (!hintsValue)
+        return;
+
+    auto hintsObject = hintsValue->asObject();
+    if (!hintsObject)
+        return;
+
+    auto remoteObject = Protocol::BindingTraits<Protocol::Runtime::RemoteObject>::runtimeCast(objectValue.releaseNonNull());
+    inspectorAgent->inspect(WTFMove(remoteObject), hintsObject.releaseNonNull());
 }
 
-void CommandLineAPIHost::getEventListenersImpl(Node* node, Vector<EventListenerInfo>& listenersArray)
+CommandLineAPIHost::EventListenersRecord CommandLineAPIHost::getEventListeners(JSGlobalObject& lexicalGlobalObject, EventTarget& target)
 {
-    if (m_domAgent)
-        m_domAgent->getEventListeners(node, listenersArray, false);
+    auto* scriptExecutionContext = target.scriptExecutionContext();
+    if (!scriptExecutionContext)
+        return { };
+
+    EventListenersRecord result;
+
+    VM& vm = lexicalGlobalObject.vm();
+
+    for (auto& eventType : target.eventTypes()) {
+        Vector<CommandLineAPIHost::ListenerEntry> entries;
+
+        for (auto& eventListener : target.eventListeners(eventType)) {
+            if (!is<JSEventListener>(eventListener->callback()))
+                continue;
+
+            auto& jsListener = downcast<JSEventListener>(eventListener->callback());
+
+            // Hide listeners from other contexts.
+            if (&jsListener.isolatedWorld() != &currentWorld(lexicalGlobalObject))
+                continue;
+
+            auto* function = jsListener.ensureJSFunction(*scriptExecutionContext);
+            if (!function)
+                continue;
+
+            entries.append({ Strong<JSObject>(vm, function), eventListener->useCapture(), eventListener->isPassive(), eventListener->isOnce() });
+        }
+
+        if (!entries.isEmpty())
+            result.append({ eventType, WTFMove(entries) });
+    }
+
+    return result;
 }
 
 void CommandLineAPIHost::clearConsoleMessages()
 {
-    if (m_consoleAgent) {
-        ErrorString unused;
-        m_consoleAgent->clearMessages(unused);
-    }
+    if (!m_instrumentingAgents)
+        return;
+
+    auto* consoleAgent = m_instrumentingAgents->webConsoleAgent();
+    if (!consoleAgent)
+        return;
+
+    consoleAgent->clearMessages();
 }
 
 void CommandLineAPIHost::copyText(const String& text)
@@ -106,7 +152,7 @@ void CommandLineAPIHost::copyText(const String& text)
     Pasteboard::createForCopyAndPaste()->writePlainText(text, Pasteboard::CannotSmartReplace);
 }
 
-JSC::JSValue CommandLineAPIHost::InspectableObject::get(JSC::ExecState&)
+JSC::JSValue CommandLineAPIHost::InspectableObject::get(JSC::JSGlobalObject&)
 {
     return { };
 }
@@ -116,26 +162,31 @@ void CommandLineAPIHost::addInspectedObject(std::unique_ptr<CommandLineAPIHost::
     m_inspectedObject = WTFMove(object);
 }
 
-CommandLineAPIHost::InspectableObject* CommandLineAPIHost::inspectedObject()
+JSC::JSValue CommandLineAPIHost::inspectedObject(JSC::JSGlobalObject& lexicalGlobalObject)
 {
-    return m_inspectedObject.get();
+    if (!m_inspectedObject)
+        return jsUndefined();
+
+    JSC::JSLockHolder lock(&lexicalGlobalObject);
+    auto scriptValue = m_inspectedObject->get(lexicalGlobalObject);
+    return scriptValue ? scriptValue : jsUndefined();
 }
 
-String CommandLineAPIHost::databaseIdImpl(Database* database)
+String CommandLineAPIHost::databaseId(Database& database)
 {
-    if (m_databaseAgent)
-        return m_databaseAgent->databaseId(database);
-    return String();
+    if (m_instrumentingAgents) {
+        if (auto* databaseAgent = m_instrumentingAgents->enabledDatabaseAgent())
+            return databaseAgent->databaseId(database);
+    }
+    return { };
 }
 
-String CommandLineAPIHost::storageIdImpl(Storage* storage)
+String CommandLineAPIHost::storageId(Storage& storage)
 {
-    if (m_domStorageAgent)
-        return m_domStorageAgent->storageId(storage);
-    return String();
+    return InspectorDOMStorageAgent::storageId(storage);
 }
 
-JSValue CommandLineAPIHost::wrapper(ExecState* exec, JSDOMGlobalObject* globalObject)
+JSValue CommandLineAPIHost::wrapper(JSGlobalObject* exec, JSDOMGlobalObject* globalObject)
 {
     JSValue value = m_wrappers.getWrapper(globalObject);
     if (value)
@@ -152,7 +203,7 @@ JSValue CommandLineAPIHost::wrapper(ExecState* exec, JSDOMGlobalObject* globalOb
 void CommandLineAPIHost::clearAllWrappers()
 {
     m_wrappers.clearAllWrappers();
-    m_inspectedObject = std::make_unique<InspectableObject>();
+    m_inspectedObject = makeUnique<InspectableObject>();
 }
 
 } // namespace WebCore

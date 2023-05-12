@@ -23,12 +23,18 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// FIXME 169662: missing Constructor(DOMString type, optional RTCPeerConnectionIceEventInit eventInitDict)
+dictionary RTCPeerConnectionIceEventInit : EventInit {
+    RTCIceCandidate? candidate;
+    DOMString? url;
+};
+
 [
-    NoInterfaceObject,
     Conditional=WEB_RTC,
-    EnabledAtRuntime=PeerConnection
+    EnabledAtRuntime=PeerConnection,
+    Exposed=Window
 ] interface RTCPeerConnectionIceEvent : Event {
+    constructor(DOMString type, optional RTCPeerConnectionIceEventInit eventInitDict);
+
     readonly attribute RTCIceCandidate? candidate;
-    // FIXME 169662: missing url
+    readonly attribute DOMString? url;
 };

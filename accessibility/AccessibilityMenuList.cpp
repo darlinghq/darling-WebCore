@@ -44,16 +44,22 @@ Ref<AccessibilityMenuList> AccessibilityMenuList::create(RenderMenuList* rendere
 
 bool AccessibilityMenuList::press()
 {
-#if !PLATFORM(IOS)
-    RenderMenuList* menuList = static_cast<RenderMenuList*>(m_renderer);
-    if (menuList->popupIsVisible())
-        menuList->hidePopup();
-    else
-        menuList->showPopup();
+#if !PLATFORM(IOS_FAMILY)
+    auto element = this->element();
+    AXObjectCache::AXNotification notification = AXObjectCache::AXPressDidFail;
+    if (element && !element->isDisabledFormControl() && is<RenderMenuList>(renderer())) {
+        RenderMenuList* menuList = downcast<RenderMenuList>(renderer());
+        if (menuList->popupIsVisible())
+            menuList->hidePopup();
+        else
+            menuList->showPopup();
+        notification = AXObjectCache::AXPressDidSucceed;
+    }
+    if (auto cache = axObjectCache())
+        cache->postNotification(element, notification);
     return true;
-#else
-    return false;
 #endif
+    return false;
 }
 
 void AccessibilityMenuList::addChildren()
@@ -65,13 +71,13 @@ void AccessibilityMenuList::addChildren()
     if (!cache)
         return;
     
-    AccessibilityObject* list = cache->getOrCreate(MenuListPopupRole);
+    auto list = cache->create(AccessibilityRole::MenuListPopup);
     if (!list)
         return;
 
     downcast<AccessibilityMockObject>(*list).setParent(this);
     if (list->accessibilityIsIgnored()) {
-        cache->remove(list->axObjectID());
+        cache->remove(list->objectID());
         return;
     }
 
@@ -92,8 +98,9 @@ void AccessibilityMenuList::childrenChanged()
 
 bool AccessibilityMenuList::isCollapsed() const
 {
-#if !PLATFORM(IOS)
-    return !static_cast<RenderMenuList*>(m_renderer)->popupIsVisible();
+#if !PLATFORM(IOS_FAMILY)
+    auto* renderer = this->renderer();
+    return !(is<RenderMenuList>(renderer) && downcast<RenderMenuList>(*renderer).popupIsVisible());
 #else
     return true;
 #endif
@@ -110,7 +117,6 @@ bool AccessibilityMenuList::canSetFocusAttribute() const
 void AccessibilityMenuList::didUpdateActiveOption(int optionIndex)
 {
     Ref<Document> document(m_renderer->document());
-    AXObjectCache* cache = document->axObjectCache();
 
     const auto& childObjects = children();
     if (!childObjects.isEmpty()) {
@@ -129,7 +135,8 @@ void AccessibilityMenuList::didUpdateActiveOption(int optionIndex)
             downcast<AccessibilityMenuListPopup>(*childObjects[0]).didUpdateActiveOption(optionIndex);
     }
 
-    cache->postNotification(this, document.ptr(), AXObjectCache::AXMenuListValueChanged, TargetElement, PostSynchronously);
+    if (auto* cache = document->axObjectCache())
+        cache->postNotification(this, document.ptr(), AXObjectCache::AXMenuListValueChanged);
 }
 
 } // namespace WebCore

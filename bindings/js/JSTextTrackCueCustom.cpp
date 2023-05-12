@@ -25,7 +25,7 @@
 
 #include "config.h"
 
-#if ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO)
 
 #include "JSTextTrackCue.h"
 
@@ -34,44 +34,52 @@
 #include "JSVTTCue.h"
 #include "TextTrack.h"
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
-bool JSTextTrackCueOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, SlotVisitor& visitor)
+bool JSTextTrackCueOwner::isReachableFromOpaqueRoots(JSC::Handle<JSC::Unknown> handle, void*, SlotVisitor& visitor, const char** reason)
 {
     JSTextTrackCue* jsTextTrackCue = jsCast<JSTextTrackCue*>(handle.slot()->asCell());
     TextTrackCue& textTrackCue = jsTextTrackCue->wrapped();
 
     // If the cue is firing event listeners, its wrapper is reachable because
     // the wrapper is responsible for marking those event listeners.
-    if (textTrackCue.isFiringEventListeners())
+    if (textTrackCue.isFiringEventListeners()) {
+        if (UNLIKELY(reason))
+            *reason = "TextTrackCue is firing event listeners";
         return true;
+    }
 
     // If the cue is not associated with a track, it is not reachable.
     if (!textTrackCue.track())
         return false;
 
+    if (UNLIKELY(reason))
+        *reason = "TextTrack is an opaque root";
+
     return visitor.containsOpaqueRoot(root(textTrackCue.track()));
 }
 
-JSValue toJSNewlyCreated(ExecState*, JSDOMGlobalObject* globalObject, Ref<TextTrackCue>&& cue)
+JSValue toJSNewlyCreated(JSGlobalObject*, JSDOMGlobalObject* globalObject, Ref<TextTrackCue>&& cue)
 {
     switch (cue->cueType()) {
     case TextTrackCue::Data:
         return createWrapper<DataCue>(globalObject, WTFMove(cue));
     case TextTrackCue::WebVTT:
-    case TextTrackCue::Generic:
+    case TextTrackCue::ConvertedToWebVTT:
         return createWrapper<VTTCue>(globalObject, WTFMove(cue));
-    default:
-        ASSERT_NOT_REACHED();
-        return jsNull();
+    case TextTrackCue::Generic:
+        return createWrapper<TextTrackCue>(globalObject, WTFMove(cue));
     }
+
+    ASSERT_NOT_REACHED();
+    return jsNull();
 }
 
-JSValue toJS(ExecState* state, JSDOMGlobalObject* globalObject, TextTrackCue& cue)
+JSValue toJS(JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject* globalObject, TextTrackCue& cue)
 {
-    return wrap(state, globalObject, cue);
+    return wrap(lexicalGlobalObject, globalObject, cue);
 }
 
 void JSTextTrackCue::visitAdditionalChildren(SlotVisitor& visitor)

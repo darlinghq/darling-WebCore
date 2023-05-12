@@ -33,27 +33,30 @@
 #pragma once
 
 #include <wtf/Forward.h>
+#include <wtf/Markable.h>
 #include <wtf/Optional.h>
 
 namespace WebCore {
 
-enum class LinkIconType;
+class Document;
+enum class LinkIconType : uint8_t;
 
 struct LinkRelAttribute {
-    bool isStyleSheet { false };
-    std::optional<LinkIconType> iconType;
-    bool isAlternate { false };
-    bool isDNSPrefetch { false };
-    bool isLinkPreload { false };
-#if ENABLE(LINK_PREFETCH)
-    bool isLinkPrefetch { false };
-    bool isLinkSubresource { false };
+    Markable<LinkIconType, EnumMarkableTraits<LinkIconType>> iconType;
+    bool isStyleSheet : 1;
+    bool isAlternate : 1;
+    bool isDNSPrefetch : 1;
+    bool isLinkPreload : 1;
+    bool isLinkPreconnect : 1;
+    bool isLinkPrefetch : 1;
+#if ENABLE(APPLICATION_MANIFEST)
+    bool isApplicationManifest : 1;
 #endif
 
     LinkRelAttribute();
-    explicit LinkRelAttribute(const String&);
+    LinkRelAttribute(Document&, const String&);
 
-    static bool isSupported(StringView);
+    static bool isSupported(Document&, StringView);
 };
 
 }

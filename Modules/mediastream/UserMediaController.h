@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2012 Google Inc. All rights reserved.
- * Copyright (C) 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -27,14 +27,17 @@
 
 #if ENABLE(MEDIA_STREAM)
 
+#include "FeaturePolicy.h"
 #include "Page.h"
 #include "UserMediaClient.h"
+#include <wtf/CompletionHandler.h>
 
 namespace WebCore {
 
 class UserMediaRequest;
 
 class UserMediaController : public Supplement<Page> {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     explicit UserMediaController(UserMediaClient*);
     ~UserMediaController();
@@ -44,8 +47,14 @@ public:
     void requestUserMediaAccess(UserMediaRequest&);
     void cancelUserMediaAccessRequest(UserMediaRequest&);
 
-    void enumerateMediaDevices(MediaDevicesEnumerationRequest&);
-    void cancelMediaDevicesEnumerationRequest(MediaDevicesEnumerationRequest&);
+    void enumerateMediaDevices(Document&, CompletionHandler<void(const Vector<CaptureDevice>&, const String&)>&&);
+
+    UserMediaClient::DeviceChangeObserverToken addDeviceChangeObserver(WTF::Function<void()>&&);
+    void removeDeviceChangeObserver(UserMediaClient::DeviceChangeObserverToken);
+
+    void logGetUserMediaDenial(Document&);
+    void logGetDisplayMediaDenial(Document&);
+    void logEnumerateDevicesDenial(Document&);
 
     WEBCORE_EXPORT static const char* supplementName();
     static UserMediaController* from(Page* page) { return static_cast<UserMediaController*>(Supplement<Page>::from(page, supplementName())); }
@@ -64,14 +73,20 @@ inline void UserMediaController::cancelUserMediaAccessRequest(UserMediaRequest& 
     m_client->cancelUserMediaAccessRequest(request);
 }
 
-inline void UserMediaController::enumerateMediaDevices(MediaDevicesEnumerationRequest& request)
+inline void UserMediaController::enumerateMediaDevices(Document& document, CompletionHandler<void(const Vector<CaptureDevice>&, const String&)>&& completionHandler)
 {
-    m_client->enumerateMediaDevices(request);
+    m_client->enumerateMediaDevices(document, WTFMove(completionHandler));
 }
 
-inline void UserMediaController::cancelMediaDevicesEnumerationRequest(MediaDevicesEnumerationRequest& request)
+
+inline UserMediaClient::DeviceChangeObserverToken UserMediaController::addDeviceChangeObserver(WTF::Function<void()>&& observer)
 {
-    m_client->cancelMediaDevicesEnumerationRequest(request);
+    return m_client->addDeviceChangeObserver(WTFMove(observer));
+}
+
+inline void UserMediaController::removeDeviceChangeObserver(UserMediaClient::DeviceChangeObserverToken token)
+{
+    m_client->removeDeviceChangeObserver(token);
 }
 
 } // namespace WebCore

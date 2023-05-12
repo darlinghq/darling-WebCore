@@ -25,7 +25,7 @@
 
 #pragma once
 
-#if ENABLE(MEDIA_STREAM) && PLATFORM(IOS)
+#if ENABLE(MEDIA_STREAM) && PLATFORM(IOS_FAMILY)
 
 #include "CaptureDevice.h"
 #include <wtf/RetainPtr.h>
@@ -36,15 +36,16 @@ namespace WebCore {
 
 class AVAudioSessionCaptureDevice : public CaptureDevice {
 public:
-    static AVAudioSessionCaptureDevice create(AVAudioSessionPortDescription*);
+    static AVAudioSessionCaptureDevice create(AVAudioSessionPortDescription *deviceInput, AVAudioSessionPortDescription *defaultInput);
     virtual ~AVAudioSessionCaptureDevice() = default;
 
-private:
-    AVAudioSessionCaptureDevice(AVAudioSessionPortDescription*, const String& persistentID, const String& label);
+    AVAudioSessionCaptureDevice isolatedCopy() &&;
 
-    RetainPtr<AVAudioSessionPortDescription> m_portDescription;
+private:
+    AVAudioSessionCaptureDevice(AVAudioSessionPortDescription *deviceInput, AVAudioSessionPortDescription *defaultInput);
+    AVAudioSessionCaptureDevice(const String& persistentId, DeviceType, const String& label, const String& groupId, bool isEnabled, bool isDefault, bool isMock);
 };
 
 } // namespace WebCore
 
-#endif // ENABLE(MEDIA_STREAM) && PLATFORM(IOS)
+#endif // ENABLE(MEDIA_STREAM) && PLATFORM(IOS_FAMILY)

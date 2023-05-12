@@ -40,12 +40,12 @@
 
 namespace WebCore {
 
-static Ref<CSSPrimitiveValue> valueForCenterCoordinate(CSSValuePool& pool, const RenderStyle& style, const BasicShapeCenterCoordinate& center, EBoxOrient orientation)
+static Ref<CSSPrimitiveValue> valueForCenterCoordinate(CSSValuePool& pool, const RenderStyle& style, const BasicShapeCenterCoordinate& center, BoxOrient orientation)
 {
     if (center.direction() == BasicShapeCenterCoordinate::TopLeft)
         return pool.createValue(center.length(), style);
 
-    CSSValueID keyword = orientation == HORIZONTAL ? CSSValueRight : CSSValueBottom;
+    CSSValueID keyword = orientation == BoxOrient::Horizontal ? CSSValueRight : CSSValueBottom;
 
     return pool.createValue(Pair::create(pool.createIdentifierValue(keyword), pool.createValue(center.length(), style)));
 }
@@ -71,30 +71,30 @@ Ref<CSSPrimitiveValue> valueForBasicShape(const RenderStyle& style, const BasicS
 
     RefPtr<CSSBasicShape> basicShapeValue;
     switch (basicShape.type()) {
-    case BasicShape::BasicShapeCircleType: {
+    case BasicShape::Type::Circle: {
         auto& circle = downcast<BasicShapeCircle>(basicShape);
         auto circleValue = CSSBasicShapeCircle::create();
 
-        circleValue->setCenterX(valueForCenterCoordinate(cssValuePool, style, circle.centerX(), HORIZONTAL));
-        circleValue->setCenterY(valueForCenterCoordinate(cssValuePool, style, circle.centerY(), VERTICAL));
+        circleValue->setCenterX(valueForCenterCoordinate(cssValuePool, style, circle.centerX(), BoxOrient::Horizontal));
+        circleValue->setCenterY(valueForCenterCoordinate(cssValuePool, style, circle.centerY(), BoxOrient::Vertical));
         circleValue->setRadius(basicShapeRadiusToCSSValue(style, cssValuePool, circle.radius()));
 
         basicShapeValue = WTFMove(circleValue);
         break;
     }
-    case BasicShape::BasicShapeEllipseType: {
+    case BasicShape::Type::Ellipse: {
         auto& ellipse = downcast<BasicShapeEllipse>(basicShape);
         auto ellipseValue = CSSBasicShapeEllipse::create();
 
-        ellipseValue->setCenterX(valueForCenterCoordinate(cssValuePool, style, ellipse.centerX(), HORIZONTAL));
-        ellipseValue->setCenterY(valueForCenterCoordinate(cssValuePool, style, ellipse.centerY(), VERTICAL));
+        ellipseValue->setCenterX(valueForCenterCoordinate(cssValuePool, style, ellipse.centerX(), BoxOrient::Horizontal));
+        ellipseValue->setCenterY(valueForCenterCoordinate(cssValuePool, style, ellipse.centerY(), BoxOrient::Vertical));
         ellipseValue->setRadiusX(basicShapeRadiusToCSSValue(style, cssValuePool, ellipse.radiusX()));
         ellipseValue->setRadiusY(basicShapeRadiusToCSSValue(style, cssValuePool, ellipse.radiusY()));
 
         basicShapeValue = WTFMove(ellipseValue);
         break;
     }
-    case BasicShape::BasicShapePolygonType: {
+    case BasicShape::Type::Polygon: {
         auto& polygon = downcast<BasicShapePolygon>(basicShape);
         auto polygonValue = CSSBasicShapePolygon::create();
 
@@ -106,7 +106,7 @@ Ref<CSSPrimitiveValue> valueForBasicShape(const RenderStyle& style, const BasicS
         basicShapeValue = WTFMove(polygonValue);
         break;
     }
-    case BasicShape::BasicShapePathType: {
+    case BasicShape::Type::Path: {
         auto& pathShape = downcast<BasicShapePath>(basicShape);
         auto pathShapeValue = CSSBasicShapePath::create(pathShape.pathData()->copy());
         pathShapeValue->setWindRule(pathShape.windRule());
@@ -114,7 +114,7 @@ Ref<CSSPrimitiveValue> valueForBasicShape(const RenderStyle& style, const BasicS
         basicShapeValue = WTFMove(pathShapeValue);
         break;
     }
-    case BasicShape::BasicShapeInsetType: {
+    case BasicShape::Type::Inset: {
         auto& inset = downcast<BasicShapeInset>(basicShape);
         auto insetValue = CSSBasicShapeInset::create();
 
@@ -207,7 +207,7 @@ static BasicShapeRadius cssValueToBasicShapeRadius(const CSSToLengthConversionDa
     return BasicShapeRadius(convertToLength(conversionData, radius));
 }
 
-Ref<BasicShape> basicShapeForValue(const CSSToLengthConversionData& conversionData, const CSSBasicShape& basicShapeValue)
+Ref<BasicShape> basicShapeForValue(const CSSToLengthConversionData& conversionData, const CSSBasicShape& basicShapeValue, float zoom)
 {
     RefPtr<BasicShape> basicShape;
 
@@ -269,6 +269,7 @@ Ref<BasicShape> basicShapeForValue(const CSSToLengthConversionData& conversionDa
         auto& pathValue = downcast<CSSBasicShapePath>(basicShapeValue);
         auto path = BasicShapePath::create(pathValue.pathData().copy());
         path->setWindRule(pathValue.windRule());
+        path->setZoom(zoom);
 
         basicShape = WTFMove(path);
         break;

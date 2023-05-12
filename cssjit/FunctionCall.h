@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013, 2014 Apple Inc. All rights reserved.
+ * Copyright (C) 2013-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,24 +30,25 @@
 #include "RegisterAllocator.h"
 #include "StackAllocator.h"
 #include <JavaScriptCore/GPRInfo.h>
+#include <JavaScriptCore/JSCPtrTag.h>
 #include <JavaScriptCore/MacroAssembler.h>
 
 namespace WebCore {
 
 class FunctionCall {
 public:
-    FunctionCall(JSC::MacroAssembler& assembler, RegisterAllocator& registerAllocator, StackAllocator& stackAllocator, Vector<std::pair<JSC::MacroAssembler::Call, JSC::FunctionPtr>, 32>& callRegistry)
+    FunctionCall(JSC::MacroAssembler& assembler, RegisterAllocator& registerAllocator, StackAllocator& stackAllocator, Vector<std::pair<JSC::MacroAssembler::Call, JSC::FunctionPtr<JSC::OperationPtrTag>>, 32>& callRegistry)
         : m_assembler(assembler)
         , m_registerAllocator(registerAllocator)
         , m_stackAllocator(stackAllocator)
         , m_callRegistry(callRegistry)
         , m_argumentCount(0)
-        , m_firstArgument(InvalidGPRReg)
-        , m_secondArgument(InvalidGPRReg)
+        , m_firstArgument(JSC::InvalidGPRReg)
+        , m_secondArgument(JSC::InvalidGPRReg)
     {
     }
 
-    void setFunctionAddress(JSC::FunctionPtr functionAddress)
+    void setFunctionAddress(JSC::FunctionPtr<JSC::OperationPtrTag> functionAddress)
     {
         m_functionAddress = functionAddress;
     }
@@ -73,7 +74,7 @@ public:
 
     JSC::MacroAssembler::Jump callAndBranchOnBooleanReturnValue(JSC::MacroAssembler::ResultCondition condition)
     {
-#if CPU(X86) || CPU(X86_64)
+#if CPU(X86_64)
         return callAndBranchOnCondition(condition, JSC::MacroAssembler::TrustedImm32(0xff));
 #elif CPU(ARM64) || CPU(ARM)
         return callAndBranchOnCondition(condition, JSC::MacroAssembler::TrustedImm32(-1));
@@ -96,7 +97,7 @@ private:
         JSC::MacroAssembler::RegisterID a = m_firstArgument;
         JSC::MacroAssembler::RegisterID b = m_secondArgument;
         // x86 can swap without a temporary register. On other architectures, we need allocate a temporary register to switch the values.
-#if CPU(X86) || CPU(X86_64)
+#if CPU(X86_64)
         m_assembler.swap(a, b);
 #elif CPU(ARM64) || CPU(ARM_THUMB2)
         m_assembler.move(a, tempRegister);
@@ -147,7 +148,7 @@ private:
                 m_assembler.move(m_firstArgument, JSC::GPRInfo::argumentGPR0);
         }
 
-        JSC::MacroAssembler::Call call = m_assembler.call();
+        JSC::MacroAssembler::Call call = m_assembler.call(JSC::OperationPtrTag);
         m_callRegistry.append(std::make_pair(call, m_functionAddress));
     }
 
@@ -178,12 +179,12 @@ private:
     JSC::MacroAssembler& m_assembler;
     RegisterAllocator& m_registerAllocator;
     StackAllocator& m_stackAllocator;
-    Vector<std::pair<JSC::MacroAssembler::Call, JSC::FunctionPtr>, 32>& m_callRegistry;
+    Vector<std::pair<JSC::MacroAssembler::Call, JSC::FunctionPtr<JSC::OperationPtrTag>>, 32>& m_callRegistry;
 
     RegisterVector m_savedRegisters;
     StackAllocator::StackReferenceVector m_savedRegisterStackReferences;
     
-    JSC::FunctionPtr m_functionAddress;
+    JSC::FunctionPtr<JSC::OperationPtrTag> m_functionAddress;
     unsigned m_argumentCount;
     JSC::MacroAssembler::RegisterID m_firstArgument;
     JSC::MacroAssembler::RegisterID m_secondArgument;

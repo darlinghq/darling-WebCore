@@ -32,10 +32,12 @@
 #if ENABLE(INPUT_TYPE_WEEK)
 #include "WeekInputType.h"
 
+#include "DateComponents.h"
+#include "Decimal.h"
 #include "HTMLInputElement.h"
 #include "HTMLNames.h"
 #include "InputTypeNames.h"
-#include <wtf/NeverDestroyed.h>
+#include "StepRange.h"
 
 namespace WebCore {
 
@@ -44,44 +46,54 @@ using namespace HTMLNames;
 static const int weekDefaultStepBase = -259200000; // The first day of 1970-W01.
 static const int weekDefaultStep = 1;
 static const int weekStepScaleFactor = 604800000;
+static const StepRange::StepDescription weekStepDescription { weekDefaultStep, weekDefaultStepBase, weekStepScaleFactor, StepRange::ParsedStepValueShouldBeInteger };
 
-const AtomicString& WeekInputType::formControlType() const
+const AtomString& WeekInputType::formControlType() const
 {
     return InputTypeNames::week();
 }
 
-DateComponents::Type WeekInputType::dateType() const
+DateComponentsType WeekInputType::dateType() const
 {
-    return DateComponents::Week;
+    return DateComponentsType::Week;
 }
 
 StepRange WeekInputType::createStepRange(AnyStepHandling anyStepHandling) const
 {
-    static NeverDestroyed<const StepRange::StepDescription> stepDescription(weekDefaultStep, weekDefaultStepBase, weekStepScaleFactor, StepRange::ParsedStepValueShouldBeInteger);
-
-    const Decimal stepBase = parseToNumber(element().attributeWithoutSynchronization(minAttr), weekDefaultStepBase);
-    const Decimal minimum = parseToNumber(element().attributeWithoutSynchronization(minAttr), Decimal::fromDouble(DateComponents::minimumWeek()));
-    const Decimal maximum = parseToNumber(element().attributeWithoutSynchronization(maxAttr), Decimal::fromDouble(DateComponents::maximumWeek()));
-    const Decimal step = StepRange::parseStep(anyStepHandling, stepDescription, element().attributeWithoutSynchronization(stepAttr));
-    return StepRange(stepBase, RangeLimitations::Valid, minimum, maximum, step, stepDescription);
+    ASSERT(element());
+    const Decimal stepBase = parseToNumber(element()->attributeWithoutSynchronization(minAttr), weekDefaultStepBase);
+    const Decimal minimum = parseToNumber(element()->attributeWithoutSynchronization(minAttr), Decimal::fromDouble(DateComponents::minimumWeek()));
+    const Decimal maximum = parseToNumber(element()->attributeWithoutSynchronization(maxAttr), Decimal::fromDouble(DateComponents::maximumWeek()));
+    const Decimal step = StepRange::parseStep(anyStepHandling, weekStepDescription, element()->attributeWithoutSynchronization(stepAttr));
+    return StepRange(stepBase, RangeLimitations::Valid, minimum, maximum, step, weekStepDescription);
 }
 
-bool WeekInputType::parseToDateComponentsInternal(const UChar* characters, unsigned length, DateComponents* out) const
+Optional<DateComponents> WeekInputType::parseToDateComponents(const StringView& source) const
 {
-    ASSERT(out);
-    unsigned end;
-    return out->parseWeek(characters, length, 0, end) && end == length;
+    return DateComponents::fromParsingWeek(source);
 }
 
-bool WeekInputType::setMillisecondToDateComponents(double value, DateComponents* date) const
+Optional<DateComponents> WeekInputType::setMillisecondToDateComponents(double value) const
 {
-    ASSERT(date);
-    return date->setMillisecondsSinceEpochForWeek(value);
+    return DateComponents::fromMillisecondsSinceEpochForWeek(value);
 }
 
-bool WeekInputType::isWeekField() const
+void WeekInputType::handleDOMActivateEvent(Event&)
 {
-    return true;
+}
+
+bool WeekInputType::isValidFormat(OptionSet<DateTimeFormatValidationResults> results) const
+{
+    return results.containsAll({ DateTimeFormatValidationResults::HasYear, DateTimeFormatValidationResults::HasWeek });
+}
+
+String WeekInputType::formatDateTimeFieldsState(const DateTimeFieldsState&) const
+{
+    return emptyString();
+}
+
+void WeekInputType::setupLayoutParameters(DateTimeEditElement::LayoutParameters&, const DateComponents&) const
+{
 }
 
 } // namespace WebCore

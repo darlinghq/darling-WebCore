@@ -23,26 +23,26 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
+#import "config.h"
 
-#if ENABLE(ASYNC_SCROLLING) && PLATFORM(MAC)
+#if ENABLE(ASYNC_SCROLLING) && ENABLE(SCROLLING_THREAD)
 
 #import "ScrollingCoordinatorMac.h"
 
-#include "FrameView.h"
-#include "Logging.h"
-#include "MainFrame.h"
-#include "Page.h"
-#include "PlatformWheelEvent.h"
-#include "Region.h"
-#include "ScrollingStateTree.h"
-#include "ScrollingThread.h"
-#include "ScrollingTreeFixedNode.h"
-#include "ScrollingTreeFrameScrollingNodeMac.h"
-#include "ScrollingTreeMac.h"
-#include "ScrollingTreeStickyNode.h"
-#include "TiledBacking.h"
-#include <wtf/MainThread.h>
+#import "Frame.h"
+#import "FrameView.h"
+#import "Logging.h"
+#import "Page.h"
+#import "PlatformWheelEvent.h"
+#import "Region.h"
+#import "ScrollingStateTree.h"
+#import "ScrollingThread.h"
+#import "ScrollingTreeFixedNode.h"
+#import "ScrollingTreeFrameScrollingNodeMac.h"
+#import "ScrollingTreeMac.h"
+#import "ScrollingTreeStickyNode.h"
+#import "TiledBacking.h"
+#import <wtf/MainThread.h>
 
 namespace WebCore {
 
@@ -53,7 +53,6 @@ Ref<ScrollingCoordinator> ScrollingCoordinator::create(Page* page)
 
 ScrollingCoordinatorMac::ScrollingCoordinatorMac(Page* page)
     : AsyncScrollingCoordinator(page)
-    , m_scrollingStateTreeCommitterTimer(*this, &ScrollingCoordinatorMac::commitTreeState)
 {
     setScrollingTree(ScrollingTreeMac::create(*this));
 }
@@ -67,8 +66,6 @@ void ScrollingCoordinatorMac::pageDestroyed()
 {
     AsyncScrollingCoordinator::pageDestroyed();
 
-    m_scrollingStateTreeCommitterTimer.stop();
-
     // Invalidating the scrolling tree will break the reference cycle between the ScrollingCoordinator and ScrollingTree objects.
     RefPtr<ThreadedScrollingTree> scrollingTree = static_pointer_cast<ThreadedScrollingTree>(releaseScrollingTree());
     ScrollingThread::dispatch([scrollingTree] {
@@ -76,13 +73,7 @@ void ScrollingCoordinatorMac::pageDestroyed()
     });
 }
 
-void ScrollingCoordinatorMac::commitTreeStateIfNeeded()
-{
-    commitTreeState();
-    m_scrollingStateTreeCommitterTimer.stop();
-}
-
-bool ScrollingCoordinatorMac::handleWheelEvent(FrameView&, const PlatformWheelEvent& wheelEvent)
+bool ScrollingCoordinatorMac::handleWheelEventForScrolling(const PlatformWheelEvent& wheelEvent, ScrollingNodeID targetNodeID, Optional<WheelScrollGestureState> gestureState)
 {
     ASSERT(isMainThread());
     ASSERT(m_page);
@@ -90,44 +81,59 @@ bool ScrollingCoordinatorMac::handleWheelEvent(FrameView&, const PlatformWheelEv
     if (scrollingTree()->willWheelEventStartSwipeGesture(wheelEvent))
         return false;
 
+    LOG_WITH_STREAM(Scrolling, stream << "ScrollingCoordinatorMac::handleWheelEventForScrolling " << wheelEvent << " - sending event to scrolling thread, node " << targetNodeID << " gestureState " << gestureState);
+
+    auto deferrer = WheelEventTestMonitorCompletionDeferrer { m_page->wheelEventTestMonitor().get(), reinterpret_cast<WheelEventTestMonitor::ScrollableAreaIdentifier>(targetNodeID), WheelEventTestMonitor::PostMainThreadWheelEventHandling };
+
     RefPtr<ThreadedScrollingTree> threadedScrollingTree = downcast<ThreadedScrollingTree>(scrollingTree());
-    ScrollingThread::dispatch([threadedScrollingTree, wheelEvent] {
-        threadedScrollingTree->handleWheelEvent(wheelEvent);
+    ScrollingThread::dispatch([threadedScrollingTree, wheelEvent, targetNodeID, gestureState, deferrer = WTFMove(deferrer)] {
+        threadedScrollingTree->handleWheelEventAfterMainThread(wheelEvent, targetNodeID, gestureState);
     });
     return true;
 }
 
-void ScrollingCoordinatorMac::scheduleTreeStateCommit()
+void ScrollingCoordinatorMac::wheelEventWasProcessedByMainThread(const PlatformWheelEvent& wheelEvent, Optional<WheelScrollGestureState> gestureState)
 {
-    ASSERT(scrollingStateTree()->hasChangedProperties() || eventTrackingRegionsDirty());
+    LOG_WITH_STREAM(Scrolling, stream << "ScrollingCoordinatorMac::wheelEventWasProcessedByMainThread " << gestureState);
 
-    if (m_scrollingStateTreeCommitterTimer.isActive())
-        return;
-
-    LOG(Scrolling, "ScrollingCoordinatorMac::scheduleTreeStateCommit");
-    m_scrollingStateTreeCommitterTimer.startOneShot(0_s);
+    RefPtr<ThreadedScrollingTree> threadedScrollingTree = downcast<ThreadedScrollingTree>(scrollingTree());
+    threadedScrollingTree->wheelEventWasProcessedByMainThread(wheelEvent, gestureState);
 }
 
-void ScrollingCoordinatorMac::commitTreeState()
+void ScrollingCoordinatorMac::scheduleTreeStateCommit()
+{
+    // FIXME: This one needs work.
+    m_page->scheduleRenderingUpdate(RenderingUpdateStep::ScrollingTreeUpdate);
+}
+
+void ScrollingCoordinatorMac::commitTreeStateIfNeeded()
 {
     willCommitTree();
 
-    LOG(Scrolling, "ScrollingCoordinatorMac::commitTreeState, has changes %d", scrollingStateTree()->hasChangedProperties());
+    LOG_WITH_STREAM(Scrolling, stream << "ScrollingCoordinatorMac::commitTreeState, has changes " << scrollingStateTree()->hasChangedProperties());
 
     if (!scrollingStateTree()->hasChangedProperties())
         return;
 
-    LOG(Scrolling, "%s", scrollingStateTreeAsText(ScrollingStateTreeAsTextBehaviorDebug).utf8().data());
+    LOG_WITH_STREAM(ScrollingTree, stream << scrollingStateTreeAsText(ScrollingStateTreeAsTextBehaviorDebug));
 
-    RefPtr<ThreadedScrollingTree> threadedScrollingTree = downcast<ThreadedScrollingTree>(scrollingTree());
-    ScrollingStateTree* unprotectedTreeState = scrollingStateTree()->commit(LayerRepresentation::PlatformLayerRepresentation).release();
-
-    ScrollingThread::dispatch([threadedScrollingTree, unprotectedTreeState] {
-        std::unique_ptr<ScrollingStateTree> treeState(unprotectedTreeState);
-        threadedScrollingTree->commitTreeState(WTFMove(treeState));
-    });
+    auto stateTree = scrollingStateTree()->commit(LayerRepresentation::PlatformLayerRepresentation);
+    scrollingTree()->commitTreeState(WTFMove(stateTree));
 
     updateTiledScrollingIndicator();
+}
+
+void ScrollingCoordinatorMac::willStartRenderingUpdate()
+{
+    RefPtr<ThreadedScrollingTree> threadedScrollingTree = downcast<ThreadedScrollingTree>(scrollingTree());
+    threadedScrollingTree->willStartRenderingUpdate();
+    commitTreeStateIfNeeded();
+    synchronizeStateFromScrollingTree();
+}
+
+void ScrollingCoordinatorMac::didCompleteRenderingUpdate()
+{
+    downcast<ThreadedScrollingTree>(scrollingTree())->didCompleteRenderingUpdate();
 }
 
 void ScrollingCoordinatorMac::updateTiledScrollingIndicator()
@@ -149,6 +155,19 @@ void ScrollingCoordinatorMac::updateTiledScrollingIndicator()
     tiledBacking->setScrollingModeIndication(indicatorMode);
 }
 
+void ScrollingCoordinatorMac::startMonitoringWheelEvents(bool clearLatchingState)
+{
+    if (clearLatchingState)
+        scrollingTree()->clearLatchedNode();
+    auto monitor = m_page->wheelEventTestMonitor();
+    scrollingTree()->setWheelEventTestMonitor(WTFMove(monitor));
+}
+
+void ScrollingCoordinatorMac::stopMonitoringWheelEvents()
+{
+    scrollingTree()->setWheelEventTestMonitor(nullptr);
+}
+
 } // namespace WebCore
 
-#endif // ENABLE(ASYNC_SCROLLING) && PLATFORM(MAC)
+#endif // ENABLE(ASYNC_SCROLLING) && ENABLE(SCROLLING_THREAD)

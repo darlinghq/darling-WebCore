@@ -33,7 +33,6 @@
 #include "MarkupTokenizerInlines.h"
 #include <wtf/text/StringBuilder.h>
 
-using namespace WTF;
 
 namespace WebCore {
 
@@ -159,7 +158,7 @@ bool HTMLTokenizer::commitToPartialEndTag(SegmentedString& source, UChar charact
 {
     ASSERT(source.currentCharacter() == character);
     appendToTemporaryBuffer(character);
-    source.advancePastNonNewline();
+    source.advance();
 
     if (haveBufferedCharacterToken()) {
         // Emit the buffered character token.
@@ -1402,11 +1401,11 @@ String HTMLTokenizer::bufferedCharacters() const
     characters.reserveCapacity(numberOfBufferedCharacters());
     characters.append('<');
     characters.append('/');
-    characters.append(m_temporaryBuffer.data(), m_temporaryBuffer.size());
+    characters.appendCharacters(m_temporaryBuffer.data(), m_temporaryBuffer.size());
     return characters.toString();
 }
 
-void HTMLTokenizer::updateStateFor(const AtomicString& tagName)
+void HTMLTokenizer::updateStateFor(const AtomString& tagName)
 {
     if (tagName == textareaTag || tagName == titleTag)
         m_state = RCDATAState;
@@ -1417,9 +1416,9 @@ void HTMLTokenizer::updateStateFor(const AtomicString& tagName)
     else if (tagName == styleTag
         || tagName == iframeTag
         || tagName == xmpTag
-        || (tagName == noembedTag && m_options.pluginsEnabled)
+        || (tagName == noembedTag)
         || tagName == noframesTag
-        || (tagName == noscriptTag && m_options.scriptEnabled))
+        || (tagName == noscriptTag && m_options.scriptingFlag))
         m_state = RAWTEXTState;
 }
 

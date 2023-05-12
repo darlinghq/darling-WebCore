@@ -23,18 +23,20 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef ColorSpace_h
-#define ColorSpace_h
+#pragma once
+
+namespace WTF {
+class TextStream;
+}
 
 namespace WebCore {
 
-enum ColorSpace {
-    ColorSpaceDeviceRGB,
-    ColorSpaceSRGB,
-    ColorSpaceLinearRGB,
-    ColorSpaceDisplayP3
+enum class ColorSpace : uint8_t {
+    SRGB,
+    LinearRGB,
+    DisplayP3
 };
-    
-} // namespace WebCore
 
-#endif // ColorSpace_h
+WEBCORE_EXPORT WTF::TextStream& operator<<(WTF::TextStream&, ColorSpace);
+
+} // namespace WebCore

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2017-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,24 +26,30 @@
 #pragma once
 
 #include "Color.h"
+#include <wtf/EnumTraits.h>
 
 namespace WebCore {
 
+enum class CompositionUnderlineColor : bool { GivenColor, TextColor };
+
 struct CompositionUnderline {
+
     CompositionUnderline()
     {
     }
 
-    CompositionUnderline(unsigned s, unsigned e, const Color& c, bool t) 
-        : startOffset(s)
-        , endOffset(e)
-        , color(c)
-        , thick(t)
+    CompositionUnderline(unsigned startOffset, unsigned endOffset, CompositionUnderlineColor compositionUnderlineColor, const Color& color, bool thick)
+        : startOffset(startOffset)
+        , endOffset(endOffset)
+        , compositionUnderlineColor(compositionUnderlineColor)
+        , color(color)
+        , thick(thick)
     {
     }
 
     unsigned startOffset { 0 };
     unsigned endOffset { 0 };
+    CompositionUnderlineColor compositionUnderlineColor { CompositionUnderlineColor::TextColor };
     Color color;
     bool thick { false };
 };

@@ -35,17 +35,18 @@ class HTMLTableRowsCollection;
 class HTMLTableSectionElement;
 
 class HTMLTableElement final : public HTMLElement {
+    WTF_MAKE_ISO_ALLOCATED(HTMLTableElement);
 public:
     static Ref<HTMLTableElement> create(Document&);
     static Ref<HTMLTableElement> create(const QualifiedName&, Document&);
 
-    WEBCORE_EXPORT HTMLTableCaptionElement* caption() const;
+    WEBCORE_EXPORT RefPtr<HTMLTableCaptionElement> caption() const;
     WEBCORE_EXPORT ExceptionOr<void> setCaption(RefPtr<HTMLTableCaptionElement>&&);
 
-    WEBCORE_EXPORT HTMLTableSectionElement* tHead() const;
+    WEBCORE_EXPORT RefPtr<HTMLTableSectionElement> tHead() const;
     WEBCORE_EXPORT ExceptionOr<void> setTHead(RefPtr<HTMLTableSectionElement>&&);
 
-    WEBCORE_EXPORT HTMLTableSectionElement* tFoot() const;
+    WEBCORE_EXPORT RefPtr<HTMLTableSectionElement> tFoot() const;
     WEBCORE_EXPORT ExceptionOr<void> setTFoot(RefPtr<HTMLTableSectionElement>&&);
 
     WEBCORE_EXPORT Ref<HTMLTableSectionElement> createTHead();
@@ -61,18 +62,18 @@ public:
     WEBCORE_EXPORT Ref<HTMLCollection> rows();
     WEBCORE_EXPORT Ref<HTMLCollection> tBodies();
 
-    const AtomicString& rules() const;
-    const AtomicString& summary() const;
+    const AtomString& rules() const;
+    const AtomString& summary() const;
 
-    const StyleProperties* additionalCellStyle();
-    const StyleProperties* additionalGroupStyle(bool rows);
+    const StyleProperties* additionalCellStyle() const;
+    const StyleProperties* additionalGroupStyle(bool rows) const;
 
 private:
     HTMLTableElement(const QualifiedName&, Document&);
 
-    void parseAttribute(const QualifiedName&, const AtomicString&) final;
+    void parseAttribute(const QualifiedName&, const AtomString&) final;
     bool isPresentationAttribute(const QualifiedName&) const final;
-    void collectStyleForPresentationAttribute(const QualifiedName&, const AtomicString&, MutableStyleProperties&) final;
+    void collectStyleForPresentationAttribute(const QualifiedName&, const AtomString&, MutableStyleProperties&) final;
     bool isURLAttribute(const Attribute&) const final;
 
     // Used to obtain either a solid or outset border decl and to deal with the frame and rules attributes.
@@ -85,7 +86,7 @@ private:
 
     CellBorders cellBorders() const;
 
-    RefPtr<StyleProperties> createSharedCellStyle();
+    Ref<StyleProperties> createSharedCellStyle() const;
 
     HTMLTableSectionElement* lastBody() const;
 
@@ -94,7 +95,7 @@ private:
     bool m_frameAttr { false }; // Implies a thin border width if no border is set and then a certain set of solid/hidden borders based off the value.
     TableRules m_rulesAttr { UnsetRules }; // Implies a thin border width, a collapsing border model, and all borders on the table becoming set to hidden (if frame/border are present, to none otherwise).
     unsigned short m_padding { 1 };
-    RefPtr<StyleProperties> m_sharedCellStyle;
+    mutable RefPtr<const StyleProperties> m_sharedCellStyle;
 };
 
 } //namespace

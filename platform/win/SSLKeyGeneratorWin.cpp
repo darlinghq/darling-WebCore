@@ -28,13 +28,13 @@
 
 namespace WebCore {
 
-void WebCore::getSupportedKeySizes(Vector<String>& v)
+void getSupportedKeySizes(Vector<String>& v)
 {
     // FIXME: Strings should be localizable.
     v.append("High Grade");
 }
 
-String WebCore::signedPublicKeyAndChallengeString(unsigned index, const String& challenge, const URL& url)
+String signedPublicKeyAndChallengeString(unsigned index, const String& challenge, const URL& url)
 {
     String keyString;
 
@@ -59,19 +59,18 @@ String WebCore::signedPublicKeyAndChallengeString(unsigned index, const String& 
         if (!CryptExportPublicKeyInfo(hContext, AT_KEYEXCHANGE, X509_ASN_ENCODING, pPubInfo, &dwPubInfoLength))
             break;
 
-        CERT_KEYGEN_REQUEST_INFO requestInfo = { 0 };
+        CERT_KEYGEN_REQUEST_INFO requestInfo { };
         requestInfo.dwVersion = CERT_KEYGEN_REQUEST_V1;
-        requestInfo.pwszChallengeString = L"";
         requestInfo.SubjectPublicKeyInfo = *pPubInfo;
 
         String localChallenge = challenge;
 
         // Windows API won't write to our buffer, although it's not declared with const.
-        const Vector<UChar>& localChallengeWide = localChallenge.charactersWithNullTermination();
+        auto localChallengeWide = localChallenge.wideCharacters();
         requestInfo.pwszChallengeString = const_cast<wchar_t*>(localChallengeWide.data());
 
-        CRYPT_ALGORITHM_IDENTIFIER signAlgo = { 0 };
-        signAlgo.pszObjId = szOID_RSA_SHA1RSA;
+        CRYPT_ALGORITHM_IDENTIFIER signAlgo { };
+        signAlgo.pszObjId = const_cast<char*>(szOID_RSA_SHA1RSA);
 
         DWORD dwEncodedLength;
         if (!CryptSignAndEncodeCertificate(hContext, AT_KEYEXCHANGE, X509_ASN_ENCODING, X509_KEYGEN_REQUEST_TO_BE_SIGNED, &requestInfo, &signAlgo, 0, 0, &dwEncodedLength))

@@ -25,8 +25,8 @@
 
 #pragma once
 
-#include "URL.h"
 #include <wtf/Optional.h>
+#include <wtf/URL.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -47,29 +47,27 @@ public:
 
     struct WebContent {
         WebContent();
-        ~WebContent();
+        WEBCORE_EXPORT ~WebContent();
 
 #if PLATFORM(COCOA)
+        String contentOrigin;
         bool canSmartCopyOrDelete;
         RefPtr<SharedBuffer> dataInWebArchiveFormat;
         RefPtr<SharedBuffer> dataInRTFDFormat;
         RefPtr<SharedBuffer> dataInRTFFormat;
         RefPtr<SharedBuffer> dataInAttributedStringFormat;
-        // FIXME: Why don't we want this on iOS?
-#if PLATFORM(MAC)
         String dataInHTMLFormat;
-#endif
         String dataInStringFormat;
         Vector<String> clientTypes;
         Vector<RefPtr<SharedBuffer>> clientData;
 #endif
     };
 
-    const std::optional<PlainText>& plainText() const { return m_plainText; }
+    const Optional<PlainText>& plainText() const { return m_plainText; }
     void setPlainText(PlainText);
 
-    struct URL {
-        WebCore::URL url;
+    struct URLData {
+        URL url;
         String title;
 #if PLATFORM(MAC)
         String userVisibleForm;
@@ -78,16 +76,16 @@ public:
 #endif
     };
 
-    const std::optional<URL>& url() const { return m_url; }
-    void setURL(URL);
+    const Optional<URLData>& urlData() const { return m_url; }
+    void setURLData(URLData);
 
-    const std::optional<WebContent>& webContent() const { return m_webContent; }
+    const Optional<WebContent>& webContent() const { return m_webContent; }
     void setWebContent(WebContent);
 
 private:
-    std::optional<PlainText> m_plainText;
-    std::optional<URL> m_url;
-    std::optional<WebContent> m_webContent;
+    Optional<PlainText> m_plainText;
+    Optional<URLData> m_url;
+    Optional<WebContent> m_webContent;
 };
 
 }

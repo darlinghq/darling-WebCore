@@ -26,36 +26,20 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
  
-#include "config.h"
-#include "ResourceLoader.h"
+#import "config.h"
+#import "ResourceLoader.h"
 
-#include "CFNetworkSPI.h"
-#include "FrameLoader.h"
-#include "FrameLoaderClient.h"
-#include "SharedBuffer.h"
+#import "FrameLoader.h"
+#import "FrameLoaderClient.h"
+#import <wtf/CompletionHandler.h>
 
 namespace WebCore {
 
-#if USE(CFURLCONNECTION)
-
-CFCachedURLResponseRef ResourceLoader::willCacheResponse(ResourceHandle*, CFCachedURLResponseRef cachedResponse)
+void ResourceLoader::willCacheResponseAsync(ResourceHandle*, NSCachedURLResponse* response, CompletionHandler<void(NSCachedURLResponse *)>&& completionHandler)
 {
-    if (m_options.sendLoadCallbacks == DoNotSendCallbacks)
-        return nullptr;
-
-    RetainPtr<NSCachedURLResponse> nsCachedResponse = adoptNS([[NSCachedURLResponse alloc] _initWithCFCachedURLResponse:cachedResponse]);
-    return [frameLoader()->client().willCacheResponse(documentLoader(), identifier(), nsCachedResponse.get()) _CFCachedURLResponse];
+    if (m_options.sendLoadCallbacks == SendCallbackPolicy::DoNotSendCallbacks)
+        return completionHandler(nullptr);
+    frameLoader()->client().willCacheResponse(documentLoader(), identifier(), response, WTFMove(completionHandler));
 }
-
-#else
-
-NSCachedURLResponse* ResourceLoader::willCacheResponse(ResourceHandle*, NSCachedURLResponse* response)
-{
-    if (m_options.sendLoadCallbacks == DoNotSendCallbacks)
-        return nullptr;
-    return frameLoader()->client().willCacheResponse(documentLoader(), identifier(), response);
-}
-
-#endif
 
 }

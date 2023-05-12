@@ -57,10 +57,8 @@ extern "C" {
 #define TURBO_JPEG_RGB_SWIZZLE
 inline J_COLOR_SPACE rgbOutputColorSpace() { return JCS_EXT_BGRA; }
 inline bool turboSwizzled(J_COLOR_SPACE colorSpace) { return colorSpace == JCS_EXT_RGBA || colorSpace == JCS_EXT_BGRA; }
-inline bool colorSpaceHasAlpha(J_COLOR_SPACE colorSpace) { return turboSwizzled(colorSpace); }
 #else
 inline J_COLOR_SPACE rgbOutputColorSpace() { return JCS_RGB; }
-inline bool colorSpaceHasAlpha(J_COLOR_SPACE) { return false; }
 #endif
 
 #if USE(LOW_QUALITY_IMAGE_NO_JPEG_DITHERING)
@@ -193,7 +191,7 @@ static ImageOrientation readImageOrientation(jpeg_decompress_struct* info)
         }
     }
 
-    return ImageOrientation();
+    return ImageOrientation::None;
 }
 
 class JPEGImageReader {
@@ -268,7 +266,7 @@ public:
         m_bytesToSkip = std::max(numBytes - bytesToSkip, static_cast<long>(0));
     }
 
-    bool decode(const SharedBuffer& data, bool onlySize)
+    bool decode(const SharedBuffer::DataSegment& data, bool onlySize)
     {
         m_decodingSizeOnly = onlySize;
 
@@ -300,14 +298,6 @@ public:
             case JCS_YCbCr:
                 // libjpeg can convert GRAYSCALE and YCbCr image pixels to RGB.
                 m_info.out_color_space = rgbOutputColorSpace();
-#if defined(TURBO_JPEG_RGB_SWIZZLE)
-                if (m_info.saw_JFIF_marker)
-                    break;
-                // FIXME: Swizzle decoding does not support Adobe transform=0
-                // images (yet), so revert to using JSC_RGB in that case.
-                if (m_info.saw_Adobe_marker && !m_info.Adobe_transform)
-                    m_info.out_color_space = JCS_RGB;
-#endif
                 break;
             case JCS_CMYK:
             case JCS_YCCK:
@@ -327,12 +317,6 @@ public:
 
             m_decoder->setOrientation(readImageOrientation(info()));
 
-#if ENABLE(IMAGE_DECODER_DOWN_SAMPLING) && defined(TURBO_JPEG_RGB_SWIZZLE)
-            // There's no point swizzle decoding if image down sampling will
-            // be applied. Revert to using JSC_RGB in that case.
-            if (m_decoder->willDownSample() && turboSwizzled(m_info.out_color_space))
-                m_info.out_color_space = JCS_RGB;
-#endif
             // Don't allocate a giant and superfluous memory buffer when the
             // image is a sequential JPEG.
             m_info.buffered_image = jpeg_has_multiple_scans(&m_info);
@@ -354,7 +338,7 @@ public:
                 m_info.src->bytes_in_buffer = 0;
                 return true;
             }
-        // FALL THROUGH
+            FALLTHROUGH;
 
         case JPEG_START_DECOMPRESS:
             // Set parameters for decompression.
@@ -372,7 +356,7 @@ public:
 
             // If this is a progressive JPEG ...
             m_state = (m_info.buffered_image) ? JPEG_DECOMPRESS_PROGRESSIVE : JPEG_DECOMPRESS_SEQUENTIAL;
-        // FALL THROUGH
+            FALLTHROUGH;
 
         case JPEG_DECOMPRESS_SEQUENTIAL:
             if (m_state == JPEG_DECOMPRESS_SEQUENTIAL) {
@@ -384,7 +368,7 @@ public:
                 ASSERT(m_info.output_scanline == m_info.output_height);
                 m_state = JPEG_DONE;
             }
-        // FALL THROUGH
+            FALLTHROUGH;
 
         case JPEG_DECOMPRESS_PROGRESSIVE:
             if (m_state == JPEG_DECOMPRESS_PROGRESSIVE) {
@@ -438,7 +422,7 @@ public:
 
                 m_state = JPEG_DONE;
             }
-        // FALL THROUGH
+            FALLTHROUGH;
 
         case JPEG_DONE:
             // Finish decompression.
@@ -502,32 +486,21 @@ void term_source(j_decompress_ptr jd)
 }
 
 JPEGImageDecoder::JPEGImageDecoder(AlphaOption alphaOption, GammaAndColorProfileOption gammaAndColorProfileOption)
-    : ImageDecoder(alphaOption, gammaAndColorProfileOption)
+    : ScalableImageDecoder(alphaOption, gammaAndColorProfileOption)
 {
 }
 
-JPEGImageDecoder::~JPEGImageDecoder()
-{
-}
+JPEGImageDecoder::~JPEGImageDecoder() = default;
 
-bool JPEGImageDecoder::setSize(const IntSize& size)
-{
-    if (!ImageDecoder::setSize(size))
-        return false;
-
-    prepareScaleDataIfNecessary();
-    return true;
-}
-
-ImageFrame* JPEGImageDecoder::frameBufferAtIndex(size_t index)
+ScalableImageDecoderFrame* JPEGImageDecoder::frameBufferAtIndex(size_t index)
 {
     if (index)
         return 0;
 
     if (m_frameBufferCache.isEmpty())
-        m_frameBufferCache.resize(1);
+        m_frameBufferCache.grow(1);
 
-    ImageFrame& frame = m_frameBufferCache[0];
+    auto& frame = m_frameBufferCache[0];
     if (!frame.isComplete())
         decode(false, isAllDataReceived());
     return &frame;
@@ -536,11 +509,11 @@ ImageFrame* JPEGImageDecoder::frameBufferAtIndex(size_t index)
 bool JPEGImageDecoder::setFailed()
 {
     m_reader = nullptr;
-    return ImageDecoder::setFailed();
+    return ScalableImageDecoder::setFailed();
 }
 
 template <J_COLOR_SPACE colorSpace>
-void setPixel(ImageFrame& buffer, RGBA32* currentAddress, JSAMPARRAY samples, int column)
+void setPixel(ScalableImageDecoderFrame& buffer, uint32_t* currentAddress, JSAMPARRAY samples, int column)
 {
     JSAMPLE* jsample = *samples + column * (colorSpace == JCS_RGB ? 3 : 4);
 
@@ -564,12 +537,12 @@ void setPixel(ImageFrame& buffer, RGBA32* currentAddress, JSAMPARRAY samples, in
     }
 }
 
-template <J_COLOR_SPACE colorSpace, bool isScaled>
-bool JPEGImageDecoder::outputScanlines(ImageFrame& buffer)
+template <J_COLOR_SPACE colorSpace>
+bool JPEGImageDecoder::outputScanlines(ScalableImageDecoderFrame& buffer)
 {
     JSAMPARRAY samples = m_reader->samples();
     jpeg_decompress_struct* info = m_reader->info();
-    int width = isScaled ? m_scaledColumns.size() : info->output_width;
+    int width = info->output_width;
 
     while (info->output_scanline < info->output_height) {
         // jpeg_read_scanlines will increase the scanline counter, so we
@@ -579,23 +552,13 @@ bool JPEGImageDecoder::outputScanlines(ImageFrame& buffer)
         if (jpeg_read_scanlines(info, samples, 1) != 1)
             return false;
 
-        int destY = scaledY(sourceY);
-        if (destY < 0)
-            continue;
-
-        RGBA32* currentAddress = buffer.backingStore()->pixelAt(0, destY);
+        auto* currentAddress = buffer.backingStore()->pixelAt(0, sourceY);
         for (int x = 0; x < width; ++x) {
-            setPixel<colorSpace>(buffer, currentAddress, samples, isScaled ? m_scaledColumns[x] : x);
+            setPixel<colorSpace>(buffer, currentAddress, samples, x);
             ++currentAddress;
         }
     }
     return true;
-}
-
-template <J_COLOR_SPACE colorSpace>
-bool JPEGImageDecoder::outputScanlines(ImageFrame& buffer)
-{
-    return m_scaled ? outputScanlines<colorSpace, true>(buffer) : outputScanlines<colorSpace, false>(buffer);
 }
 
 bool JPEGImageDecoder::outputScanlines()
@@ -604,9 +567,9 @@ bool JPEGImageDecoder::outputScanlines()
         return false;
 
     // Initialize the framebuffer if needed.
-    ImageFrame& buffer = m_frameBufferCache[0];
+    auto& buffer = m_frameBufferCache[0];
     if (buffer.isInvalid()) {
-        if (!buffer.initialize(scaledSize(), m_premultiplyAlpha))
+        if (!buffer.initialize(size(), m_premultiplyAlpha))
             return setFailed();
         buffer.setDecodingStatus(DecodingStatus::Partial);
         // The buffer is transparent outside the decoded area while the image is
@@ -617,7 +580,7 @@ bool JPEGImageDecoder::outputScanlines()
     jpeg_decompress_struct* info = m_reader->info();
 
 #if defined(TURBO_JPEG_RGB_SWIZZLE)
-    if (!m_scaled && turboSwizzled(info->out_color_space)) {
+    if (turboSwizzled(info->out_color_space)) {
         while (info->output_scanline < info->output_height) {
             unsigned char* row = reinterpret_cast<unsigned char*>(buffer.backingStore()->pixelAt(0, info->output_scanline));
             if (jpeg_read_scanlines(info, &row, 1) != 1)
@@ -628,7 +591,7 @@ bool JPEGImageDecoder::outputScanlines()
 #endif
 
     switch (info->out_color_space) {
-    // The code inside outputScanlines<int, bool> will be executed
+    // The code inside outputScanlines<int> will be executed
     // for each pixel, so we want to avoid any extra comparisons there.
     // That is why we use template and template specializations here so
     // the proper code will be generated at compile time.
@@ -650,7 +613,7 @@ void JPEGImageDecoder::jpegComplete()
 
     // Hand back an appropriately sized buffer, even if the image ended up being
     // empty.
-    ImageFrame& buffer = m_frameBufferCache[0];
+    auto& buffer = m_frameBufferCache[0];
     buffer.setHasAlpha(false);
     buffer.setDecodingStatus(DecodingStatus::Complete);
 }
@@ -661,7 +624,7 @@ void JPEGImageDecoder::decode(bool onlySize, bool allDataReceived)
         return;
 
     if (!m_reader)
-        m_reader = std::make_unique<JPEGImageReader>(this);
+        m_reader = makeUnique<JPEGImageReader>(this);
 
     // If we couldn't decode the image but we've received all the data, decoding
     // has failed.

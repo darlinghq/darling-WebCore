@@ -30,17 +30,13 @@
 #include "Navigator.h"
 #include "Page.h"
 
-using namespace JSC;
 
 namespace WebCore {
+using namespace JSC;
 
-NavigatorWebDriver::NavigatorWebDriver()
-{
-}
+NavigatorWebDriver::NavigatorWebDriver() = default;
 
-NavigatorWebDriver::~NavigatorWebDriver()
-{
-}
+NavigatorWebDriver::~NavigatorWebDriver() = default;
 
 const char* NavigatorWebDriver::supplementName()
 {
@@ -60,7 +56,7 @@ NavigatorWebDriver* NavigatorWebDriver::from(Navigator* navigator)
 {
     NavigatorWebDriver* supplement = static_cast<NavigatorWebDriver*>(Supplement<Navigator>::from(navigator, supplementName()));
     if (!supplement) {
-        auto newSupplement = std::make_unique<NavigatorWebDriver>();
+        auto newSupplement = makeUnique<NavigatorWebDriver>();
         supplement = newSupplement.get();
         provideTo(navigator, supplementName(), WTFMove(newSupplement));
     }

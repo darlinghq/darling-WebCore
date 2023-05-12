@@ -35,10 +35,10 @@ namespace WebCore {
 
 class IDBActiveDOMObject : public ActiveDOMObject {
 public:
-    ThreadIdentifier originThreadID() const { return m_originThreadID; }
+    Thread& originThread() const { return m_originThread.get(); }
 
     void contextDestroyed() final {
-        ASSERT(currentThread() == m_originThreadID);
+        ASSERT(canCurrentThreadAccessThreadLocalData(originThread()));
 
         Locker<Lock> lock(m_scriptExecutionContextLock);
         ActiveDOMObject::contextDestroyed();
@@ -47,10 +47,10 @@ public:
     template<typename T, typename... Parameters, typename... Arguments>
     void performCallbackOnOriginThread(T& object, void (T::*method)(Parameters...), Arguments&&... arguments)
     {
-        ASSERT(originThreadID() == object.originThreadID());
+        ASSERT(&originThread() == &object.originThread());
 
-        if (object.originThreadID() == currentThread()) {
-            (object.*method)(arguments...);
+        if (canCurrentThreadAccessThreadLocalData(object.originThread())) {
+            (object.*method)(std::forward<Arguments>(arguments)...);
             return;
         }
 
@@ -65,7 +65,7 @@ public:
 
     void callFunctionOnOriginThread(WTF::Function<void ()>&& function)
     {
-        if (originThreadID() == currentThread()) {
+        if (canCurrentThreadAccessThreadLocalData(originThread())) {
             function();
             return;
         }
@@ -87,7 +87,7 @@ protected:
     }
 
 private:
-    ThreadIdentifier m_originThreadID { currentThread() };
+    Ref<Thread> m_originThread { Thread::current() };
     Lock m_scriptExecutionContextLock;
 };
 

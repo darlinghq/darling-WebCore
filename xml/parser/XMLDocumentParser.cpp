@@ -31,6 +31,7 @@
 #include "Document.h"
 #include "DocumentFragment.h"
 #include "DocumentType.h"
+#include "ElementAncestorIterator.h"
 #include "Frame.h"
 #include "FrameLoader.h"
 #include "FrameView.h"
@@ -43,6 +44,7 @@
 #include "ResourceError.h"
 #include "ResourceRequest.h"
 #include "ResourceResponse.h"
+#include "SVGForeignObjectElement.h"
 #include "SVGNames.h"
 #include "SVGStyleElement.h"
 #include "ScriptElement.h"
@@ -50,8 +52,8 @@
 #include "StyleScope.h"
 #include "TextResourceDecoder.h"
 #include "TreeDepthLimit.h"
+#include "XMLNSNames.h"
 #include <wtf/Ref.h>
-#include <wtf/StringExtras.h>
 #include <wtf/Threading.h>
 #include <wtf/Vector.h>
 
@@ -123,13 +125,13 @@ void XMLDocumentParser::append(RefPtr<StringImpl>&& inputSource)
     doWrite(source);
 
     // After parsing, dispatch image beforeload events.
-    ImageLoader::dispatchPendingBeforeLoadEvents();
+    ImageLoader::dispatchPendingBeforeLoadEvents(nullptr);
 }
 
 void XMLDocumentParser::handleError(XMLErrors::ErrorType type, const char* m, TextPosition position)
 {
     if (!m_xmlErrors)
-        m_xmlErrors = std::make_unique<XMLErrors>(*document());
+        m_xmlErrors = makeUnique<XMLErrors>(*document());
     m_xmlErrors->handleError(type, m, position);
     if (type != XMLErrors::warning)
         m_sawError = true;
@@ -148,11 +150,6 @@ void XMLDocumentParser::createLeafTextNode()
     m_currentNode->parserAppendChild(*m_leafTextNode);
 }
 
-static inline String toString(const xmlChar* string, size_t size) 
-{ 
-    return String::fromUTF8(reinterpret_cast<const char*>(string), size); 
-}
-
 bool XMLDocumentParser::updateLeafTextNode()
 {
     if (isStopped())
@@ -162,7 +159,7 @@ bool XMLDocumentParser::updateLeafTextNode()
         return true;
 
     // This operation might fire mutation event, see below.
-    m_leafTextNode->appendData(toString(m_bufferedText.data(), m_bufferedText.size()));
+    m_leafTextNode->appendData(String::fromUTF8(reinterpret_cast<const char*>(m_bufferedText.data()), m_bufferedText.size()));
     m_bufferedText = { };
 
     m_leafTextNode = nullptr;
@@ -195,7 +192,7 @@ void XMLDocumentParser::end()
     if (m_parserPaused)
         return;
 
-    if (m_sawError) {
+    if (m_sawError && !isStopped()) {
         insertErrorMessageBlock();
         if (isDetached()) // Inserting an error message may have ran arbitrary scripts.
             return;
@@ -247,11 +244,6 @@ void XMLDocumentParser::notifyFinished(PendingScript& pendingScript)
         resumeParsing();
 }
 
-bool XMLDocumentParser::isWaitingForScripts() const
-{
-    return m_pendingScript;
-}
-
 void XMLDocumentParser::pauseParsing()
 {
     ASSERT(!m_parserPaused);
@@ -262,6 +254,38 @@ void XMLDocumentParser::pauseParsing()
     m_parserPaused = true;
 }
 
+struct XMLParsingNamespaces {
+    AtomString defaultNamespace;
+    HashMap<AtomString, AtomString> prefixNamespaces;
+};
+
+static XMLParsingNamespaces findXMLParsingNamespaces(Element* contextElement)
+{
+    if (!contextElement)
+        return { };
+
+    XMLParsingNamespaces result;
+
+    bool stopLookingForDefaultNamespace = false;
+
+    for (auto& element : lineageOfType<Element>(*contextElement)) {
+        if (is<SVGForeignObjectElement>(element))
+            stopLookingForDefaultNamespace = true;
+        else if (!stopLookingForDefaultNamespace)
+            result.defaultNamespace = element.namespaceURI();
+
+        if (!element.hasAttributes())
+            continue;
+
+        for (auto& attribute : element.attributesIterator()) {
+            if (attribute.prefix() == xmlnsAtom())
+                result.prefixNamespaces.set(attribute.localName(), attribute.value());
+        }
+    }
+
+    return result;
+}
+
 bool XMLDocumentParser::parseDocumentFragment(const String& chunk, DocumentFragment& fragment, Element* contextElement, ParserContentPolicy parserContentPolicy)
 {
     if (!chunk.length())
@@ -270,12 +294,13 @@ bool XMLDocumentParser::parseDocumentFragment(const String& chunk, DocumentFragm
     // FIXME: We need to implement the HTML5 XML Fragment parsing algorithm:
     // http://www.whatwg.org/specs/web-apps/current-work/multipage/the-xhtml-syntax.html#xml-fragment-parsing-algorithm
     // For now we have a hack for script/style innerHTML support:
-    if (contextElement && (contextElement->hasLocalName(HTMLNames::scriptTag.localName()) || contextElement->hasLocalName(HTMLNames::styleTag.localName()))) {
+    if (contextElement && (contextElement->hasLocalName(HTMLNames::scriptTag->localName()) || contextElement->hasLocalName(HTMLNames::styleTag->localName()))) {
         fragment.parserAppendChild(fragment.document().createTextNode(chunk));
         return true;
     }
 
-    RefPtr<XMLDocumentParser> parser = XMLDocumentParser::create(fragment, contextElement, parserContentPolicy);
+    auto namespaces = findXMLParsingNamespaces(contextElement);
+    auto parser = XMLDocumentParser::create(fragment, WTFMove(namespaces.prefixNamespaces), namespaces.defaultNamespace, parserContentPolicy);
     bool wellFormed = parser->appendFragmentSource(chunk);
     // Do not call finish(). The finish() and doEnd() implementations touch the main document and loader and can cause crashes in the fragment case.
     parser->detach(); // Allows ~DocumentParser to assert it was detached before destruction.

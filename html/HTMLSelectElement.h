@@ -33,6 +33,7 @@ namespace WebCore {
 class HTMLOptionsCollection;
 
 class HTMLSelectElement : public HTMLFormControlElementWithState, private TypeAheadDataSource {
+    WTF_MAKE_ISO_ALLOCATED(HTMLSelectElement);
 public:
     static Ref<HTMLSelectElement> create(const QualifiedName&, Document&, HTMLFormElement*);
 
@@ -53,7 +54,7 @@ public:
 
     using OptionOrOptGroupElement = Variant<RefPtr<HTMLOptionElement>, RefPtr<HTMLOptGroupElement>>;
     using HTMLElementOrInt = Variant<RefPtr<HTMLElement>, int>;
-    WEBCORE_EXPORT ExceptionOr<void> add(const OptionOrOptGroupElement&, const std::optional<HTMLElementOrInt>& before);
+    WEBCORE_EXPORT ExceptionOr<void> add(const OptionOrOptGroupElement&, const Optional<HTMLElementOrInt>& before);
 
     using Node::remove;
     WEBCORE_EXPORT void remove(int);
@@ -72,7 +73,7 @@ public:
 
     WEBCORE_EXPORT const Vector<HTMLElement*>& listItems() const;
 
-    void accessKeyAction(bool sendMouseEvents) final;
+    bool accessKeyAction(bool sendMouseEvents) final;
     void accessKeySetSelectedIndex(int);
 
     WEBCORE_EXPORT void setMultiple(bool);
@@ -83,7 +84,7 @@ public:
     ExceptionOr<void> setItem(unsigned index, HTMLOptionElement*);
     ExceptionOr<void> setLength(unsigned);
 
-    WEBCORE_EXPORT HTMLOptionElement* namedItem(const AtomicString& name);
+    WEBCORE_EXPORT HTMLOptionElement* namedItem(const AtomString& name);
     WEBCORE_EXPORT HTMLOptionElement* item(unsigned index);
 
     void scrollToSelection();
@@ -109,9 +110,10 @@ protected:
     HTMLSelectElement(const QualifiedName&, Document&, HTMLFormElement*);
 
 private:
-    const AtomicString& formControlType() const final;
-    
-    bool isKeyboardFocusable(KeyboardEvent&) const final;
+    const AtomString& formControlType() const final;
+
+    int defaultTabIndex() const final;
+    bool isKeyboardFocusable(KeyboardEvent*) const final;
     bool isMouseFocusable() const final;
 
     void dispatchFocusEvent(RefPtr<Element>&& oldFocusedElement, FocusDirection) final;
@@ -122,15 +124,17 @@ private:
     bool isEnumeratable() const final { return true; }
     bool supportLabels() const final { return true; }
 
+    bool isInteractiveContent() const final { return true; }
+
     FormControlState saveFormControlState() const final;
     void restoreFormControlState(const FormControlState&) final;
 
-    void parseAttribute(const QualifiedName&, const AtomicString&) final;
+    void parseAttribute(const QualifiedName&, const AtomString&) final;
     bool isPresentationAttribute(const QualifiedName&) const final;
 
     bool childShouldCreateRenderer(const Node&) const final;
     RenderPtr<RenderElement> createElementRenderer(RenderStyle&&, const RenderTreePosition&) final;
-    bool appendFormData(FormDataList&, bool) final;
+    bool appendFormData(DOMFormData&, bool) final;
 
     void reset() final;
 
@@ -147,7 +151,7 @@ private:
     void typeAheadFind(KeyboardEvent&);
     void saveLastSelection();
 
-    InsertionNotificationRequest insertedInto(ContainerNode&) final;
+    InsertedIntoAncestorResult insertedIntoAncestor(InsertionType, ContainerNode&) final;
 
     bool isOptionalFormControl() const final { return !isRequiredFormControl(); }
     bool isRequiredFormControl() const final;
@@ -162,7 +166,7 @@ private:
     typedef unsigned SelectOptionFlags;
     void selectOption(int optionIndex, SelectOptionFlags = 0);
     void deselectItemsWithoutValidation(HTMLElement* elementToExclude = nullptr);
-    void parseMultipleAttribute(const AtomicString&);
+    void parseMultipleAttribute(const AtomString&);
     int lastSelectedListIndex() const;
     void updateSelectedState(int listIndex, bool multi, bool shift);
     void menuListDefaultEventHandler(Event&);

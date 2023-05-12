@@ -35,7 +35,7 @@ IDBObjectStoreInfo::IDBObjectStoreInfo()
 {
 }
 
-IDBObjectStoreInfo::IDBObjectStoreInfo(uint64_t identifier, const String& name, std::optional<IDBKeyPath>&& keyPath, bool autoIncrement)
+IDBObjectStoreInfo::IDBObjectStoreInfo(uint64_t identifier, const String& name, Optional<IDBKeyPath>&& keyPath, bool autoIncrement)
     : m_identifier(identifier)
     , m_name(name)
     , m_keyPath(WTFMove(keyPath))
@@ -43,19 +43,17 @@ IDBObjectStoreInfo::IDBObjectStoreInfo(uint64_t identifier, const String& name, 
 {
 }
 
-IDBIndexInfo IDBObjectStoreInfo::createNewIndex(const String& name, IDBKeyPath&& keyPath, bool unique, bool multiEntry)
+IDBIndexInfo IDBObjectStoreInfo::createNewIndex(uint64_t indexID, const String& name, IDBKeyPath&& keyPath, bool unique, bool multiEntry)
 {
-    IDBIndexInfo info(++m_maxIndexID, m_identifier, name, WTFMove(keyPath), unique, multiEntry);
+    IDBIndexInfo info(indexID, m_identifier, name, WTFMove(keyPath), unique, multiEntry);
     m_indexMap.set(info.identifier(), info);
     return info;
 }
 
 void IDBObjectStoreInfo::addExistingIndex(const IDBIndexInfo& info)
 {
-    ASSERT(!m_indexMap.contains(info.identifier()));
-
-    if (info.identifier() > m_maxIndexID)
-        m_maxIndexID = info.identifier();
+    if (m_indexMap.contains(info.identifier()))
+        LOG_ERROR("Adding an index '%s' with existing Index ID", info.name().utf8().data());
 
     m_indexMap.set(info.identifier(), info);
 }
@@ -98,13 +96,8 @@ IDBObjectStoreInfo IDBObjectStoreInfo::isolatedCopy() const
 {
     IDBObjectStoreInfo result = { m_identifier, m_name.isolatedCopy(), WebCore::isolatedCopy(m_keyPath), m_autoIncrement };
 
-    for (auto& iterator : m_indexMap) {
+    for (auto& iterator : m_indexMap)
         result.m_indexMap.set(iterator.key, iterator.value.isolatedCopy());
-        if (iterator.key > result.m_maxIndexID)
-            result.m_maxIndexID = iterator.key;
-    }
-
-    ASSERT(result.m_maxIndexID == m_maxIndexID);
 
     return result;
 }
@@ -134,26 +127,21 @@ void IDBObjectStoreInfo::deleteIndex(uint64_t indexIdentifier)
 }
 
 #if !LOG_DISABLED
+
 String IDBObjectStoreInfo::loggingString(int indent) const
 {
     StringBuilder builder;
     for (int i = 0; i < indent; ++i)
         builder.append(' ');
-
-    builder.appendLiteral("Object store: ");
-    builder.append(m_name);
-    builder.appendNumber(m_identifier);
-    for (auto index : m_indexMap.values()) {
-        builder.append(index.loggingString(indent + 1));
-        builder.append('\n');
-    }
-
+    builder.append("Object store: ", m_name, m_identifier);
+    for (auto index : m_indexMap.values())
+        builder.append(index.loggingString(indent + 1), '\n');
     return builder.toString();
 }
 
 String IDBObjectStoreInfo::condensedLoggingString() const
 {
-    return String::format("<OS: %s (%" PRIu64 ")>", m_name.utf8().data(), m_identifier);
+    return makeString("<OS: ", m_name, " (", m_identifier, ")>");
 }
 
 #endif

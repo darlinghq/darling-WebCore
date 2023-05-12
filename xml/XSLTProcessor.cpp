@@ -21,10 +21,9 @@
  */
 
 #include "config.h"
+#include "XSLTProcessor.h"
 
 #if ENABLE(XSLT)
-
-#include "XSLTProcessor.h"
 
 #include "DOMImplementation.h"
 #include "CachedResourceLoader.h"
@@ -33,7 +32,6 @@
 #include "Frame.h"
 #include "FrameLoader.h"
 #include "FrameView.h"
-#include "HTMLDocument.h"
 #include "SecurityOrigin.h"
 #include "SecurityOriginPolicy.h"
 #include "Text.h"
@@ -74,10 +72,10 @@ Ref<Document> XSLTProcessor::createDocumentFromSource(const String& sourceString
 
     RefPtr<Document> result;
     if (sourceMIMEType == "text/plain") {
-        result = XMLDocument::createXHTML(frame, sourceIsDocument ? ownerDocument->url() : URL());
+        result = XMLDocument::createXHTML(frame, ownerDocument->settings(), sourceIsDocument ? ownerDocument->url() : URL());
         transformTextStringToXHTMLDocumentString(documentSource);
     } else
-        result = DOMImplementation::createDocument(sourceMIMEType, frame, sourceIsDocument ? ownerDocument->url() : URL());
+        result = DOMImplementation::createDocument(sourceMIMEType, frame, ownerDocument->settings(), sourceIsDocument ? ownerDocument->url() : URL());
 
     // Before parsing, we need to save & detach the old document and get the new document
     // in place. We have to do this only if we're rendering the result document.
@@ -87,10 +85,11 @@ Ref<Document> XSLTProcessor::createDocumentFromSource(const String& sourceString
 
         if (Document* oldDocument = frame->document()) {
             result->setTransformSourceDocument(oldDocument);
-            result->takeDOMWindowFrom(oldDocument);
+            result->takeDOMWindowFrom(*oldDocument);
             result->setSecurityOriginPolicy(oldDocument->securityOriginPolicy());
             result->setCookieURL(oldDocument->cookieURL());
             result->setFirstPartyForCookies(oldDocument->firstPartyForCookies());
+            result->setSiteForCookies(oldDocument->siteForCookies());
             result->setStrictMixedContentMode(oldDocument->isStrictMixedContentMode());
             result->contentSecurityPolicy()->copyStateFrom(oldDocument->contentSecurityPolicy());
             result->contentSecurityPolicy()->copyUpgradeInsecureRequestStateFrom(*oldDocument->contentSecurityPolicy());
@@ -99,7 +98,7 @@ Ref<Document> XSLTProcessor::createDocumentFromSource(const String& sourceString
         frame->setDocument(result.copyRef());
     }
 
-    RefPtr<TextResourceDecoder> decoder = TextResourceDecoder::create(sourceMIMEType);
+    auto decoder = TextResourceDecoder::create(sourceMIMEType);
     decoder->setEncoding(sourceEncoding.isEmpty() ? UTF8Encoding() : TextEncoding(sourceEncoding), TextResourceDecoder::EncodingFromXMLHeader);
     result->setDecoder(WTFMove(decoder));
 

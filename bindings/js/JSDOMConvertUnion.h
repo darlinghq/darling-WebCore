@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2016-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,8 +29,9 @@
 #include "JSDOMBinding.h"
 #include "JSDOMConvertBase.h"
 #include "JSDOMConvertBufferSource.h"
+#include "JSDOMConvertInterface.h"
 #include "JSDOMConvertNull.h"
-#include <runtime/IteratorOperations.h>
+#include <JavaScriptCore/IteratorOperations.h>
 #include <wtf/Variant.h>
 
 namespace WebCore {
@@ -41,7 +42,7 @@ struct ConditionalReturner;
 template<typename ReturnType>
 struct ConditionalReturner<ReturnType, true> {
     template<typename T>
-    static std::optional<ReturnType> get(T&& value)
+    static Optional<ReturnType> get(T&& value)
     {
         return ReturnType(std::forward<T>(value));
     }
@@ -50,9 +51,9 @@ struct ConditionalReturner<ReturnType, true> {
 template<typename ReturnType>
 struct ConditionalReturner<ReturnType, false> {
     template<typename T>
-    static std::optional<ReturnType> get(T&&)
+    static Optional<ReturnType> get(T&&)
     {
-        return std::nullopt;
+        return WTF::nullopt;
     }
 };
 
@@ -61,17 +62,17 @@ struct ConditionalConverter;
 
 template<typename ReturnType, typename T>
 struct ConditionalConverter<ReturnType, T, true> {
-    static std::optional<ReturnType> convert(JSC::ExecState& state, JSC::JSValue value)
+    static Optional<ReturnType> convert(JSC::JSGlobalObject& lexicalGlobalObject, JSC::JSValue value)
     {
-        return ReturnType(Converter<T>::convert(state, value));
+        return ReturnType(Converter<T>::convert(lexicalGlobalObject, value));
     }
 };
 
 template<typename ReturnType, typename T>
 struct ConditionalConverter<ReturnType, T, false> {
-    static std::optional<ReturnType> convert(JSC::ExecState&, JSC::JSValue)
+    static Optional<ReturnType> convert(JSC::JSGlobalObject&, JSC::JSValue)
     {
-        return std::nullopt;
+        return WTF::nullopt;
     }
 };
 
@@ -80,17 +81,17 @@ struct ConditionalSequenceConverter;
 
 template<typename ReturnType, typename T>
 struct ConditionalSequenceConverter<ReturnType, T, true> {
-    static std::optional<ReturnType> convert(JSC::ExecState& state, JSC::JSObject* object, JSC::JSValue method)
+    static Optional<ReturnType> convert(JSC::JSGlobalObject& lexicalGlobalObject, JSC::JSObject* object, JSC::JSValue method)
     {
-        return ReturnType(Converter<T>::convert(state, object, method));
+        return ReturnType(Converter<T>::convert(lexicalGlobalObject, object, method));
     }
 };
 
 template<typename ReturnType, typename T>
 struct ConditionalSequenceConverter<ReturnType, T, false> {
-    static std::optional<ReturnType> convert(JSC::ExecState&, JSC::JSObject*, JSC::JSValue)
+    static Optional<ReturnType> convert(JSC::JSGlobalObject&, JSC::JSObject*, JSC::JSValue)
     {
-        return std::nullopt;
+        return WTF::nullopt;
     }
 };
 
@@ -151,21 +152,27 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
     static constexpr bool hasRecordType = numberOfRecordTypes != 0;
     using RecordType = ConditionalFront<RecordTypeList, hasRecordType>;
 
-    static constexpr bool hasObjectType = (numberOfSequenceTypes + numberOfFrozenArrayTypes + numberOfDictionaryTypes + numberOfRecordTypes) > 0;
+    using ObjectTypeList = brigand::filter<TypeList, std::is_same<IDLObject, brigand::_1>>;
+    static constexpr size_t numberOfObjectTypes = brigand::size<ObjectTypeList>::value;
+    static_assert(numberOfObjectTypes == 0 || numberOfObjectTypes == 1, "There can be 0 or 1 object types in an IDLUnion.");
+    static constexpr bool hasObjectType = numberOfObjectTypes != 0;
+    using ObjectType = ConditionalFront<ObjectTypeList, hasObjectType>;
+
+    static constexpr bool hasAnyObjectType = (numberOfSequenceTypes + numberOfFrozenArrayTypes + numberOfDictionaryTypes + numberOfRecordTypes + numberOfObjectTypes) > 0;
 
     using InterfaceTypeList = brigand::filter<TypeList, IsIDLInterface<brigand::_1>>;
     using TypedArrayTypeList = brigand::filter<TypeList, IsIDLTypedArray<brigand::_1>>;
 
-    static ReturnType convert(JSC::ExecState& state, JSC::JSValue value)
+    static ReturnType convert(JSC::JSGlobalObject& lexicalGlobalObject, JSC::JSValue value)
     {
-        JSC::VM& vm = state.vm();
+        JSC::VM& vm = JSC::getVM(&lexicalGlobalObject);
         auto scope = DECLARE_THROW_SCOPE(vm);
 
         // 1. If the union type includes a nullable type and V is null or undefined, then return the IDL value null.
         constexpr bool hasNullType = brigand::any<TypeList, std::is_same<IDLNull, brigand::_1>>::value;
         if (hasNullType) {
             if (value.isUndefinedOrNull())
-                return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, IDLNull, hasNullType>::convert(state, value).value());
+                RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, IDLNull, hasNullType>::convert(lexicalGlobalObject, value).value()));
         }
         
         // 2. Let types be the flattened member types of the union type.
@@ -175,7 +182,7 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
         if (hasDictionaryType) {
             if (value.isUndefinedOrNull()) {
                 //     1. If types includes a dictionary type, then return the result of converting V to that dictionary type.
-                return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, DictionaryType, hasDictionaryType>::convert(state, value).value());
+                RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, DictionaryType, hasDictionaryType>::convert(lexicalGlobalObject, value).value()));
             }
         }
 
@@ -184,7 +191,7 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
         //     2. If types includes object, then return the IDL value that is a reference to the object V.
         //         (FIXME: Add support for object and step 4.2)
         if (brigand::any<TypeList, IsIDLInterface<brigand::_1>>::value) {
-            std::optional<ReturnType> returnValue;
+            Optional<ReturnType> returnValue;
             brigand::for_each<InterfaceTypeList>([&](auto&& type) {
                 if (returnValue)
                     return;
@@ -192,9 +199,8 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
                 using Type = typename WTF::RemoveCVAndReference<decltype(type)>::type::type;
                 using ImplementationType = typename Type::ImplementationType;
                 using RawType = typename Type::RawType;
-                using WrapperType = typename JSDOMWrapperConverterTraits<RawType>::WrapperClass;
 
-                auto castedValue = WrapperType::toWrapped(vm, value);
+                auto castedValue = JSToWrappedOverloader<RawType>::toWrapped(lexicalGlobalObject, value);
                 if (!castedValue)
                     return;
                 
@@ -204,36 +210,52 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
             if (returnValue)
                 return WTFMove(returnValue.value());
         }
-        
+
         // FIXME: Add support for steps 5 & 6.
+        //
+        // 5. If V is a DOMException platform object, then:
+        //     1. If types includes DOMException or Error, then return the result of converting V to that type.
+        //     2 If types includes object, then return the IDL value that is a reference to the object V.
+        //
+        // 6. If Type(V) is Object and V has an [[ErrorData]] internal slot), then:
+        //     1. If types includes Error, then return the result of converting V to Error.
+        //     2. If types includes object, then return the IDL value that is a reference to the object V.
+
 
         // 7. If Type(V) is Object and V has an [[ArrayBufferData]] internal slot, then:
         //     1. If types includes ArrayBuffer, then return the result of converting V to ArrayBuffer.
         //     2. If types includes object, then return the IDL value that is a reference to the object V.
-        //         (FIXME: Add support for object and step 7.2)
-        constexpr bool hasArrayBufferType = brigand::any<TypeList, std::is_same<IDLArrayBuffer, brigand::_1>>::value;
-        if (hasArrayBufferType) {
-            auto arrayBuffer = JSC::JSArrayBuffer::toWrapped(vm, value);
-            if (arrayBuffer)
-                return std::move<WTF::CheckMoveParameter>(ConditionalReturner<ReturnType, hasArrayBufferType>::get(WTFMove(arrayBuffer)).value());
+        constexpr bool hasArrayBufferType = brigand::any<TypeList, IsIDLArrayBuffer<brigand::_1>>::value;
+        if (hasArrayBufferType || hasObjectType) {
+            auto arrayBuffer = (brigand::any<TypeList, IsIDLArrayBufferAllowShared<brigand::_1>>::value) ? JSC::JSArrayBuffer::toWrappedAllowShared(vm, value) : JSC::JSArrayBuffer::toWrapped(vm, value);
+            if (arrayBuffer) {
+                if (hasArrayBufferType)
+                    return ConditionalReturner<ReturnType, hasArrayBufferType>::get(WTFMove(arrayBuffer)).value();
+                RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, ObjectType, hasObjectType>::convert(lexicalGlobalObject, value).value()));
+            }
         }
 
-        constexpr bool hasArrayBufferViewType = brigand::any<TypeList, std::is_same<IDLArrayBufferView, brigand::_1>>::value;
-        if (hasArrayBufferViewType) {
-            auto arrayBufferView = JSC::JSArrayBufferView::toWrapped(vm, value);
-            if (arrayBufferView)
-                return std::move<WTF::CheckMoveParameter>(ConditionalReturner<ReturnType, hasArrayBufferViewType>::get(WTFMove(arrayBufferView)).value());
+        constexpr bool hasArrayBufferViewType = brigand::any<TypeList, IsIDLArrayBufferView<brigand::_1>>::value;
+        if (hasArrayBufferViewType || hasObjectType) {
+            auto arrayBufferView = (brigand::any<TypeList, IsIDLArrayBufferViewAllowShared<brigand::_1>>::value) ? JSC::JSArrayBufferView::toWrappedAllowShared(vm, value) : JSC::JSArrayBufferView::toWrapped(vm, value);
+            if (arrayBufferView) {
+                if (hasArrayBufferViewType)
+                    return ConditionalReturner<ReturnType, hasArrayBufferViewType>::get(WTFMove(arrayBufferView)).value();
+                RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, ObjectType, hasObjectType>::convert(lexicalGlobalObject, value).value()));
+            }
         }
 
         // 8. If Type(V) is Object and V has a [[DataView]] internal slot, then:
         //     1. If types includes DataView, then return the result of converting V to DataView.
         //     2. If types includes object, then return the IDL value that is a reference to the object V.
-        //         (FIXME: Add support for object and step 8.2)
         constexpr bool hasDataViewType = brigand::any<TypeList, std::is_same<IDLDataView, brigand::_1>>::value;
-        if (hasDataViewType) {
+        if (hasDataViewType || hasObjectType) {
             auto dataView = JSC::JSDataView::toWrapped(vm, value);
-            if (dataView)
-                return std::move<WTF::CheckMoveParameter>(ConditionalReturner<ReturnType, hasDataViewType>::get(WTFMove(dataView)).value());
+            if (dataView) {
+                if (hasDataViewType)
+                    return ConditionalReturner<ReturnType, hasDataViewType>::get(WTFMove(dataView)).value();
+                RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, ObjectType, hasObjectType>::convert(lexicalGlobalObject, value).value()));
+            }
         }
 
         // 9. If Type(V) is Object and V has a [[TypedArrayName]] internal slot, then:
@@ -242,7 +264,7 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
         //         (FIXME: Add support for object and step 9.2)
         constexpr bool hasTypedArrayType = brigand::any<TypeList, IsIDLTypedArray<brigand::_1>>::value;
         if (hasTypedArrayType) {
-            std::optional<ReturnType> returnValue;
+            Optional<ReturnType> returnValue;
             brigand::for_each<TypedArrayTypeList>([&](auto&& type) {
                 if (returnValue)
                     return;
@@ -263,9 +285,13 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
         }
 
         // FIXME: Add support for step 10.
+        //
+        // 10. If IsCallable(V) is true, then:
+        //     1. If types includes a callback function type, then return the result of converting V to that callback function type.
+        //     2. If types includes object, then return the IDL value that is a reference to the object V.
 
         // 11. If V is any kind of object, then:
-        if (hasObjectType) {
+        if (hasAnyObjectType) {
             if (value.isCell()) {
                 JSC::JSCell* cell = value.asCell();
                 if (cell->isObject()) {
@@ -278,10 +304,10 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
                     //            sequence of that type from V and method.        
                     constexpr bool hasSequenceType = numberOfSequenceTypes != 0;
                     if (hasSequenceType) {
-                        auto method = JSC::iteratorMethod(state, object);
+                        auto method = JSC::iteratorMethod(&lexicalGlobalObject, object);
                         RETURN_IF_EXCEPTION(scope, ReturnType());
                         if (!method.isUndefined())
-                            return std::move<WTF::CheckMoveParameter>(ConditionalSequenceConverter<ReturnType, SequenceType, hasSequenceType>::convert(state, object, method).value());
+                            RELEASE_AND_RETURN(scope, (ConditionalSequenceConverter<ReturnType, SequenceType, hasSequenceType>::convert(lexicalGlobalObject, object, method).value()));
                     }
 
                     //     2. If types includes a frozen array type, then:
@@ -291,25 +317,27 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
                     //            frozen array of that type from V and method.
                     constexpr bool hasFrozenArrayType = numberOfFrozenArrayTypes != 0;
                     if (hasFrozenArrayType) {
-                        auto method = JSC::iteratorMethod(state, object);
+                        auto method = JSC::iteratorMethod(&lexicalGlobalObject, object);
                         RETURN_IF_EXCEPTION(scope, ReturnType());
                         if (!method.isUndefined())
-                            return std::move<WTF::CheckMoveParameter>(ConditionalSequenceConverter<ReturnType, FrozenArrayType, hasFrozenArrayType>::convert(state, object, method).value());
+                            RELEASE_AND_RETURN(scope, (ConditionalSequenceConverter<ReturnType, FrozenArrayType, hasFrozenArrayType>::convert(lexicalGlobalObject, object, method).value()));
                     }
 
                     //     3. If types includes a dictionary type, then return the result of
                     //        converting V to that dictionary type.
                     if (hasDictionaryType)
-                        return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, DictionaryType, hasDictionaryType>::convert(state, value).value());
+                        RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, DictionaryType, hasDictionaryType>::convert(lexicalGlobalObject, value).value()));
 
                     //     4. If types includes a record type, then return the result of converting V to that record type.
                     if (hasRecordType)
-                        return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, RecordType, hasRecordType>::convert(state, value).value());
+                        RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, RecordType, hasRecordType>::convert(lexicalGlobalObject, value).value()));
 
                     //     5. If types includes a callback interface type, then return the result of converting V to that interface type.
                     //         (FIXME: Add support for callback interface type and step 12.5)
+
                     //     6. If types includes object, then return the IDL value that is a reference to the object V.
-                    //         (FIXME: Add support for object and step 12.6)
+                    if (hasObjectType)
+                        RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, ObjectType, hasObjectType>::convert(lexicalGlobalObject, value).value()));
                 }
             }
         }
@@ -319,7 +347,7 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
         constexpr bool hasBooleanType = brigand::any<TypeList, std::is_same<IDLBoolean, brigand::_1>>::value;
         if (hasBooleanType) {
             if (value.isBoolean())
-                return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, IDLBoolean, hasBooleanType>::convert(state, value).value());
+                RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, IDLBoolean, hasBooleanType>::convert(lexicalGlobalObject, value).value()));
         }
         
         // 13. If V is a Number value, then:
@@ -327,24 +355,24 @@ template<typename... T> struct Converter<IDLUnion<T...>> : DefaultConverter<IDLU
         constexpr bool hasNumericType = brigand::size<NumericTypeList>::value != 0;
         if (hasNumericType) {
             if (value.isNumber())
-                return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, NumericType, hasNumericType>::convert(state, value).value());
+                RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, NumericType, hasNumericType>::convert(lexicalGlobalObject, value).value()));
         }
         
         // 14. If types includes a string type, then return the result of converting V to that type.
         constexpr bool hasStringType = brigand::size<StringTypeList>::value != 0;
         if (hasStringType)
-            return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, StringType, hasStringType>::convert(state, value).value());
+            RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, StringType, hasStringType>::convert(lexicalGlobalObject, value).value()));
 
         // 15. If types includes a numeric type, then return the result of converting V to that numeric type.
         if (hasNumericType)
-            return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, NumericType, hasNumericType>::convert(state, value).value());
+            RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, NumericType, hasNumericType>::convert(lexicalGlobalObject, value).value()));
 
         // 16. If types includes a boolean, then return the result of converting V to boolean.
         if (hasBooleanType)
-            return std::move<WTF::CheckMoveParameter>(ConditionalConverter<ReturnType, IDLBoolean, hasBooleanType>::convert(state, value).value());
+            RELEASE_AND_RETURN(scope, (ConditionalConverter<ReturnType, IDLBoolean, hasBooleanType>::convert(lexicalGlobalObject, value).value()));
 
         // 17. Throw a TypeError.
-        throwTypeError(&state, scope);
+        throwTypeError(&lexicalGlobalObject, scope);
         return ReturnType();
     }
 };
@@ -359,21 +387,30 @@ template<typename... T> struct JSConverter<IDLUnion<T...>> {
 
     using Sequence = brigand::make_sequence<brigand::ptrdiff_t<0>, WTF::variant_size<ImplementationType>::value>;
 
-    static JSC::JSValue convert(JSC::ExecState& state, JSDOMGlobalObject& globalObject, const ImplementationType& variant)
+    static JSC::JSValue convert(JSC::JSGlobalObject& lexicalGlobalObject, JSDOMGlobalObject& globalObject, const ImplementationType& variant)
     {
         auto index = variant.index();
 
-        std::optional<JSC::JSValue> returnValue;
+        Optional<JSC::JSValue> returnValue;
         brigand::for_each<Sequence>([&](auto&& type) {
             using I = typename WTF::RemoveCVAndReference<decltype(type)>::type::type;
             if (I::value == index) {
                 ASSERT(!returnValue);
-                returnValue = toJS<brigand::at<TypeList, I>>(state, globalObject, WTF::get<I::value>(variant));
+                returnValue = toJS<brigand::at<TypeList, I>>(lexicalGlobalObject, globalObject, WTF::get<I::value>(variant));
             }
         });
 
         ASSERT(returnValue);
         return returnValue.value();
+    }
+};
+
+// BufferSource specialization. In WebKit, BufferSource is defined as IDLUnion<IDLArrayBufferView, IDLArrayBuffer> as a hack, and it is not compatible to
+// annotation described in WebIDL.
+template<> struct Converter<IDLAllowSharedAdaptor<IDLUnion<IDLArrayBufferView, IDLArrayBuffer>>> : DefaultConverter<IDLUnion<IDLArrayBufferView, IDLArrayBuffer>> {
+    static auto convert(JSC::JSGlobalObject& lexicalGlobalObject, JSC::JSValue value) -> decltype(auto)
+    {
+        return Converter<IDLUnion<IDLAllowSharedAdaptor<IDLArrayBufferView>, IDLAllowSharedAdaptor<IDLArrayBuffer>>>::convert(lexicalGlobalObject, value);
     }
 };
 

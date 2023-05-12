@@ -30,6 +30,7 @@
 #include "StyleChange.h"
 #include "StyleSharingResolver.h"
 #include "StyleUpdate.h"
+#include "Styleable.h"
 #include <wtf/Function.h>
 #include <wtf/Ref.h>
 
@@ -40,10 +41,12 @@ class Element;
 class Node;
 class RenderStyle;
 class ShadowRoot;
-class StyleResolver;
 
 namespace Style {
 
+class Resolver;
+
+DECLARE_ALLOCATOR_WITH_HEAP_IDENTIFIER(TreeResolverScope);
 class TreeResolver {
 public:
     TreeResolver(Document&);
@@ -51,16 +54,19 @@ public:
 
     std::unique_ptr<Update> resolve();
 
-    static ElementUpdate createAnimatedElementUpdate(std::unique_ptr<RenderStyle>, Element&, Change parentChange);
-
 private:
-    std::unique_ptr<RenderStyle> styleForElement(Element&, const RenderStyle& inheritedStyle);
+    std::unique_ptr<RenderStyle> styleForStyleable(const Styleable&, const RenderStyle& inheritedStyle);
 
     void resolveComposedTree();
-    ElementUpdate resolveElement(Element&);
+
+    ElementUpdates resolveElement(Element&);
+
+    ElementUpdate createAnimatedElementUpdate(std::unique_ptr<RenderStyle>, const Styleable&, Change, const RenderStyle& parentStyle, const RenderStyle* parentBoxStyle);
+    Optional<ElementUpdate> resolvePseudoStyle(Element&, const ElementUpdate&, PseudoId);
 
     struct Scope : RefCounted<Scope> {
-        StyleResolver& styleResolver;
+        WTF_MAKE_STRUCT_FAST_ALLOCATED_WITH_HEAP_IDENTIFIER(TreeResolverScope);
+        Resolver& resolver;
         SelectorFilter selectorFilter;
         SharingResolver sharingResolver;
         ShadowRoot* shadowRoot { nullptr };
@@ -68,17 +74,18 @@ private:
 
         Scope(Document&);
         Scope(ShadowRoot&, Scope& enclosingScope);
+        ~Scope();
     };
 
     struct Parent {
         Element* element;
         const RenderStyle& style;
-        Change change { NoChange };
+        Change change { Change::None };
+        DescendantsToResolve descendantsToResolve { DescendantsToResolve::None };
         bool didPushScope { false };
-        bool elementNeedingStyleRecalcAffectsNextSiblingElementStyle { false };
 
         Parent(Document&);
-        Parent(Element&, const RenderStyle&, Change);
+        Parent(Element&, const RenderStyle&, Change, DescendantsToResolve);
     };
 
     Scope& scope() { return m_scopeStack.last(); }
@@ -88,11 +95,12 @@ private:
     void pushEnclosingScope();
     void popScope();
 
-    void pushParent(Element&, const RenderStyle&, Change);
+    void pushParent(Element&, const RenderStyle&, Change, DescendantsToResolve);
     void popParent();
     void popParentsToDepth(unsigned depth);
 
     const RenderStyle* parentBoxStyle() const;
+    const RenderStyle* parentBoxStyleForPseudo(const ElementUpdate&) const;
 
     Document& m_document;
     std::unique_ptr<RenderStyle> m_documentElementStyle;
@@ -109,8 +117,11 @@ bool postResolutionCallbacksAreSuspended();
 
 class PostResolutionCallbackDisabler {
 public:
-    explicit PostResolutionCallbackDisabler(Document&);
+    enum class DrainCallbacks { Yes, No };
+    explicit PostResolutionCallbackDisabler(Document&, DrainCallbacks = DrainCallbacks::Yes);
     ~PostResolutionCallbackDisabler();
+private:
+    DrainCallbacks m_drainCallbacks;
 };
 
 }

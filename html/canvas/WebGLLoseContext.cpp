@@ -30,17 +30,18 @@
 #include "WebGLLoseContext.h"
 
 #include "WebGLRenderingContextBase.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(WebGLLoseContext);
 
 WebGLLoseContext::WebGLLoseContext(WebGLRenderingContextBase& context)
     : WebGLExtension(context)
 {
 }
 
-WebGLLoseContext::~WebGLLoseContext()
-{
-}
+WebGLLoseContext::~WebGLLoseContext() = default;
 
 WebGLExtension::ExtensionName WebGLLoseContext::getName() const
 {
@@ -49,13 +50,26 @@ WebGLExtension::ExtensionName WebGLLoseContext::getName() const
 
 void WebGLLoseContext::loseContext()
 {
-    m_context.forceLostContext(WebGLRenderingContextBase::SyntheticLostContext);
+    if (!m_context)
+        return;
+
+    m_context->forceLostContext(WebGLRenderingContextBase::SyntheticLostContext);
 }
 
 void WebGLLoseContext::restoreContext()
 {
-    m_context.forceRestoreContext();
+    if (!m_context)
+        return;
+
+    m_context->forceRestoreContext();
 }
+
+void WebGLLoseContext::loseParentContext(WebGLRenderingContextBase::LostContextMode mode)
+{
+    if (mode == WebGLRenderingContextBase::LostContextMode::RealLostContext)
+        WebGLExtension::loseParentContext(mode);
+}
+
 
 } // namespace WebCore
 

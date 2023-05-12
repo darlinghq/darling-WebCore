@@ -27,20 +27,24 @@
 
 #if ENABLE(GAMEPAD)
 
-#include <wtf/Vector.h>
+#include <wtf/Forward.h>
 
 namespace WebCore {
 
 class PlatformGamepad;
 
+enum class EventMakesGamepadsVisible : bool {
+    No,
+    Yes,
+};
+
 class GamepadProviderClient {
 public:
-    virtual ~GamepadProviderClient() { }
+    virtual ~GamepadProviderClient() = default;
 
-    virtual void setInitialConnectedGamepads(const Vector<PlatformGamepad*>&) { }
-    virtual void platformGamepadConnected(PlatformGamepad&) = 0;
+    virtual void platformGamepadConnected(PlatformGamepad&, EventMakesGamepadsVisible) = 0;
     virtual void platformGamepadDisconnected(PlatformGamepad&) = 0;
-    virtual void platformGamepadInputActivity(bool shouldMakeGamepadVisible) = 0;
+    virtual void platformGamepadInputActivity(EventMakesGamepadsVisible) = 0;
 };
 
 } // namespace WebCore

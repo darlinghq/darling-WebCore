@@ -42,7 +42,7 @@ public:
 
     void removeClientFromCache(const CachedImageClient*);
 
-    void setContainerSizeForRenderer(const CachedImageClient*, const LayoutSize&, float);
+    void setContainerContextForClient(const CachedImageClient&, const LayoutSize&, float, const URL&);
     FloatSize imageSizeForRenderer(const RenderObject*) const;
 
     Image* imageForRenderer(const RenderObject*) const;

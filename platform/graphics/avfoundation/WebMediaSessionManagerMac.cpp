@@ -26,7 +26,7 @@
 #include "config.h"
 #include "WebMediaSessionManagerMac.h"
 
-#if ENABLE(WIRELESS_PLAYBACK_TARGET) && !PLATFORM(IOS)
+#if ENABLE(WIRELESS_PLAYBACK_TARGET) && !PLATFORM(IOS_FAMILY)
 
 #include "MediaPlaybackTargetPickerMac.h"
 #include <wtf/NeverDestroyed.h>
@@ -44,18 +44,16 @@ WebMediaSessionManagerMac::WebMediaSessionManagerMac()
 {
 }
 
-WebMediaSessionManagerMac::~WebMediaSessionManagerMac()
-{
-}
+WebMediaSessionManagerMac::~WebMediaSessionManagerMac() = default;
 
 WebCore::MediaPlaybackTargetPicker& WebMediaSessionManagerMac::platformPicker()
 {
     if (!m_targetPicker)
-        m_targetPicker = std::make_unique<MediaPlaybackTargetPickerMac>(*this);
+        m_targetPicker = makeUnique<MediaPlaybackTargetPickerMac>(*this);
 
     return *m_targetPicker.get();
 }
 
 } // namespace WebCore
 
-#endif // ENABLE(WIRELESS_PLAYBACK_TARGET) && !PLATFORM(IOS)
+#endif // ENABLE(WIRELESS_PLAYBACK_TARGET) && !PLATFORM(IOS_FAMILY)

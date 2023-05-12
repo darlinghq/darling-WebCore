@@ -28,6 +28,7 @@
 
 #include "FloatRect.h"
 #include "NotImplemented.h"
+#include "Widget.h"
 
 namespace WebCore {
 
@@ -54,21 +55,47 @@ bool screenHasInvertedColors()
     return false;
 }
 
-FloatRect screenRect(Widget*)
+double screenDPI()
 {
     notImplemented();
-    return FloatRect(0, 0, 1024, 640);
+    return 96;
 }
 
-FloatRect screenAvailableRect(Widget*)
+void setScreenDPIObserverHandler(Function<void()>&&, void*)
 {
     notImplemented();
-    return FloatRect(0, 0, 1024, 640);
+}
+
+FloatRect screenRect(Widget* widget)
+{
+    // WPE can't offer any more useful information about the screen size,
+    // so we use the Widget's bounds rectangle (size of which equals the WPE view size).
+
+    if (!widget)
+        return { };
+    return widget->boundsRect();
+}
+
+FloatRect screenAvailableRect(Widget* widget)
+{
+    return screenRect(widget);
 }
 
 bool screenSupportsExtendedColor(Widget*)
 {
     return false;
 }
+
+#if ENABLE(TOUCH_EVENTS)
+bool screenHasTouchDevice()
+{
+    return true;
+}
+
+bool screenIsTouchPrimaryInputDevice()
+{
+    return true;
+}
+#endif
 
 } // namespace WebCore

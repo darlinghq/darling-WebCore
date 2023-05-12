@@ -24,12 +24,14 @@
 
 #pragma once
 
-#include "DOMURL.h"
+#include "ExceptionOr.h"
 #include <wtf/Variant.h>
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
+
+class DOMURL;
 
 class URLSearchParams : public RefCounted<URLSearchParams> {
 public:
@@ -53,7 +55,7 @@ public:
     class Iterator {
     public:
         explicit Iterator(URLSearchParams&);
-        std::optional<WTF::KeyValuePair<String, String>> next();
+        Optional<WTF::KeyValuePair<String, String>> next();
 
     private:
         Ref<URLSearchParams> m_target;

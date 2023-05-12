@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2011 Adobe Systems Incorporated. All rights reserved.
- * Copyright (C) 2012 Apple Inc. All rights reserved.
+ * Copyright (C) 2012-2020 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,13 +29,11 @@
  */
 
 #include "config.h"
-
 #include "CSSGroupingRule.h"
 
 #include "CSSParser.h"
 #include "CSSRuleList.h"
 #include "CSSStyleSheet.h"
-#include "ExceptionCode.h"
 #include "StyleRule.h"
 #include <wtf/text/StringBuilder.h>
 
@@ -51,9 +49,9 @@ CSSGroupingRule::CSSGroupingRule(StyleRuleGroup& groupRule, CSSStyleSheet* paren
 CSSGroupingRule::~CSSGroupingRule()
 {
     ASSERT(m_childRuleCSSOMWrappers.size() == m_groupRule->childRules().size());
-    for (unsigned i = 0; i < m_childRuleCSSOMWrappers.size(); ++i) {
-        if (m_childRuleCSSOMWrappers[i])
-            m_childRuleCSSOMWrappers[i]->setParentRule(0);
+    for (auto& wrapper : m_childRuleCSSOMWrappers) {
+        if (wrapper)
+            wrapper->setParentRule(nullptr);
     }
 }
 
@@ -62,26 +60,26 @@ ExceptionOr<unsigned> CSSGroupingRule::insertRule(const String& ruleString, unsi
     ASSERT(m_childRuleCSSOMWrappers.size() == m_groupRule->childRules().size());
 
     if (index > m_groupRule->childRules().size()) {
-        // INDEX_SIZE_ERR: Raised if the specified index is not a valid insertion point.
-        return Exception { INDEX_SIZE_ERR };
+        // IndexSizeError: Raised if the specified index is not a valid insertion point.
+        return Exception { IndexSizeError };
     }
 
     CSSStyleSheet* styleSheet = parentStyleSheet();
     RefPtr<StyleRuleBase> newRule = CSSParser::parseRule(parserContext(), styleSheet ? &styleSheet->contents() : nullptr, ruleString);
     if (!newRule) {
-        // SYNTAX_ERR: Raised if the specified rule has a syntax error and is unparsable.
-        return Exception { SYNTAX_ERR };
+        // SyntaxError: Raised if the specified rule has a syntax error and is unparsable.
+        return Exception { SyntaxError };
     }
 
     if (newRule->isImportRule() || newRule->isNamespaceRule()) {
-        // FIXME: an HIERARCHY_REQUEST_ERR should also be thrown for a @charset or a nested
-        // @media rule. They are currently not getting parsed, resulting in a SYNTAX_ERR
+        // FIXME: an HierarchyRequestError should also be thrown for a @charset or a nested
+        // @media rule. They are currently not getting parsed, resulting in a SyntaxError
         // to get raised above.
 
-        // HIERARCHY_REQUEST_ERR: Raised if the rule cannot be inserted at the specified
+        // HierarchyRequestError: Raised if the rule cannot be inserted at the specified
         // index, e.g., if an @import rule is inserted after a standard rule set or other
         // at-rule.
-        return Exception { HIERARCHY_REQUEST_ERR };
+        return Exception { HierarchyRequestError };
     }
     CSSStyleSheet::RuleMutationScope mutationScope(this);
 
@@ -96,9 +94,9 @@ ExceptionOr<void> CSSGroupingRule::deleteRule(unsigned index)
     ASSERT(m_childRuleCSSOMWrappers.size() == m_groupRule->childRules().size());
 
     if (index >= m_groupRule->childRules().size()) {
-        // INDEX_SIZE_ERR: Raised if the specified index does not correspond to a
+        // IndexSizeError: Raised if the specified index does not correspond to a
         // rule in the media rule list.
-        return Exception { INDEX_SIZE_ERR };
+        return Exception { IndexSizeError };
     }
 
     CSSStyleSheet::RuleMutationScope mutationScope(this);
@@ -112,14 +110,10 @@ ExceptionOr<void> CSSGroupingRule::deleteRule(unsigned index)
     return { };
 }
 
-void CSSGroupingRule::appendCssTextForItems(StringBuilder& result) const
+void CSSGroupingRule::appendCSSTextForItems(StringBuilder& result) const
 {
-    unsigned size = length();
-    for (unsigned i = 0; i < size; ++i) {
-        result.appendLiteral("  ");
-        result.append(item(i)->cssText());
-        result.append('\n');
-    }
+    for (unsigned i = 0, size = length(); i < size; ++i)
+        result.append("  ", item(i)->cssText(), '\n');
 }
 
 unsigned CSSGroupingRule::length() const
@@ -132,7 +126,7 @@ CSSRule* CSSGroupingRule::item(unsigned index) const
     if (index >= length())
         return nullptr;
     ASSERT(m_childRuleCSSOMWrappers.size() == m_groupRule->childRules().size());
-    RefPtr<CSSRule>& rule = m_childRuleCSSOMWrappers[index];
+    auto& rule = m_childRuleCSSOMWrappers[index];
     if (!rule)
         rule = m_groupRule->childRules()[index]->createCSSOMWrapper(const_cast<CSSGroupingRule*>(this));
     return rule.get();
@@ -141,7 +135,7 @@ CSSRule* CSSGroupingRule::item(unsigned index) const
 CSSRuleList& CSSGroupingRule::cssRules() const
 {
     if (!m_ruleListCSSOMWrapper)
-        m_ruleListCSSOMWrapper = std::make_unique<LiveCSSRuleList<CSSGroupingRule>>(const_cast<CSSGroupingRule&>(*this));
+        m_ruleListCSSOMWrapper = makeUnique<LiveCSSRuleList<CSSGroupingRule>>(const_cast<CSSGroupingRule&>(*this));
     return *m_ruleListCSSOMWrapper;
 }
 

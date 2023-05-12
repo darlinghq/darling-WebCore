@@ -19,13 +19,12 @@
 
 #pragma once
 
-#if ENABLE(SVG_FONTS)
-
 #include "SVGElement.h"
 
 namespace WebCore {
 
 class SVGFontFaceFormatElement final : public SVGElement {
+    WTF_MAKE_ISO_ALLOCATED(SVGFontFaceFormatElement);
 public:
     static Ref<SVGFontFaceFormatElement> create(const QualifiedName&, Document&);
 
@@ -37,5 +36,3 @@ private:
 };
 
 } // namespace WebCore
-
-#endif // ENABLE(SVG_FONTS)

@@ -39,17 +39,15 @@ Gamepad::Gamepad(const PlatformGamepad& platformGamepad)
     , m_index(platformGamepad.index())
     , m_connected(true)
     , m_timestamp(platformGamepad.lastUpdateTime())
+    , m_mapping(platformGamepad.mapping())
+    , m_axes(platformGamepad.axisValues().size(), 0.0)
 {
-    m_axes.resize(platformGamepad.axisValues().size());
-    m_axes.fill(0.0);
     unsigned buttonCount = platformGamepad.buttonValues().size();
     for (unsigned i = 0; i < buttonCount; ++i)
         m_buttons.append(GamepadButton::create());
 }
 
-Gamepad::~Gamepad()
-{
-}
+Gamepad::~Gamepad() = default;
 
 const Vector<double>& Gamepad::axes() const
 {
@@ -64,9 +62,9 @@ const Vector<Ref<GamepadButton>>& Gamepad::buttons() const
 void Gamepad::updateFromPlatformGamepad(const PlatformGamepad& platformGamepad)
 {
     for (unsigned i = 0; i < m_axes.size(); ++i)
-        m_axes[i] = platformGamepad.axisValues()[i];
+        m_axes[i] = platformGamepad.axisValues()[i].value();
     for (unsigned i = 0; i < m_buttons.size(); ++i)
-        m_buttons[i]->setValue(platformGamepad.buttonValues()[i]);
+        m_buttons[i]->setValue(platformGamepad.buttonValues()[i].value());
 
     m_timestamp = platformGamepad.lastUpdateTime();
 }

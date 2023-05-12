@@ -23,16 +23,20 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "MemoryRelease.h"
+#import "config.h"
+#import "MemoryRelease.h"
 
+#import "FontFamilySpecificationCoreText.h"
 #import "GCController.h"
-#import "GraphicsServicesSPI.h"
 #import "IOSurfacePool.h"
 #import "LayerPool.h"
+#import "LocaleCocoa.h"
+#import "SubimageCacheWithTimer.h"
+#import "SystemFontDatabaseCoreText.h"
 #import <notify.h>
+#import <pal/spi/ios/GraphicsServicesSPI.h>
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 #import "LegacyTileCache.h"
 #import "TileControllerMemoryHandlerIOS.h"
 #endif
@@ -42,35 +46,40 @@ namespace WebCore {
 
 void platformReleaseMemory(Critical)
 {
-#if PLATFORM(IOS) && !PLATFORM(IOS_SIMULATOR)
+    SystemFontDatabaseCoreText::singleton().clear();
+    clearFontFamilySpecificationCoreTextCache();
+
+#if PLATFORM(IOS_FAMILY) && !PLATFORM(IOS_FAMILY_SIMULATOR) && !PLATFORM(MACCATALYST)
     // FIXME: Remove this call to GSFontInitialize() once <rdar://problem/32886715> is fixed.
     GSFontInitialize();
     GSFontPurgeFontCache();
 #endif
 
+    LocaleCocoa::releaseMemory();
+
     for (auto& pool : LayerPool::allLayerPools())
         pool->drain();
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     LegacyTileCache::drainLayerPool();
     tileControllerMemoryHandler().trimUnparentedTilesToTarget(0);
 #endif
 
-#if USE(IOSURFACE)
     IOSurfacePool::sharedPool().discardAllSurfaces();
+
+#if CACHE_SUBIMAGES
+    SubimageCacheWithTimer::clear();
 #endif
 }
 
 void jettisonExpensiveObjectsOnTopLevelNavigation()
 {
-#if PLATFORM(IOS)
-    using namespace std::literals::chrono_literals;
-
+#if PLATFORM(IOS_FAMILY)
     // Protect against doing excessive jettisoning during repeated navigations.
-    const auto minimumTimeSinceNavigation = 2s;
+    const auto minimumTimeSinceNavigation = 2_s;
 
-    static auto timeOfLastNavigation = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
+    static auto timeOfLastNavigation = MonotonicTime::now();
+    auto now = MonotonicTime::now();
     bool shouldJettison = now - timeOfLastNavigation >= minimumTimeSinceNavigation;
     timeOfLastNavigation = now;
 

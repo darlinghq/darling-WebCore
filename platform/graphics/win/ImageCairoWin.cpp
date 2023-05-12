@@ -26,7 +26,7 @@
 #include "config.h"
 #include "Image.h"
 #include "BitmapImage.h"
-#include "GraphicsContext.h"
+#include "GraphicsContextImplCairo.h"
 #include "RefPtrCairo.h"
 #include <cairo.h>
 #include <cairo-win32.h>
@@ -75,13 +75,13 @@ bool BitmapImage::getHBITMAPOfSize(HBITMAP bmp, const IntSize* size)
     cairo_t* targetRef = cairo_create(image);
     cairo_surface_destroy(image);
 
-    GraphicsContext gc(targetRef);
+    GraphicsContext gc(GraphicsContextImplCairo::createFactory(targetRef));
 
     FloatSize imageSize = BitmapImage::size();
     if (size)
-        drawFrameMatchingSourceSize(gc, FloatRect(0.0f, 0.0f, bmpInfo.bmWidth, bmpInfo.bmHeight), *size, CompositeCopy);
+        drawFrameMatchingSourceSize(gc, FloatRect(0.0f, 0.0f, bmpInfo.bmWidth, bmpInfo.bmHeight), *size, CompositeOperator::Copy);
     else
-        draw(gc, FloatRect(0.0f, 0.0f, bmpInfo.bmWidth, bmpInfo.bmHeight), FloatRect(0.0f, 0.0f, imageSize.width(), imageSize.height()), CompositeCopy, BlendModeNormal, DecodingMode::Synchronous, ImageOrientationDescription());
+        draw(gc, FloatRect(0.0f, 0.0f, bmpInfo.bmWidth, bmpInfo.bmHeight), FloatRect(0.0f, 0.0f, imageSize.width(), imageSize.height()), { CompositeOperator::Copy });
 
     // Do cleanup
     cairo_destroy(targetRef);
@@ -93,22 +93,20 @@ void BitmapImage::drawFrameMatchingSourceSize(GraphicsContext& ctxt, const Float
 {
     size_t frames = frameCount();
     for (size_t i = 0; i < frames; ++i) {
-        auto surface = frameImageAtIndex(i);
-        if (!surface)
+        auto nativeImage = frameImageAtIndex(i);
+        if (!nativeImage || nativeImage->size() != srcSize)
             continue;
 
-        if (cairo_image_surface_get_height(surface.get()) == static_cast<size_t>(srcSize.height()) && cairo_image_surface_get_width(surface.get()) == static_cast<size_t>(srcSize.width())) {
-            size_t currentFrame = m_currentFrame;
-            m_currentFrame = i;
-            draw(ctxt, dstRect, FloatRect(0.0f, 0.0f, srcSize.width(), srcSize.height()), compositeOp, BlendModeNormal, DecodingMode::Synchronous, ImageOrientationDescription());
-            m_currentFrame = currentFrame;
-            return;
-        }
+        size_t currentFrame = m_currentFrame;
+        m_currentFrame = i;
+        draw(ctxt, dstRect, FloatRect(0.0f, 0.0f, srcSize.width(), srcSize.height()), { compositeOp });
+        m_currentFrame = currentFrame;
+        return;
     }
 
     // No image of the correct size was found, fallback to drawing the current frame
     FloatSize imageSize = BitmapImage::size();
-    draw(ctxt, dstRect, FloatRect(0.0f, 0.0f, imageSize.width(), imageSize.height()), compositeOp, BlendModeNormal, DecodingMode::Synchronous, ImageOrientationDescription());
+    draw(ctxt, dstRect, FloatRect(0.0f, 0.0f, imageSize.width(), imageSize.height()), { compositeOp });
 }
 
 } // namespace WebCore

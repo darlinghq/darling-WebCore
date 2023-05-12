@@ -32,6 +32,7 @@
 namespace WebCore {
 
 class MathMLRowElement : public MathMLPresentationElement {
+    WTF_MAKE_ISO_ALLOCATED(MathMLRowElement);
 public:
     static Ref<MathMLRowElement> create(const QualifiedName& tagName, Document&);
 
@@ -39,7 +40,6 @@ protected:
     MathMLRowElement(const QualifiedName& tagName, Document&);
     void childrenChanged(const ChildChange&) override;
 
-    bool acceptsDisplayStyleAttribute() override;
     bool acceptsMathVariantAttribute() override;
 
 private:

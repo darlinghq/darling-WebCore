@@ -89,15 +89,15 @@ IDBError IndexValueStore::addRecord(const IDBKeyData& indexKey, const IDBKeyData
     auto result = m_records.add(indexKey, nullptr);
 
     if (!result.isNewEntry && m_unique)
-        return IDBError(IDBDatabaseException::ConstraintError);
+        return IDBError(ConstraintError);
 
     if (result.isNewEntry)
-        result.iterator->value = std::make_unique<IndexValueEntry>(m_unique);
+        result.iterator->value = makeUnique<IndexValueEntry>(m_unique);
 
     result.iterator->value->addKey(valueKey);
     m_orderedKeys.insert(indexKey);
 
-    return { };
+    return IDBError { };
 }
 
 void IndexValueStore::removeRecord(const IDBKeyData& indexKey, const IDBKeyData& valueKey)

@@ -26,9 +26,13 @@
 #include "config.h"
 #include "SinkDocument.h"
 
+#include "Frame.h"
 #include "RawDataDocumentParser.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(SinkDocument);
 
 class SinkDocumentParser final : public RawDataDocumentParser {
 public:
@@ -49,8 +53,8 @@ private:
     }
 };
 
-SinkDocument::SinkDocument(Frame* frame, const URL& url)
-    : HTMLDocument(frame, url)
+SinkDocument::SinkDocument(Frame& frame, const URL& url)
+    : HTMLDocument(&frame, frame.settings(), url)
 {
     setCompatibilityMode(DocumentCompatibilityMode::QuirksMode);
     lockCompatibilityMode();

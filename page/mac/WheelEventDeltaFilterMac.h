@@ -28,6 +28,7 @@
 #if PLATFORM(MAC)
 
 #include "WheelEventDeltaFilter.h"
+#include <wtf/MonotonicTime.h>
 #include <wtf/RetainPtr.h>
 
 OBJC_CLASS _NSScrollingPredominantAxisFilter;
@@ -35,6 +36,7 @@ OBJC_CLASS _NSScrollingPredominantAxisFilter;
 namespace WebCore {
 
 class WheelEventDeltaFilterMac final : public WheelEventDeltaFilter {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     WheelEventDeltaFilterMac();
 
@@ -44,7 +46,7 @@ public:
 
 private:
     RetainPtr<_NSScrollingPredominantAxisFilter> m_predominantAxisFilter;
-    double m_beginFilteringDeltasTime { 0 };
+    MonotonicTime m_beginFilteringDeltasTime;
 };
 
 } // namespace WebCore

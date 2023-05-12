@@ -23,23 +23,32 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef AudioTrackPrivateGStreamer_h
-#define AudioTrackPrivateGStreamer_h
+#pragma once
 
-#if ENABLE(VIDEO) && USE(GSTREAMER) && ENABLE(VIDEO_TRACK)
+#if ENABLE(VIDEO) && USE(GSTREAMER)
 
 #include "AudioTrackPrivate.h"
-#include "GRefPtrGStreamer.h"
+#include "GStreamerCommon.h"
 #include "TrackPrivateBaseGStreamer.h"
+#include <gst/gst.h>
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
+class MediaPlayerPrivateGStreamer;
 
 class AudioTrackPrivateGStreamer final : public AudioTrackPrivate, public TrackPrivateBaseGStreamer {
 public:
-    static RefPtr<AudioTrackPrivateGStreamer> create(GRefPtr<GstElement> playbin, gint index, GRefPtr<GstPad> pad)
+    static Ref<AudioTrackPrivateGStreamer> create(WeakPtr<MediaPlayerPrivateGStreamer> player, gint index, GRefPtr<GstPad> pad)
     {
-        return adoptRef(*new AudioTrackPrivateGStreamer(playbin, index, pad));
+        return adoptRef(*new AudioTrackPrivateGStreamer(player, index, pad));
     }
+
+    static Ref<AudioTrackPrivateGStreamer> create(WeakPtr<MediaPlayerPrivateGStreamer> player, gint index, GRefPtr<GstStream> stream)
+    {
+        return adoptRef(*new AudioTrackPrivateGStreamer(player, index, stream));
+    }
+
+    Kind kind() const final;
 
     void disconnect() override;
 
@@ -48,19 +57,18 @@ public:
 
     int trackIndex() const override { return m_index; }
 
-    AtomicString id() const override { return m_id; }
-    AtomicString label() const override { return m_label; }
-    AtomicString language() const override { return m_language; }
+    AtomString id() const override { return m_id; }
+    AtomString label() const override { return m_label; }
+    AtomString language() const override { return m_language; }
 
 private:
-    AudioTrackPrivateGStreamer(GRefPtr<GstElement> playbin, gint index, GRefPtr<GstPad>);
+    AudioTrackPrivateGStreamer(WeakPtr<MediaPlayerPrivateGStreamer>, gint index, GRefPtr<GstPad>);
+    AudioTrackPrivateGStreamer(WeakPtr<MediaPlayerPrivateGStreamer>, gint index, GRefPtr<GstStream>);
 
-    AtomicString m_id;
-    GRefPtr<GstElement> m_playbin;
+    AtomString m_id;
+    WeakPtr<MediaPlayerPrivateGStreamer> m_player;
 };
 
 } // namespace WebCore
 
-#endif // ENABLE(VIDEO) && USE(GSTREAMER) && ENABLE(VIDEO_TRACK)
-
-#endif // AudioTrackPrivateGStreamer_h
+#endif // ENABLE(VIDEO) && USE(GSTREAMER)

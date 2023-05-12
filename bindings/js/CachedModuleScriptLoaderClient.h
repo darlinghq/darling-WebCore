@@ -25,15 +25,14 @@
 
 #pragma once
 
-#include "JSDOMPromiseDeferred.h"
-
 namespace WebCore {
 
 class CachedModuleScriptLoader;
+class DeferredPromise;
 
 class CachedModuleScriptLoaderClient {
 public:
-    virtual ~CachedModuleScriptLoaderClient() { }
+    virtual ~CachedModuleScriptLoaderClient() = default;
 
     virtual void notifyFinished(CachedModuleScriptLoader&, RefPtr<DeferredPromise>) = 0;
 };

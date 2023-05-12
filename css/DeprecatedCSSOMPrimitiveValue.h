@@ -70,17 +70,15 @@ public:
         CSS_VMAX = 29
     };
 
-    static Ref<DeprecatedCSSOMPrimitiveValue> create(const CSSPrimitiveValue& value)
+    static Ref<DeprecatedCSSOMPrimitiveValue> create(const CSSPrimitiveValue& value, CSSStyleDeclaration& owner)
     {
-        return adoptRef(*new DeprecatedCSSOMPrimitiveValue(value));
+        return adoptRef(*new DeprecatedCSSOMPrimitiveValue(value, owner));
     }
 
     bool equals(const DeprecatedCSSOMPrimitiveValue& other) const { return m_value->equals(other.m_value); }
     unsigned cssValueType() const { return m_value->cssValueType(); }
     String cssText() const { return m_value->cssText(); }
     
-    // FIXME: Eventually these will contain more code and not just call through to
-    // CSSPrimitiveValue.
     WEBCORE_EXPORT unsigned short primitiveType() const;
     WEBCORE_EXPORT ExceptionOr<void> setFloatValue(unsigned short unitType, double);
     WEBCORE_EXPORT ExceptionOr<float> getFloatValue(unsigned short unitType) const;
@@ -93,8 +91,8 @@ public:
     String stringValue() const { return m_value->stringValue(); }
 
 protected:
-    DeprecatedCSSOMPrimitiveValue(const CSSPrimitiveValue& value)
-        : DeprecatedCSSOMValue(DeprecatedPrimitiveValueClass)
+    DeprecatedCSSOMPrimitiveValue(const CSSPrimitiveValue& value, CSSStyleDeclaration& owner)
+        : DeprecatedCSSOMValue(DeprecatedPrimitiveValueClass, owner)
         , m_value(const_cast<CSSPrimitiveValue&>(value))
     {
     }

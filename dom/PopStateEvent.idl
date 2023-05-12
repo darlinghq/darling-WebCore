@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009 Apple Inc. All Rights Reserved.
+ * Copyright (C) 2009-2017 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,13 +25,14 @@
  */
 
 [
-    Constructor(DOMString type, optional PopStateEventInit eventInitDict),
-    ConstructorCallWith=ScriptState,
+    JSCustomMarkFunction,
+    Exposed=Window
 ] interface PopStateEvent : Event {
+    constructor(DOMString type, optional PopStateEventInit eventInitDict);
+
     [CachedAttribute, CustomGetter] readonly attribute any state;
 };
 
 dictionary PopStateEventInit : EventInit {
     any state = null;
 };
-

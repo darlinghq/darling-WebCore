@@ -24,10 +24,9 @@
  */
 
 #include "config.h"
-
-#if ENABLE(VIDEO_TRACK)
-
 #include "TextTrackRepresentation.h"
+
+#if ENABLE(VIDEO)
 
 #include "IntRect.h"
 
@@ -35,18 +34,19 @@ namespace WebCore {
 
 class NullTextTrackRepresentation : public TextTrackRepresentation {
 public:
-    virtual ~NullTextTrackRepresentation() { }
-    void update() override { }
-    PlatformLayer* platformLayer() override { return nullptr; }
-    void setContentScale(float) override { }
-    IntRect bounds() const override { return IntRect(); }
+    virtual ~NullTextTrackRepresentation() = default;
+    void update() final { }
+    PlatformLayer* platformLayer() final { return nullptr; }
+    void setContentScale(float) final { }
+    IntRect bounds() const final { return IntRect(); }
+    void setHidden(bool) const final { }
 };
 
-#if !(PLATFORM(IOS) || (PLATFORM(MAC) && ENABLE(VIDEO_PRESENTATION_MODE)))
+#if !(PLATFORM(IOS_FAMILY) || (PLATFORM(MAC) && ENABLE(VIDEO_PRESENTATION_MODE)))
 
 std::unique_ptr<TextTrackRepresentation> TextTrackRepresentation::create(TextTrackRepresentationClient&)
 {
-    return std::make_unique<NullTextTrackRepresentation>();
+    return makeUnique<NullTextTrackRepresentation>();
 }
 
 #endif

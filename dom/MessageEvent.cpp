@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2007 Henry Mason (hmason@mac.com)
- * Copyright (C) 2003, 2005, 2006, 2007, 2008 Apple Inc. All rights reserved.
+ * Copyright (C) 2003-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,21 +30,20 @@
 
 #include "Blob.h"
 #include "EventNames.h"
-#include <runtime/JSCInlines.h>
+#include <JavaScriptCore/JSCInlines.h>
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
 using namespace JSC;
 
-inline MessageEvent::MessageEvent()
-    : m_dataType(DataTypeScriptValue)
-{
-}
+WTF_MAKE_ISO_ALLOCATED_IMPL(MessageEvent);
 
-inline MessageEvent::MessageEvent(ExecState& state, const AtomicString& type, Init&& initializer, IsTrusted isTrusted)
+MessageEvent::MessageEvent() = default;
+
+inline MessageEvent::MessageEvent(const AtomString& type, Init&& initializer, IsTrusted isTrusted)
     : Event(type, initializer, isTrusted)
-    , m_dataType(DataTypeScriptValue)
-    , m_dataAsScriptValue(state.vm(), initializer.data)
+    , m_data(JSValueInWrappedObject { initializer.data })
     , m_origin(initializer.origin)
     , m_lastEventId(initializer.lastEventId)
     , m_source(WTFMove(initializer.source))
@@ -52,10 +51,9 @@ inline MessageEvent::MessageEvent(ExecState& state, const AtomicString& type, In
 {
 }
 
-inline MessageEvent::MessageEvent(RefPtr<SerializedScriptValue>&& data, const String& origin, const String& lastEventId, std::optional<MessageEventSource>&& source, Vector<RefPtr<MessagePort>>&& ports)
-    : Event(eventNames().messageEvent, false, false)
-    , m_dataType(DataTypeSerializedScriptValue)
-    , m_dataAsSerializedScriptValue(WTFMove(data))
+inline MessageEvent::MessageEvent(DataType&& data, const String& origin, const String& lastEventId, Optional<MessageEventSource>&& source, Vector<RefPtr<MessagePort>>&& ports)
+    : Event(eventNames().messageEvent, CanBubble::No, IsCancelable::No)
+    , m_data(WTFMove(data))
     , m_origin(origin)
     , m_lastEventId(lastEventId)
     , m_source(WTFMove(source))
@@ -63,45 +61,20 @@ inline MessageEvent::MessageEvent(RefPtr<SerializedScriptValue>&& data, const St
 {
 }
 
-inline MessageEvent::MessageEvent(const AtomicString& type, RefPtr<SerializedScriptValue>&& data, const String& origin, const String& lastEventId)
-    : Event(type, false, false)
-    , m_dataType(DataTypeSerializedScriptValue)
-    , m_dataAsSerializedScriptValue(WTFMove(data))
+inline MessageEvent::MessageEvent(const AtomString& type, Ref<SerializedScriptValue>&& data, const String& origin, const String& lastEventId)
+    : Event(type, CanBubble::No, IsCancelable::No)
+    , m_data(WTFMove(data))
     , m_origin(origin)
     , m_lastEventId(lastEventId)
 {
 }
 
-inline MessageEvent::MessageEvent(const String& data, const String& origin)
-    : Event(eventNames().messageEvent, false, false)
-    , m_dataType(DataTypeString)
-    , m_dataAsString(data)
-    , m_origin(origin)
-{
-}
-
-inline MessageEvent::MessageEvent(Ref<Blob>&& data, const String& origin)
-    : Event(eventNames().messageEvent, false, false)
-    , m_dataType(DataTypeBlob)
-    , m_dataAsBlob(WTFMove(data))
-    , m_origin(origin)
-{
-}
-
-inline MessageEvent::MessageEvent(Ref<ArrayBuffer>&& data, const String& origin)
-    : Event(eventNames().messageEvent, false, false)
-    , m_dataType(DataTypeArrayBuffer)
-    , m_dataAsArrayBuffer(WTFMove(data))
-    , m_origin(origin)
-{
-}
-
-Ref<MessageEvent> MessageEvent::create(Vector<RefPtr<MessagePort>>&& ports, RefPtr<SerializedScriptValue>&& data, const String& origin, const String& lastEventId, std::optional<MessageEventSource>&& source)
+Ref<MessageEvent> MessageEvent::create(Vector<RefPtr<MessagePort>>&& ports, Ref<SerializedScriptValue>&& data, const String& origin, const String& lastEventId, Optional<MessageEventSource>&& source)
 {
     return adoptRef(*new MessageEvent(WTFMove(data), origin, lastEventId, WTFMove(source), WTFMove(ports)));
 }
 
-Ref<MessageEvent> MessageEvent::create(const AtomicString& type, RefPtr<SerializedScriptValue>&& data, const String& origin, const String& lastEventId)
+Ref<MessageEvent> MessageEvent::create(const AtomString& type, Ref<SerializedScriptValue>&& data, const String& origin, const String& lastEventId)
 {
     return adoptRef(*new MessageEvent(type, WTFMove(data), origin, lastEventId));
 }
@@ -126,66 +99,47 @@ Ref<MessageEvent> MessageEvent::createForBindings()
     return adoptRef(*new MessageEvent);
 }
 
-Ref<MessageEvent> MessageEvent::create(ExecState& state, const AtomicString& type, Init&& initializer, IsTrusted isTrusted)
+Ref<MessageEvent> MessageEvent::create(const AtomString& type, Init&& initializer, IsTrusted isTrusted)
 {
-    return adoptRef(*new MessageEvent(state, type, WTFMove(initializer), isTrusted));
+    return adoptRef(*new MessageEvent(type, WTFMove(initializer), isTrusted));
 }
 
-MessageEvent::~MessageEvent()
-{
-}
+MessageEvent::~MessageEvent() = default;
 
-void MessageEvent::initMessageEvent(ExecState& state, const AtomicString& type, bool canBubble, bool cancelable, JSValue data, const String& origin, const String& lastEventId, std::optional<MessageEventSource>&& source, Vector<RefPtr<MessagePort>>&& ports)
+void MessageEvent::initMessageEvent(const AtomString& type, bool canBubble, bool cancelable, JSValue data, const String& origin, const String& lastEventId, Optional<MessageEventSource>&& source, Vector<RefPtr<MessagePort>>&& ports)
 {
-    if (dispatched())
+    if (isBeingDispatched())
         return;
 
     initEvent(type, canBubble, cancelable);
 
-    m_dataType = DataTypeScriptValue;
-    m_dataAsScriptValue = Deprecated::ScriptValue(state.vm(), data);
-    m_dataAsSerializedScriptValue = nullptr;
-    m_triedToSerialize = false;
+    m_data = JSValueInWrappedObject { data };
+    m_cachedData = { };
     m_origin = origin;
     m_lastEventId = lastEventId;
     m_source = WTFMove(source);
     m_ports = WTFMove(ports);
-}
-
-EventTarget* MessageEvent::source() const
-{
-    if (!m_source)
-        return nullptr;
-
-    return WTF::switchOn(m_source.value(),
-        [] (const RefPtr<DOMWindow>& window) -> EventTarget* { return const_cast<DOMWindow*>(window.get()); },
-        [] (const RefPtr<MessagePort>& messagePort) -> EventTarget* { return const_cast<MessagePort*>(messagePort.get()); }
-    );
-}
-
-RefPtr<SerializedScriptValue> MessageEvent::trySerializeData(ExecState* exec)
-{
-    ASSERT(!m_dataAsScriptValue.hasNoValue());
-    
-    if (!m_dataAsSerializedScriptValue && !m_triedToSerialize) {
-        m_dataAsSerializedScriptValue = SerializedScriptValue::create(*exec, m_dataAsScriptValue.jsValue(), SerializationErrorMode::NonThrowing);
-        m_triedToSerialize = true;
-    }
-    
-    return m_dataAsSerializedScriptValue;
-}
-
-// FIXME: Remove this when we have custom ObjC binding support.
-SerializedScriptValue* MessageEvent::data() const
-{
-    // WebSocket is not exposed in ObjC bindings, thus the data type should always be SerializedScriptValue.
-    ASSERT(m_dataType == DataTypeSerializedScriptValue);
-    return m_dataAsSerializedScriptValue.get();
+    m_cachedPorts = { };
 }
 
 EventInterface MessageEvent::eventInterface() const
 {
     return MessageEventInterfaceType;
+}
+
+size_t MessageEvent::memoryCost() const
+{
+    return WTF::switchOn(m_data, [] (const JSValueInWrappedObject&) {
+        return 0;
+    }, [] (const Ref<SerializedScriptValue>& data) {
+        return data->memoryCost();
+    }, [] (const String& string) {
+        return string.sizeInBytes();
+    }, [] (const Ref<Blob>& blob) {
+        return blob->size();
+    }, [] (const Ref<ArrayBuffer>& buffer) {
+        return buffer->byteLength();
+    });
 }
 
 } // namespace WebCore

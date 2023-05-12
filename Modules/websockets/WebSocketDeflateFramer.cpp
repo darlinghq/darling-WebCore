@@ -29,9 +29,6 @@
  */
 
 #include "config.h"
-
-#if ENABLE(WEB_SOCKETS)
-
 #include "WebSocketDeflateFramer.h"
 
 #include <wtf/HashMap.h>
@@ -44,7 +41,7 @@ class WebSocketExtensionDeflateFrame : public WebSocketExtensionProcessor {
     WTF_MAKE_FAST_ALLOCATED;
 public:
     explicit WebSocketExtensionDeflateFrame(WebSocketDeflateFramer*);
-    virtual ~WebSocketExtensionDeflateFrame() { }
+    virtual ~WebSocketExtensionDeflateFrame() = default;
 
     String handshakeString() override;
     bool processResponse(const HashMap<String, String>&) override;
@@ -72,7 +69,6 @@ String WebSocketExtensionDeflateFrame::handshakeString()
 
 bool WebSocketExtensionDeflateFrame::processResponse(const HashMap<String, String>& serverParameters)
 {
-#if USE(ZLIB)
     if (m_responseProcessed) {
         m_failureReason = "Received duplicate deflate-frame response";
         return false;
@@ -109,10 +105,6 @@ bool WebSocketExtensionDeflateFrame::processResponse(const HashMap<String, Strin
 
     m_framer->enableDeflate(windowBits, mode);
     return true;
-#else
-    ASSERT_NOT_REACHED();
-    return false;
-#endif
 }
 
 DeflateResultHolder::DeflateResultHolder(WebSocketDeflateFramer* framer)
@@ -158,23 +150,13 @@ WebSocketDeflateFramer::WebSocketDeflateFramer()
 
 std::unique_ptr<WebSocketExtensionProcessor> WebSocketDeflateFramer::createExtensionProcessor()
 {
-    return std::make_unique<WebSocketExtensionDeflateFrame>(this);
+    return makeUnique<WebSocketExtensionDeflateFrame>(this);
 }
 
-bool WebSocketDeflateFramer::canDeflate() const
-{
-#if USE(ZLIB)
-    return true;
-#else
-    return false;
-#endif
-}
-
-#if USE(ZLIB)
 void WebSocketDeflateFramer::enableDeflate(int windowBits, WebSocketDeflater::ContextTakeOverMode mode)
 {
-    m_deflater = std::make_unique<WebSocketDeflater>(windowBits, mode);
-    m_inflater = std::make_unique<WebSocketInflater>();
+    m_deflater = makeUnique<WebSocketDeflater>(windowBits, mode);
+    m_inflater = makeUnique<WebSocketInflater>();
     if (!m_deflater->initialize() || !m_inflater->initialize()) {
         m_deflater = nullptr;
         m_inflater = nullptr;
@@ -182,12 +164,10 @@ void WebSocketDeflateFramer::enableDeflate(int windowBits, WebSocketDeflater::Co
     }
     m_enabled = true;
 }
-#endif
 
 std::unique_ptr<DeflateResultHolder> WebSocketDeflateFramer::deflate(WebSocketFrame& frame)
 {
-#if USE(ZLIB)
-    auto result = std::make_unique<DeflateResultHolder>(this);
+    auto result = makeUnique<DeflateResultHolder>(this);
     if (!enabled() || !WebSocketFrame::isNonControlOpCode(frame.opCode) || !frame.payloadLength)
         return result;
     if (!m_deflater->addBytes(frame.payload, frame.payloadLength) || !m_deflater->finish()) {
@@ -198,27 +178,21 @@ std::unique_ptr<DeflateResultHolder> WebSocketDeflateFramer::deflate(WebSocketFr
     frame.payload = m_deflater->data();
     frame.payloadLength = m_deflater->size();
     return result;
-#else
-    return std::make_unique<DeflateResultHolder>(this);
-#endif
 }
 
 void WebSocketDeflateFramer::resetDeflateContext()
 {
-#if USE(ZLIB)
     if (m_deflater)
         m_deflater->reset();
-#endif
 }
 
 std::unique_ptr<InflateResultHolder> WebSocketDeflateFramer::inflate(WebSocketFrame& frame)
 {
-    auto result = std::make_unique<InflateResultHolder>(this);
+    auto result = makeUnique<InflateResultHolder>(this);
     if (!enabled() && frame.compress) {
         result->fail("Compressed bit must be 0 if no negotiated deflate-frame extension");
         return result;
     }
-#if USE(ZLIB)
     if (!frame.compress)
         return result;
     if (!WebSocketFrame::isNonControlOpCode(frame.opCode)) {
@@ -233,17 +207,12 @@ std::unique_ptr<InflateResultHolder> WebSocketDeflateFramer::inflate(WebSocketFr
     frame.payload = m_inflater->data();
     frame.payloadLength = m_inflater->size();
     return result;
-#else
-    return result;
-#endif
 }
 
 void WebSocketDeflateFramer::resetInflateContext()
 {
-#if USE(ZLIB)
     if (m_inflater)
         m_inflater->reset();
-#endif
 }
 
 void WebSocketDeflateFramer::didFail()
@@ -253,5 +222,3 @@ void WebSocketDeflateFramer::didFail()
 }
 
 } // namespace WebCore
-
-#endif // ENABLE(WEB_SOCKETS)

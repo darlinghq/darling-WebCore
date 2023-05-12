@@ -23,12 +23,12 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "ScrollingMomentumCalculatorMac.h"
+#import "config.h"
+#import "ScrollingMomentumCalculatorMac.h"
 
 #if PLATFORM(MAC)
 
-#include "NSScrollingMomentumCalculatorSPI.h"
+#import <pal/spi/mac/NSScrollingMomentumCalculatorSPI.h>
 
 namespace WebCore {
 
@@ -36,7 +36,7 @@ static bool gEnablePlatformMomentumScrollingPrediction = true;
 
 std::unique_ptr<ScrollingMomentumCalculator> ScrollingMomentumCalculator::create(const FloatSize& viewportSize, const FloatSize& contentSize, const FloatPoint& initialOffset, const FloatSize& initialDelta, const FloatSize& initialVelocity)
 {
-    return std::make_unique<ScrollingMomentumCalculatorMac>(viewportSize, contentSize, initialOffset, initialDelta, initialVelocity);
+    return makeUnique<ScrollingMomentumCalculatorMac>(viewportSize, contentSize, initialOffset, initialDelta, initialVelocity);
 }
 
 void ScrollingMomentumCalculator::setPlatformMomentumScrollingPredictionEnabled(bool enabled)
@@ -70,9 +70,7 @@ void ScrollingMomentumCalculatorMac::retargetedScrollOffsetDidChange()
 {
     _NSScrollingMomentumCalculator *calculator = ensurePlatformMomentumCalculator();
     calculator.destinationOrigin = NSMakePoint(retargetedScrollOffset().width(), retargetedScrollOffset().height());
-#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 101200
     [calculator calculateToReachDestination];
-#endif
 }
 
 Seconds ScrollingMomentumCalculatorMac::animationDuration()
@@ -85,7 +83,7 @@ Seconds ScrollingMomentumCalculatorMac::animationDuration()
 
 bool ScrollingMomentumCalculatorMac::requiresMomentumScrolling()
 {
-    if (m_requiresMomentumScrolling == std::nullopt)
+    if (m_requiresMomentumScrolling == WTF::nullopt)
         m_requiresMomentumScrolling = m_initialScrollOffset != retargetedScrollOffset() || m_initialVelocity.area();
     return m_requiresMomentumScrolling.value();
 }

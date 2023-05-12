@@ -38,11 +38,12 @@
 #include "WebCoreInstanceHandle.h"
 #include <wtf/RefPtr.h>
 
-using namespace WebCore;
+namespace WebCore {
 
 static const int kFullScreenAnimationDuration = 500; // milliseconds 
 
 class FullScreenController::Private : public MediaPlayerPrivateFullscreenClient  {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     Private(FullScreenController* controller, FullScreenControllerClient* client) 
         : m_controller(controller)
@@ -53,7 +54,7 @@ public:
         , m_isExitingFullScreen(false)
     {
     }
-    virtual ~Private() { }
+    virtual ~Private() = default;
 
     virtual LRESULT fullscreenClientWndProc(HWND, UINT, WPARAM, LPARAM);
     
@@ -103,14 +104,12 @@ LRESULT FullScreenController::Private::fullscreenClientWndProc(HWND hwnd, UINT m
 }
 
 FullScreenController::FullScreenController(FullScreenControllerClient* client)
-    : m_private(std::make_unique<Private>(this, client))
+    : m_private(makeUnique<Private>(this, client))
 {
     ASSERT_ARG(client, client);
 }
 
-FullScreenController::~FullScreenController()
-{
-}
+FullScreenController::~FullScreenController() = default;
 
 bool FullScreenController::isFullScreen() const
 {
@@ -133,13 +132,13 @@ void FullScreenController::enterFullScreen()
     m_private->m_originalFrame = originalFrame;
 
     ASSERT(!m_private->m_backgroundWindow);
-    m_private->m_backgroundWindow = std::make_unique<MediaPlayerPrivateFullscreenWindow>(m_private.get());
+    m_private->m_backgroundWindow = makeUnique<MediaPlayerPrivateFullscreenWindow>(m_private.get());
     m_private->m_backgroundWindow->createWindow(0);
     ::AnimateWindow(m_private->m_backgroundWindow->hwnd(), kFullScreenAnimationDuration, AW_BLEND | AW_ACTIVATE);
 
     m_private->m_client->fullScreenClientWillEnterFullScreen();
     ASSERT(!m_private->m_fullScreenWindow);
-    m_private->m_fullScreenWindow = std::make_unique<MediaPlayerPrivateFullscreenWindow>(m_private.get());
+    m_private->m_fullScreenWindow = makeUnique<MediaPlayerPrivateFullscreenWindow>(m_private.get());
     ASSERT(m_private->m_fullScreenWindow);
     m_private->m_fullScreenWindow->createWindow(0);
 
@@ -219,4 +218,7 @@ void FullScreenController::close()
     ::RedrawWindow(m_private->m_client->fullScreenClientWindow(), 0, 0, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE | RDW_ALLCHILDREN);
     m_private->m_backgroundWindow = nullptr;
 }
+
+} // namespace WebCore
+
 #endif

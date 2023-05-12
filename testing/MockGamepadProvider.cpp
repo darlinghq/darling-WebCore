@@ -31,6 +31,7 @@
 #include "GamepadProviderClient.h"
 #include "MockGamepad.h"
 #include <wtf/MainThread.h>
+#include <wtf/NeverDestroyed.h>
 
 namespace WebCore {
 
@@ -40,9 +41,7 @@ MockGamepadProvider& MockGamepadProvider::singleton()
     return sharedProvider;
 }
 
-MockGamepadProvider::MockGamepadProvider()
-{
-}
+MockGamepadProvider::MockGamepadProvider() = default;
 
 void MockGamepadProvider::startMonitoringGamepads(GamepadProviderClient& client)
 {
@@ -56,15 +55,15 @@ void MockGamepadProvider::stopMonitoringGamepads(GamepadProviderClient& client)
     m_clients.remove(&client);
 }
 
-void MockGamepadProvider::setMockGamepadDetails(unsigned index, const String& gamepadID, unsigned axisCount, unsigned buttonCount)
+void MockGamepadProvider::setMockGamepadDetails(unsigned index, const String& gamepadID, const String& mapping, unsigned axisCount, unsigned buttonCount)
 {
     if (index >= m_mockGamepadVector.size())
         m_mockGamepadVector.resize(index + 1);
 
     if (m_mockGamepadVector[index])
-        m_mockGamepadVector[index]->updateDetails(gamepadID, axisCount, buttonCount);
+        m_mockGamepadVector[index]->updateDetails(gamepadID, mapping, axisCount, buttonCount);
     else
-        m_mockGamepadVector[index] = std::make_unique<MockGamepad>(index, gamepadID, axisCount, buttonCount);
+        m_mockGamepadVector[index] = makeUnique<MockGamepad>(index, gamepadID, mapping, axisCount, buttonCount);
 }
 
 bool MockGamepadProvider::connectMockGamepad(unsigned index)
@@ -88,7 +87,7 @@ bool MockGamepadProvider::connectMockGamepad(unsigned index)
     m_connectedGamepadVector[index] = m_mockGamepadVector[index].get();
 
     for (auto& client : m_clients)
-        client->platformGamepadConnected(*m_connectedGamepadVector[index]);
+        client->platformGamepadConnected(*m_connectedGamepadVector[index], EventMakesGamepadsVisible::Yes);
 
     return true;
 }

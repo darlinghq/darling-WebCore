@@ -39,25 +39,25 @@ class AccessibilityTableCell : public AccessibilityRenderObject {
 public:
     static Ref<AccessibilityTableCell> create(RenderObject*);
     virtual ~AccessibilityTableCell();
-    
+
     bool isTableCell() const final;
     bool isTableHeaderCell() const;
-    bool isColumnHeaderCell() const;
-    bool isRowHeaderCell() const;
-    
-    // fills in the start location and row span of cell
-    virtual void rowIndexRange(std::pair<unsigned, unsigned>& rowRange) const;
-    // fills in the start location and column span of cell
-    virtual void columnIndexRange(std::pair<unsigned, unsigned>& columnRange) const;
-    
-    void columnHeaders(AccessibilityChildrenVector&);
-    void rowHeaders(AccessibilityChildrenVector&);
-    
-    int ariaColumnIndex() const;
-    int ariaRowIndex() const;
-    int ariaColumnSpan() const;
-    int ariaRowSpan() const;
-    void setARIAColIndexFromRow(int index) { m_ariaColIndexFromRow = index; }
+    bool isColumnHeaderCell() const override;
+    bool isRowHeaderCell() const override;
+
+    // Returns the start location and row span of the cell.
+    std::pair<unsigned, unsigned> rowIndexRange() const override;
+    // Returns the start location and column span of the cell.
+    std::pair<unsigned, unsigned> columnIndexRange() const override;
+
+    AccessibilityChildrenVector columnHeaders() override;
+    AccessibilityChildrenVector rowHeaders() override;
+
+    int axColumnIndex() const override;
+    int axRowIndex() const override;
+    int axColumnSpan() const;
+    int axRowSpan() const;
+    void setAXColIndexFromRow(int index) { m_axColIndexFromRow = index; }
 
 protected:
     explicit AccessibilityTableCell(RenderObject*);
@@ -67,7 +67,7 @@ protected:
     AccessibilityRole determineAccessibilityRole() final;
 
     int m_rowIndex;
-    int m_ariaColIndexFromRow;
+    int m_axColIndexFromRow;
 
 private:
     // If a table cell is not exposed as a table cell, a TH element can serve as its title UI element.
@@ -77,8 +77,8 @@ private:
     String expandedTextValue() const final;
     bool supportsExpandedTextValue() const final;
 
-    bool isTableCellInSameRowGroup(AccessibilityTableCell*);
-    bool isTableCellInSameColGroup(AccessibilityTableCell*);
+    bool isTableCellInSameRowGroup(AXCoreObject*);
+    bool isTableCellInSameColGroup(AXCoreObject*);
 };
 
 } // namespace WebCore 

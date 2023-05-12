@@ -33,14 +33,16 @@
 #include "RuntimeEnabledFeatures.h"
 
 #include "MediaPlayer.h"
-#include "WebSocket.h"
+#include "PlatformScreen.h"
+#include <JavaScriptCore/Options.h>
+#include <wtf/NeverDestroyed.h>
 
 namespace WebCore {
 
 RuntimeEnabledFeatures::RuntimeEnabledFeatures()
 {
-#if ENABLE(MEDIA_STREAM) && PLATFORM(COCOA)
-    m_isMediaDevicesEnabled = false;
+#if PLATFORM(WATCHOS)
+    m_isWebSocketEnabled = false;
 #endif
 }
 
@@ -51,17 +53,10 @@ RuntimeEnabledFeatures& RuntimeEnabledFeatures::sharedFeatures()
     return runtimeEnabledFeatures;
 }
 
-#if ENABLE(VIDEO)
-bool RuntimeEnabledFeatures::audioEnabled() const
+#if ENABLE(TOUCH_EVENTS)
+bool RuntimeEnabledFeatures::touchEventsEnabled() const
 {
-    return MediaPlayer::isAvailable();
-}
-#endif
-
-#if ENABLE(WEB_SOCKETS)
-bool RuntimeEnabledFeatures::webSocketEnabled() const
-{
-    return WebSocket::isAvailable();
+    return m_touchEventsEnabled.valueOr(screenHasTouchDevice());
 }
 #endif
 

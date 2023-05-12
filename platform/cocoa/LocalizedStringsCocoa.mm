@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011, 2012 Apple Inc. All rights reserved.
+ * Copyright (C) 2011-2017 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,21 +23,21 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "config.h"
-#include "LocalizedStrings.h"
+#import "config.h"
+#import "LocalizedStrings.h"
 
-#include "NotImplemented.h"
-#include "WebCoreSystemInterface.h"
-#include <wtf/Assertions.h>
-#include <wtf/MainThread.h>
-#include <wtf/RetainPtr.h>
-#include <wtf/text/WTFString.h>
+#import "NotImplemented.h"
+#import <pal/system/mac/DefaultSearchProvider.h>
+#import <wtf/Assertions.h>
+#import <wtf/MainThread.h>
+#import <wtf/RetainPtr.h>
+#import <wtf/text/WTFString.h>
 
 namespace WebCore {
 
 NSString *localizedNSString(NSString *key)
 {
-#if !PLATFORM(IOS)
+#if !PLATFORM(IOS_FAMILY)
     // Can be called on a dispatch queue when initializing strings on iOS.
     // See LoadWebLocalizedStrings and <rdar://problem/7902473>.
     ASSERT(isMainThread());
@@ -50,13 +50,24 @@ NSString *localizedNSString(NSString *key)
 String localizedString(const char* key)
 {
     RetainPtr<CFStringRef> keyString = adoptCF(CFStringCreateWithCStringNoCopy(0, key, kCFStringEncodingUTF8, kCFAllocatorNull));
-    return localizedNSString((NSString *)keyString.get());
+    return localizedNSString((__bridge NSString *)keyString.get());
 }
 
 String copyImageUnknownFileLabel()
 {
     return WEB_UI_STRING("unknown", "Unknown filename");
 }
+#if ENABLE(APP_HIGHLIGHTS)
+String contextMenuItemTagAddHighlightToCurrentGroup()
+{
+    return localizedNSString(@"Add Highlight To Current Group");
+}
+
+String contextMenuItemTagAddHighlightToNewGroup()
+{
+    return localizedNSString(@"Add Highlight To New Group");
+}
+#endif
 
 #if ENABLE(CONTEXT_MENUS)
 String contextMenuItemTagSearchInSpotlight()
@@ -66,7 +77,7 @@ String contextMenuItemTagSearchInSpotlight()
 
 String contextMenuItemTagSearchWeb()
 {
-    auto searchProviderName = adoptCF(wkCopyDefaultSearchProviderDisplayName());
+    auto searchProviderName = PAL::defaultSearchProviderDisplayName();
     return formatLocalizedString(WEB_UI_STRING("Search with %@", "Search with search provider context menu item with provider name inserted"), searchProviderName.get());
 }
 
@@ -181,64 +192,6 @@ String contextMenuItemTagExitVideoEnhancedFullscreen()
 #endif
 #endif // ENABLE(CONTEXT_MENUS)
 
-String AXARIAContentGroupText(const String& ariaType)
-{
-    if (ariaType == "ARIAApplicationAlert")
-        return WEB_UI_STRING("alert", "An ARIA accessibility group that acts as an alert.");
-    if (ariaType == "ARIAApplicationAlertDialog")
-        return WEB_UI_STRING("web alert dialog", "An ARIA accessibility group that acts as an alert dialog.");
-    if (ariaType == "ARIAApplicationDialog")
-        return WEB_UI_STRING("web dialog", "An ARIA accessibility group that acts as an dialog.");
-    if (ariaType == "ARIAApplicationLog")
-        return WEB_UI_STRING("log", "An ARIA accessibility group that acts as a console log.");
-    if (ariaType == "ARIAApplicationMarquee")
-        return WEB_UI_STRING("marquee", "An ARIA accessibility group that acts as a marquee.");
-    if (ariaType == "ARIAApplicationStatus")
-        return WEB_UI_STRING("application status", "An ARIA accessibility group that acts as a status update.");
-    if (ariaType == "ARIAApplicationTimer")
-        return WEB_UI_STRING("timer", "An ARIA accessibility group that acts as an updating timer.");
-    if (ariaType == "ARIADocument")
-        return WEB_UI_STRING("document", "An ARIA accessibility group that acts as a document.");
-    if (ariaType == "ARIADocumentArticle")
-        return WEB_UI_STRING("article", "An ARIA accessibility group that acts as an article.");
-    if (ariaType == "ARIADocumentNote")
-        return WEB_UI_STRING("note", "An ARIA accessibility group that acts as a note in a document.");
-    if (ariaType == "ARIAWebApplication")
-        return WEB_UI_STRING("web application", "An ARIA accessibility group that acts as an application.");
-    if (ariaType == "ARIALandmarkBanner")
-        return WEB_UI_STRING("banner", "An ARIA accessibility group that acts as a banner.");
-    if (ariaType == "ARIALandmarkComplementary")
-        return WEB_UI_STRING("complementary", "An ARIA accessibility group that acts as a region of complementary information.");
-    if (ariaType == "ARIALandmarkContentInfo")
-        return WEB_UI_STRING("content information", "An ARIA accessibility group that contains content.");
-    if (ariaType == "ARIALandmarkMain")
-        return WEB_UI_STRING("main", "An ARIA accessibility group that is the main portion of the website.");
-    if (ariaType == "ARIALandmarkNavigation")
-        return WEB_UI_STRING("navigation", "An ARIA accessibility group that contains the main navigation elements of a website.");
-    if (ariaType == "ARIALandmarkRegion")
-        return WEB_UI_STRING("region", "An ARIA accessibility group that acts as a distinct region in a document.");
-    if (ariaType == "ARIALandmarkSearch")
-        return WEB_UI_STRING("search", "An ARIA accessibility group that contains a search feature of a website.");
-    if (ariaType == "ARIAUserInterfaceTooltip")
-        return WEB_UI_STRING("tooltip", "An ARIA accessibility group that acts as a tooltip.");
-    if (ariaType == "ARIATabPanel")
-        return WEB_UI_STRING("tab panel", "An ARIA accessibility group that contains the content of a tab.");
-    if (ariaType == "ARIADocumentMath")
-        return WEB_UI_STRING("math", "An ARIA accessibility group that contains mathematical symbols.");
-    return String();
-}
-
-String AXHorizontalRuleDescriptionText()
-{
-    return WEB_UI_STRING("rule", "accessibility role description for a horizontal rule [<hr>]");
-}
-
-String AXMarkText()
-{
-    return WEB_UI_STRING("highlighted", "accessibility role description for a mark element");
-}
-
-#if ENABLE(METER_ELEMENT)
 String AXMeterGaugeRegionOptimumText()
 {
     return WEB_UI_STRING("optimal value", "The optimum value description for a meter element.");
@@ -253,7 +206,6 @@ String AXMeterGaugeRegionLessGoodText()
 {
     return WEB_UI_STRING("critical value", "The less good value description for a meter element.");
 }
-#endif // ENABLE(METER_ELEMENT)
 
 String builtInPDFPluginName()
 {
@@ -283,7 +235,7 @@ String keygenKeychainItemName(const String& host)
     return formatLocalizedString(WEB_UI_STRING("Key from %@", "Name of keychain key generated by the KEYGEN tag"), host.createCFString().get());
 }
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 String htmlSelectMultipleItems(size_t count)
 {
     switch (count) {

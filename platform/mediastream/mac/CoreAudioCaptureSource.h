@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 Apple Inc. All rights reserved.
+ * Copyright (C) 2017-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,6 +30,7 @@
 #include "CAAudioStreamDescription.h"
 #include "CaptureDevice.h"
 #include "RealtimeMediaSource.h"
+#include "RealtimeMediaSourceFactory.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudioTypes.h>
 #include <wtf/HashMap.h>
@@ -48,35 +49,27 @@ namespace WebCore {
 
 class AudioSampleBufferList;
 class AudioSampleDataSource;
+class BaseAudioSharedUnit;
 class CaptureDeviceInfo;
 class WebAudioSourceProviderAVFObjC;
 
 class CoreAudioCaptureSource : public RealtimeMediaSource {
 public:
-
-    static CaptureSourceOrError create(const String& deviceID, const MediaConstraints*);
+    static CaptureSourceOrError create(String&& deviceID, String&& hashSalt, const MediaConstraints*);
+    static CaptureSourceOrError createForTesting(String&& deviceID, String&& label, String&& hashSalt, const MediaConstraints*, BaseAudioSharedUnit& overrideUnit);
 
     WEBCORE_EXPORT static AudioCaptureFactory& factory();
 
-    void addEchoCancellationSource(AudioSampleDataSource&);
-    void removeEchoCancellationSource(AudioSampleDataSource&);
-
-    using MicrophoneDataCallback = WTF::Function<void(const MediaTime& sampleTime, const PlatformAudioData& audioData, const AudioStreamDescription& description, size_t sampleCount)>;
-
-    uint64_t addMicrophoneDataConsumer(MicrophoneDataCallback&&);
-    void removeMicrophoneDataConsumer(uint64_t);
-
     CMClockRef timebaseClock();
 
-    void beginInterruption();
-    void endInterruption();
-    void scheduleReconfiguration();
-
 protected:
-    CoreAudioCaptureSource(const String& deviceID, const String& label, uint32_t persistentID);
+    CoreAudioCaptureSource(String&& deviceID, String&& label, String&& hashSalt, uint32_t persistentID, BaseAudioSharedUnit* = nullptr);
     virtual ~CoreAudioCaptureSource();
+    BaseAudioSharedUnit& unit();
+    const BaseAudioSharedUnit& unit() const;
 
 private:
+    friend class BaseAudioSharedUnit;
     friend class CoreAudioSharedUnit;
     friend class CoreAudioCaptureSourceFactory;
 
@@ -84,31 +77,55 @@ private:
     void startProducingData() final;
     void stopProducingData() final;
 
-    bool applyVolume(double) final { return true; }
-    bool applySampleRate(int) final;
-    bool applyEchoCancellation(bool) final;
+    void delaySamples(Seconds) final;
+    void setInterruptedForTesting(bool) final;
 
-    const RealtimeMediaSourceCapabilities& capabilities() const final;
-    const RealtimeMediaSourceSettings& settings() const final;
-    void settingsDidChange() final;
+    Optional<Vector<int>> discreteSampleRates() const final { return { { 8000, 16000, 32000, 44100, 48000, 96000 } }; }
+
+    const RealtimeMediaSourceCapabilities& capabilities() final;
+    const RealtimeMediaSourceSettings& settings() final;
+    void settingsDidChange(OptionSet<RealtimeMediaSourceSettings::Flag>) final;
 
     bool interrupted() const final;
+    CaptureDevice::DeviceType deviceType() const final { return CaptureDevice::DeviceType::Microphone; }
+
+    void initializeToStartProducingData();
+    void audioUnitWillStart();
+
+#if !RELEASE_LOG_DISABLED
+    const char* logClassName() const override { return "CoreAudioCaptureSource"; }
+#endif
 
     uint32_t m_captureDeviceID { 0 };
 
-    mutable std::optional<RealtimeMediaSourceCapabilities> m_capabilities;
-    mutable std::optional<RealtimeMediaSourceSettings> m_currentSettings;
+    Optional<RealtimeMediaSourceCapabilities> m_capabilities;
+    Optional<RealtimeMediaSourceSettings> m_currentSettings;
 
-    enum class SuspensionType { None, WhilePaused, WhilePlaying };
-    SuspensionType m_suspendType { SuspensionType::None };
-
-    enum class ReconfigurationState { None, Required, Ongoing };
-    ReconfigurationState m_reconfigurationState { ReconfigurationState::None };
-
-    bool m_reconfigurationRequired { false };
-    bool m_suspendPending { false };
-    bool m_resumePending { false };
+    bool m_isReadyToStart { false };
+    
+    BaseAudioSharedUnit* m_overrideUnit { nullptr };
 };
+
+class CoreAudioCaptureSourceFactory : public AudioCaptureFactory {
+public:
+    static CoreAudioCaptureSourceFactory& singleton();
+
+    void beginInterruption();
+    void endInterruption();
+    void scheduleReconfiguration();
+
+    void devicesChanged(const Vector<CaptureDevice>&);
+
+private:
+    CaptureSourceOrError createAudioCaptureSource(const CaptureDevice&, String&&, const MediaConstraints*) override;
+    CaptureDeviceManager& audioCaptureDeviceManager() final;
+    const Vector<CaptureDevice>& speakerDevices() const final;
+};
+
+inline CaptureSourceOrError CoreAudioCaptureSourceFactory::createAudioCaptureSource(const CaptureDevice& device, String&& hashSalt, const MediaConstraints* constraints)
+{
+    return CoreAudioCaptureSource::create(String { device.persistentId() }, WTFMove(hashSalt), constraints);
+}
 
 } // namespace WebCore
 

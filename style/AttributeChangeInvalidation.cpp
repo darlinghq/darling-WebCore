@@ -26,114 +26,70 @@
 #include "config.h"
 #include "AttributeChangeInvalidation.h"
 
-#include "DocumentRuleSets.h"
 #include "ElementIterator.h"
-#include "HTMLSlotElement.h"
-#include "ShadowRoot.h"
-#include "StyleInvalidator.h"
-#include "StyleResolver.h"
-#include "StyleScope.h"
+#include "StyleInvalidationFunctions.h"
 
 namespace WebCore {
 namespace Style {
 
-static bool mayBeAffectedByAttributeChange(DocumentRuleSets& ruleSets, bool isHTML, const QualifiedName& attributeName)
+static bool mayBeAffectedByAttributeChange(const RuleFeatureSet& features, bool isHTML, const QualifiedName& attributeName)
 {
-    auto& nameSet = isHTML ? ruleSets.features().attributeCanonicalLocalNamesInRules : ruleSets.features().attributeLocalNamesInRules;
+    auto& nameSet = isHTML ? features.attributeCanonicalLocalNamesInRules : features.attributeLocalNamesInRules;
     return nameSet.contains(attributeName.localName());
 }
 
-static bool mayBeAffectedByHostRules(const Element& element, const QualifiedName& attributeName, bool& mayAffectShadowTree)
-{
-    // FIXME: More of this code should be shared between Class/Attribute/IdInvalidation.
-    auto* shadowRoot = element.shadowRoot();
-    if (!shadowRoot)
-        return false;
-    auto& shadowRuleSets = shadowRoot->styleScope().resolver().ruleSets();
-    auto& authorStyle = shadowRuleSets.authorStyle();
-    if (authorStyle.hostPseudoClassRules().isEmpty() && !authorStyle.hasHostPseudoClassRulesMatchingInShadowTree())
-        return false;
-
-    if (!mayBeAffectedByAttributeChange(shadowRuleSets, element.isHTMLElement(), attributeName))
-        return false;
-
-    if (authorStyle.hasHostPseudoClassRulesMatchingInShadowTree())
-        mayAffectShadowTree = true;
-    return true;
-}
-
-static bool mayBeAffectedBySlottedRules(const Element& element, const QualifiedName& attributeName)
-{
-    for (auto* shadowRoot : assignedShadowRootsIfSlotted(element)) {
-        auto& ruleSets = shadowRoot->styleScope().resolver().ruleSets();
-        if (ruleSets.authorStyle().slottedPseudoElementRules().isEmpty())
-            continue;
-        if (mayBeAffectedByAttributeChange(ruleSets, element.isHTMLElement(), attributeName))
-            return true;
-    }
-    return false;
-}
-
-void AttributeChangeInvalidation::invalidateStyle(const QualifiedName& attributeName, const AtomicString& oldValue, const AtomicString& newValue)
+void AttributeChangeInvalidation::invalidateStyle(const QualifiedName& attributeName, const AtomString& oldValue, const AtomString& newValue)
 {
     if (newValue == oldValue)
         return;
 
-    auto& ruleSets = m_element.styleResolver().ruleSets();
     bool isHTML = m_element.isHTMLElement();
-    bool mayAffectShadowTree = false;
 
-    bool mayAffectStyle = mayBeAffectedByAttributeChange(ruleSets, isHTML, attributeName)
-        || mayBeAffectedByHostRules(m_element, attributeName, mayAffectShadowTree)
-        || mayBeAffectedBySlottedRules(m_element, attributeName);
+    bool shouldInvalidateCurrent = false;
+    bool mayAffectStyleInShadowTree = false;
 
-    if (!mayAffectStyle)
-        return;
+    auto attributeNameForLookups = attributeName.localName().convertToASCIILowercase();
 
-    if (!isHTML) {
+    traverseRuleFeatures(m_element, [&] (const RuleFeatureSet& features, bool mayAffectShadowTree) {
+        if (mayAffectShadowTree && mayBeAffectedByAttributeChange(features, isHTML, attributeName))
+            mayAffectStyleInShadowTree = true;
+        if (features.attributesAffectingHost.contains(attributeNameForLookups))
+            shouldInvalidateCurrent = true;
+        else if (features.contentAttributeNamesInRules.contains(attributeNameForLookups))
+            shouldInvalidateCurrent = true;
+    });
+
+    if (mayAffectStyleInShadowTree) {
+        // FIXME: More fine-grained invalidation.
         m_element.invalidateStyleForSubtree();
-        return;
     }
 
-    if (m_element.shadowRoot() && ruleSets.authorStyle().hasShadowPseudoElementRules())
-        mayAffectShadowTree = true;
+    if (shouldInvalidateCurrent)
+        m_element.invalidateStyle();
 
-    if (is<HTMLSlotElement>(m_element) && !ruleSets.authorStyle().slottedPseudoElementRules().isEmpty())
-        mayAffectShadowTree = true;
+    auto& ruleSets = m_element.styleResolver().ruleSets();
 
-    if (mayAffectShadowTree) {
-        m_element.invalidateStyleForSubtree();
-        return;
-    }
-
-    m_element.invalidateStyle();
-
-    if (!childrenOfType<Element>(m_element).first())
+    auto* invalidationRuleSets = ruleSets.attributeInvalidationRuleSets(attributeNameForLookups);
+    if (!invalidationRuleSets)
         return;
 
-    auto* attributeRules = ruleSets.ancestorAttributeRulesForHTML(attributeName.localName());
-    if (!attributeRules)
-        return;
-
-    // Check if descendants may be affected by this attribute change.
-    for (auto* selector : attributeRules->attributeSelectors) {
-        bool oldMatches = oldValue.isNull() ? false : SelectorChecker::attributeSelectorMatches(m_element, attributeName, oldValue, *selector);
-        bool newMatches = newValue.isNull() ? false : SelectorChecker::attributeSelectorMatches(m_element, attributeName, newValue, *selector);
-
-        if (oldMatches != newMatches) {
-            m_descendantInvalidationRuleSet = attributeRules->ruleSet.get();
-            return;
+    for (auto& invalidationRuleSet : *invalidationRuleSets) {
+        for (auto* selector : invalidationRuleSet.invalidationSelectors) {
+            bool oldMatches = !oldValue.isNull() && SelectorChecker::attributeSelectorMatches(m_element, attributeName, oldValue, *selector);
+            bool newMatches = !newValue.isNull() && SelectorChecker::attributeSelectorMatches(m_element, attributeName, newValue, *selector);
+            if (oldMatches != newMatches) {
+                Invalidator::addToMatchElementRuleSets(m_matchElementRuleSets, invalidationRuleSet);
+                break;
+            }
         }
     }
 }
 
-void AttributeChangeInvalidation::invalidateDescendants()
+void AttributeChangeInvalidation::invalidateStyleWithRuleSets()
 {
-    if (!m_descendantInvalidationRuleSet)
-        return;
-    Invalidator invalidator(*m_descendantInvalidationRuleSet);
-    invalidator.invalidateStyle(m_element);
+    Invalidator::invalidateWithMatchElementRuleSets(m_element, m_matchElementRuleSets);
 }
+
 
 }
 }

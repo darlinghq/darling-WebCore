@@ -26,16 +26,18 @@
 #ifndef BlobDataFileReference_h
 #define BlobDataFileReference_h
 
+#include <wtf/Markable.h>
 #include <wtf/RefCounted.h>
+#include <wtf/WallTime.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
 class WEBCORE_EXPORT BlobDataFileReference : public RefCounted<BlobDataFileReference> {
 public:
-    static Ref<BlobDataFileReference> create(const String& path)
+    static Ref<BlobDataFileReference> create(const String& path, const String& replacementPath = { })
     {
-        return adoptRef(*new BlobDataFileReference(path));
+        return adoptRef(*new BlobDataFileReference(path, replacementPath));
     }
 
     virtual ~BlobDataFileReference();
@@ -44,13 +46,13 @@ public:
 
     const String& path();
     unsigned long long size();
-    double expectedModificationTime();
+    Optional<WallTime> expectedModificationTime();
 
     virtual void prepareForFileAccess();
     virtual void revokeFileAccess();
 
 protected:
-    BlobDataFileReference(const String& path);
+    BlobDataFileReference(const String& path, const String& replacementPath);
 
 private:
 #if ENABLE(FILE_REPLACEMENT)
@@ -58,12 +60,12 @@ private:
 #endif
 
     String m_path;
-#if ENABLE(FILE_REPLACEMENT)
     String m_replacementPath;
-    bool m_replacementShouldBeGenerated;
+#if ENABLE(FILE_REPLACEMENT)
+    bool m_replacementShouldBeGenerated { false };
 #endif
-    unsigned long long m_size;
-    double m_expectedModificationTime;
+    unsigned long long m_size { 0 };
+    Markable<WallTime, WallTime::MarkableTraits> m_expectedModificationTime;
 };
 
 }

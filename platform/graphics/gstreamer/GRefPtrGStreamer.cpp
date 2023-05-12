@@ -23,6 +23,10 @@
 #if USE(GSTREAMER)
 #include <gst/gst.h>
 
+#if USE(GSTREAMER_GL)
+#include <gst/gl/egl/gsteglimage.h>
+#endif
+
 namespace WTF {
 
 template <> GRefPtr<GstElement> adoptGRef(GstElement* ptr)
@@ -40,6 +44,27 @@ template <> GstElement* refGPtr<GstElement>(GstElement* ptr)
 }
 
 template <> void derefGPtr<GstElement>(GstElement* ptr)
+{
+    if (ptr)
+        gst_object_unref(ptr);
+}
+
+
+template <> GRefPtr<GstPlugin> adoptGRef(GstPlugin* ptr)
+{
+    ASSERT(!ptr || !g_object_is_floating(ptr));
+    return GRefPtr<GstPlugin>(ptr, GRefPtrAdopt);
+}
+
+template <> GstPlugin* refGPtr<GstPlugin>(GstPlugin* ptr)
+{
+    if (ptr)
+        gst_object_ref_sink(GST_OBJECT(ptr));
+
+    return ptr;
+}
+
+template <> void derefGPtr<GstPlugin>(GstPlugin* ptr)
 {
     if (ptr)
         gst_object_unref(ptr);
@@ -353,6 +378,66 @@ template <> void derefGPtr<GstQuery>(GstQuery* ptr)
         gst_query_unref(ptr);
 }
 
+template <> GRefPtr<GstStream> adoptGRef(GstStream* ptr)
+{
+    return GRefPtr<GstStream>(ptr, GRefPtrAdopt);
+}
+
+template <> GstStream* refGPtr<GstStream>(GstStream* ptr)
+{
+    if (ptr)
+        gst_object_ref(GST_OBJECT_CAST(ptr));
+
+    return ptr;
+}
+
+template <> void derefGPtr<GstStream>(GstStream* ptr)
+{
+    if (ptr)
+        gst_object_unref(ptr);
+}
+
+template <> GRefPtr<GstStreamCollection> adoptGRef(GstStreamCollection* ptr)
+{
+    return GRefPtr<GstStreamCollection>(ptr, GRefPtrAdopt);
+}
+
+template <> GstStreamCollection* refGPtr<GstStreamCollection>(GstStreamCollection* ptr)
+{
+    if (ptr)
+        gst_object_ref(GST_OBJECT_CAST(ptr));
+
+    return ptr;
+}
+
+template <> void derefGPtr<GstStreamCollection>(GstStreamCollection* ptr)
+{
+    if (ptr)
+        gst_object_unref(ptr);
+}
+
+template <>
+GRefPtr<GstClock> adoptGRef(GstClock* ptr)
+{
+    return GRefPtr<GstClock>(ptr, GRefPtrAdopt);
+}
+
+template <>
+GstClock* refGPtr<GstClock>(GstClock* ptr)
+{
+    if (ptr)
+        gst_object_ref(GST_OBJECT_CAST(ptr));
+
+    return ptr;
+}
+
+template <>
+void derefGPtr<GstClock>(GstClock* ptr)
+{
+    if (ptr)
+        gst_object_unref(ptr);
+}
+
 template <> GRefPtr<WebKitVideoSink> adoptGRef(WebKitVideoSink* ptr)
 {
     ASSERT(!ptr || !g_object_is_floating(ptr));
@@ -402,6 +487,68 @@ template <> void derefGPtr<WebKitWebSrc>(WebKitWebSrc* ptr)
     if (ptr)
         gst_object_unref(GST_OBJECT(ptr));
 }
+
+#if USE(GSTREAMER_GL)
+
+template<> GRefPtr<GstGLDisplay> adoptGRef(GstGLDisplay* ptr)
+{
+    ASSERT(!ptr || !g_object_is_floating(ptr));
+    return GRefPtr<GstGLDisplay>(ptr, GRefPtrAdopt);
+}
+
+template<> GstGLDisplay* refGPtr<GstGLDisplay>(GstGLDisplay* ptr)
+{
+    if (ptr)
+        gst_object_ref_sink(GST_OBJECT(ptr));
+
+    return ptr;
+}
+
+template<> void derefGPtr<GstGLDisplay>(GstGLDisplay* ptr)
+{
+    if (ptr)
+        gst_object_unref(GST_OBJECT(ptr));
+}
+
+template<> GRefPtr<GstGLContext> adoptGRef(GstGLContext* ptr)
+{
+    ASSERT(!ptr || !g_object_is_floating(ptr));
+    return GRefPtr<GstGLContext>(ptr, GRefPtrAdopt);
+}
+
+template<> GstGLContext* refGPtr<GstGLContext>(GstGLContext* ptr)
+{
+    if (ptr)
+        gst_object_ref_sink(GST_OBJECT(ptr));
+
+    return ptr;
+}
+
+template<> void derefGPtr<GstGLContext>(GstGLContext* ptr)
+{
+    if (ptr)
+        gst_object_unref(GST_OBJECT(ptr));
+}
+
+template <> GRefPtr<GstEGLImage> adoptGRef(GstEGLImage* ptr)
+{
+    return GRefPtr<GstEGLImage>(ptr, GRefPtrAdopt);
+}
+
+template <> GstEGLImage* refGPtr<GstEGLImage>(GstEGLImage* ptr)
+{
+    if (ptr)
+        gst_egl_image_ref(ptr);
+    return ptr;
+}
+
+template <> void derefGPtr<GstEGLImage>(GstEGLImage* ptr)
+{
+    if (ptr)
+        gst_egl_image_unref(ptr);
+}
+
+#endif // USE(GSTREAMER_GL)
 
 } // namespace WTF
 

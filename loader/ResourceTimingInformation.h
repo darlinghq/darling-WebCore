@@ -25,8 +25,6 @@
 
 #pragma once
 
-#if ENABLE(WEB_TIMING)
-
 #include "CachedResourceHandle.h"
 #include <wtf/HashMap.h>
 #include <wtf/text/WTFString.h>
@@ -43,17 +41,15 @@ public:
     static bool shouldAddResourceTiming(CachedResource&);
 
     void addResourceTiming(CachedResource&, Document&, ResourceTiming&&);
-    void storeResourceTimingInitiatorInformation(const CachedResourceHandle<CachedResource>&, const AtomicString&, Frame*);
+    void storeResourceTimingInitiatorInformation(const CachedResourceHandle<CachedResource>&, const AtomString&, Frame*);
 
 private:
     enum AlreadyAdded { NotYetAdded, Added };
     struct InitiatorInfo {
-        AtomicString name;
+        AtomString name;
         AlreadyAdded added;
     };
     HashMap<CachedResource*, InitiatorInfo> m_initiatorMap;
 };
 
 }
-
-#endif // ENABLE(WEB_TIMING)

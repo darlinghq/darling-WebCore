@@ -30,6 +30,8 @@
 #include <wtf/Function.h>
 #include <wtf/HashSet.h>
 #include <wtf/RefCounted.h>
+#include <wtf/WeakHashSet.h>
+#include <wtf/WeakPtr.h>
 
 #if ENABLE(CONTENT_EXTENSIONS)
 #include "ContentExtensionActions.h"
@@ -42,23 +44,21 @@ class DOMWrapperWorld;
 class DocumentLoader;
 class Page;
 class ResourceRequest;
-class URL;
 class UserMessageHandlerDescriptor;
 class UserScript;
 class UserStyleSheet;
 
-enum class ResourceType : uint16_t;
-
-struct ResourceLoadInfo;
-
+#if ENABLE(CONTENT_EXTENSIONS)
 namespace ContentExtensions {
 class ContentExtensionsBackend;
-struct Action;
+enum class ResourceType : uint16_t;
+struct ResourceLoadInfo;
 }
+#endif
 
 class UserContentProvider;
 
-class UserContentProviderInvalidationClient {
+class UserContentProviderInvalidationClient : public CanMakeWeakPtr<UserContentProviderInvalidationClient> {
 public:
     virtual ~UserContentProviderInvalidationClient()
     {
@@ -90,8 +90,9 @@ public:
 #if ENABLE(CONTENT_EXTENSIONS)
     // FIXME: These don't really belong here. They should probably bundled up in the ContentExtensionsBackend
     // which should always exist.
-    ContentExtensions::BlockedStatus processContentExtensionRulesForLoad(const URL&, ResourceType, DocumentLoader& initiatingDocumentLoader);
-    Vector<ContentExtensions::Action> actionsForResourceLoad(const ResourceLoadInfo&, DocumentLoader& initiatingDocumentLoader);
+    ContentRuleListResults processContentRuleListsForLoad(const URL&, OptionSet<ContentExtensions::ResourceType>, DocumentLoader& initiatingDocumentLoader);
+    Vector<ContentExtensions::ActionsFromContentRuleList> actionsForResourceLoad(const ContentExtensions::ResourceLoadInfo&, DocumentLoader& initiatingDocumentLoader);
+    WEBCORE_EXPORT void forEachContentExtension(const Function<void(const String&, ContentExtensions::ContentExtension&)>&, DocumentLoader& initiatingDocumentLoader);
 #endif
 
 protected:
@@ -99,8 +100,8 @@ protected:
     WEBCORE_EXPORT void invalidateInjectedStyleSheetCacheInAllFramesInAllPages();
 
 private:
-    HashSet<Page*> m_pages;
-    HashSet<UserContentProviderInvalidationClient*> m_userMessageHandlerInvalidationClients;
+    WeakHashSet<Page> m_pages;
+    WeakHashSet<UserContentProviderInvalidationClient> m_userMessageHandlerInvalidationClients;
 };
 
 } // namespace WebCore

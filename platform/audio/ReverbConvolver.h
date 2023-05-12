@@ -43,13 +43,15 @@ namespace WebCore {
 
 class AudioChannel;
 
-class ReverbConvolver {
+class ReverbConvolver final {
+    WTF_MAKE_FAST_ALLOCATED;
+    WTF_MAKE_NONCOPYABLE(ReverbConvolver);
 public:
     // maxFFTSize can be adjusted (from say 2048 to 32768) depending on how much precision is necessary.
     // For certain tweaky de-convolving applications the phase errors add up quickly and lead to non-sensical results with
     // larger FFT sizes and single-precision floats.  In these cases 2048 is a good size.
     // If not doing multi-threaded convolution, then should not go > 8192.
-    ReverbConvolver(AudioChannel* impulseResponse, size_t renderSliceSize, size_t maxFFTSize, size_t convolverRenderPhase, bool useBackgroundThreads);
+    ReverbConvolver(AudioChannel* impulseResponse, size_t renderSliceSize, size_t maxFFTSize, size_t convolverRenderPhase, bool useBackgroundThreads, float scale);
     ~ReverbConvolver();
 
     void process(const AudioChannel* sourceChannel, AudioChannel* destinationChannel, size_t framesToProcess);
@@ -84,9 +86,9 @@ private:
     // Background thread and synchronization
     bool m_useBackgroundThreads;
     RefPtr<Thread> m_backgroundThread;
-    bool m_wantsToExit;
-    bool m_moreInputBuffered;
-    mutable Lock m_backgroundThreadMutex;
+    bool m_wantsToExit { false };
+    bool m_moreInputBuffered { false };
+    mutable Lock m_backgroundThreadLock;
     mutable Condition m_backgroundThreadConditionVariable;
 };
 

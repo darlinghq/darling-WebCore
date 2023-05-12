@@ -26,14 +26,19 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef FloatQuad_h
-#define FloatQuad_h
+#pragma once
 
-#include "FloatPoint.h"
 #include "FloatRect.h"
 #include "IntRect.h"
+#include <wtf/Forward.h>
+
+namespace WTF {
+class TextStream;
+}
 
 namespace WebCore {
+
+// FIXME: Seems like this would be better as a struct.
 
 // A FloatQuad is a collection of 4 points, often representing the result of
 // mapping a rectangle through transforms. When initialized from a rect, the
@@ -61,10 +66,10 @@ public:
     {
     }
 
-    FloatPoint p1() const { return m_p1; }
-    FloatPoint p2() const { return m_p2; }
-    FloatPoint p3() const { return m_p3; }
-    FloatPoint p4() const { return m_p4; }
+    const FloatPoint& p1() const { return m_p1; }
+    const FloatPoint& p2() const { return m_p2; }
+    const FloatPoint& p3() const { return m_p3; }
+    const FloatPoint& p4() const { return m_p4; }
 
     void setP1(const FloatPoint& p) { m_p1 = p; }
     void setP2(const FloatPoint& p) { m_p2 = p; }
@@ -165,22 +170,17 @@ inline FloatQuad& operator-=(FloatQuad& a, const FloatSize& b)
 
 inline bool operator==(const FloatQuad& a, const FloatQuad& b)
 {
-    return a.p1() == b.p1() &&
-           a.p2() == b.p2() && 
-           a.p3() == b.p3() &&
-           a.p4() == b.p4();
+    return a.p1() == b.p1() && a.p2() == b.p2() && a.p3() == b.p3() && a.p4() == b.p4();
 }
 
 inline bool operator!=(const FloatQuad& a, const FloatQuad& b)
 {
-    return a.p1() != b.p1() ||
-           a.p2() != b.p2() || 
-           a.p3() != b.p3() ||
-           a.p4() != b.p4();
+    return !(a == b);
 }
 
-}   // namespace WebCore
+WTF::TextStream& operator<<(WTF::TextStream&, const FloatQuad&);
 
+Vector<FloatRect> boundingBoxes(const Vector<FloatQuad>&);
+WEBCORE_EXPORT FloatRect unitedBoundingBoxes(const Vector<FloatQuad>&);
 
-#endif // FloatQuad_h
-
+} // namespace WebCore

@@ -23,11 +23,8 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
-
-#if USE(VIDEOTOOLBOX)
-
 #include <CoreMedia/CMTime.h>
+#include <functional>
 #include <wtf/Lock.h>
 #include <wtf/MediaTime.h>
 #include <wtf/OSObjectPtr.h>
@@ -49,7 +46,7 @@ typedef struct OpaqueVTDecompressionSession*  VTDecompressionSessionRef;
 
 namespace WebCore {
 
-class WebCoreDecompressionSession : public ThreadSafeRefCounted<WebCoreDecompressionSession> {
+class WEBCORE_EXPORT WebCoreDecompressionSession : public ThreadSafeRefCounted<WebCoreDecompressionSession> {
 public:
     static Ref<WebCoreDecompressionSession> createOpenGL() { return adoptRef(*new WebCoreDecompressionSession(OpenGL)); }
     static Ref<WebCoreDecompressionSession> createRGB() { return adoptRef(*new WebCoreDecompressionSession(RGB)); }
@@ -72,10 +69,13 @@ public:
     RetainPtr<CVPixelBufferRef> imageForTime(const MediaTime&, ImageForTimeFlags = ExactTime);
     void flush();
 
-    unsigned long totalVideoFrames() { return m_totalVideoFrames; }
-    unsigned long droppedVideoFrames() { return m_droppedVideoFrames; }
-    unsigned long corruptedVideoFrames() { return m_corruptedVideoFrames; }
-    MediaTime totalFrameDelay() { return m_totalFrameDelay; }
+    unsigned totalVideoFrames() const { return m_totalVideoFrames; }
+    unsigned droppedVideoFrames() const { return m_droppedVideoFrames; }
+    unsigned corruptedVideoFrames() const { return m_corruptedVideoFrames; }
+    MediaTime totalFrameDelay() const { return m_totalFrameDelay; }
+
+    bool hardwareDecoderEnabled() const { return m_hardwareDecoderEnabled; }
+    void setHardwareDecoderEnabled(bool enabled) { m_hardwareDecoderEnabled = enabled; }
 
 private:
     enum Mode {
@@ -116,23 +116,21 @@ private:
     RetainPtr<CMTimebaseRef> m_timebase;
     OSObjectPtr<dispatch_queue_t> m_decompressionQueue;
     OSObjectPtr<dispatch_queue_t> m_enqueingQueue;
-    OSObjectPtr<dispatch_semaphore_t> m_hasAvailableImageSemaphore;
     OSObjectPtr<dispatch_source_t> m_timerSource;
     std::function<void()> m_notificationCallback;
     std::function<void()> m_hasAvailableFrameCallback;
     RetainPtr<CFArrayRef> m_qosTiers;
-    long m_currentQosTier { 0 };
-    unsigned long m_framesSinceLastQosCheck { 0 };
+    int m_currentQosTier { 0 };
+    unsigned m_framesSinceLastQosCheck { 0 };
     double m_decodeRatioMovingAverage { 0 };
 
     bool m_invalidated { false };
+    bool m_hardwareDecoderEnabled { true };
     int m_framesBeingDecoded { 0 };
-    unsigned long m_totalVideoFrames { 0 };
-    unsigned long m_droppedVideoFrames { 0 };
-    unsigned long m_corruptedVideoFrames { 0 };
+    unsigned m_totalVideoFrames { 0 };
+    unsigned m_droppedVideoFrames { 0 };
+    unsigned m_corruptedVideoFrames { 0 };
     MediaTime m_totalFrameDelay;
 };
 
 }
-
-#endif

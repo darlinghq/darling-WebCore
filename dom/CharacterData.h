@@ -1,7 +1,7 @@
 /*
  * Copyright (C) 1999 Lars Knoll (knoll@kde.org)
  *           (C) 1999 Antti Koivisto (koivisto@kde.org)
- * Copyright (C) 2003, 2004, 2005, 2006, 2008, 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2003-2018 Apple Inc. All rights reserved.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -27,6 +27,7 @@
 namespace WebCore {
 
 class CharacterData : public Node {
+    WTF_MAKE_ISO_ALLOCATED(CharacterData);
 public:
     const String& data() const { return m_data; }
     static ptrdiff_t dataMemoryOffset() { return OBJECT_OFFSETOF(CharacterData, m_data); }
@@ -39,18 +40,16 @@ public:
     WEBCORE_EXPORT ExceptionOr<void> deleteData(unsigned offset, unsigned count);
     WEBCORE_EXPORT ExceptionOr<void> replaceData(unsigned offset, unsigned count, const String&);
 
-    bool containsOnlyWhitespace() const;
-
     // Like appendData, but optimized for the parser (e.g., no mutation events).
     // Returns how much could be added before length limit was met.
     unsigned parserAppendData(const String& string, unsigned offset, unsigned lengthLimit);
 
 protected:
-    CharacterData(Document& document, const String& text, ConstructionType type)
+    CharacterData(Document& document, const String& text, ConstructionType type = CreateCharacterData)
         : Node(document, type)
         , m_data(!text.isNull() ? text : emptyString())
     {
-        ASSERT(type == CreateOther || type == CreateText || type == CreateEditingText);
+        ASSERT(type == CreateCharacterData || type == CreateText || type == CreateEditingText);
     }
 
     void setDataWithoutUpdate(const String& data)
@@ -60,17 +59,23 @@ protected:
     }
     void dispatchModifiedEvent(const String& oldValue);
 
+    enum class UpdateLiveRanges : bool { No, Yes };
+    virtual void setDataAndUpdate(const String&, unsigned offsetOfReplacedData, unsigned oldLength, unsigned newLength, UpdateLiveRanges = UpdateLiveRanges::Yes);
+
 private:
     String nodeValue() const final;
     ExceptionOr<void> setNodeValue(const String&) final;
-    bool isCharacterDataNode() const final { return true; }
-    int maxCharacterOffset() const final;
-    bool offsetInCharacters() const final;
-    void setDataAndUpdate(const String&, unsigned offsetOfReplacedData, unsigned oldLength, unsigned newLength);
-    void notifyParentAfterChange(ContainerNode::ChildChangeSource);
+    void notifyParentAfterChange(ContainerNode::ChildChange::Source);
 
     String m_data;
 };
+
+inline unsigned Node::length() const
+{
+    if (is<CharacterData>(*this))
+        return downcast<CharacterData>(*this).length();
+    return countChildNodes();
+}
 
 } // namespace WebCore
 

@@ -33,6 +33,7 @@
 #include "CachedResourceLoader.h"
 #include "CrossfadeGeneratedImage.h"
 #include "RenderElement.h"
+#include "StyleCachedImage.h"
 #include <wtf/text/StringBuilder.h>
 
 namespace WebCore {
@@ -45,7 +46,7 @@ static inline double blendFunc(double from, double to, double progress)
 static bool subimageKnownToBeOpaque(const CSSValue& value, const RenderElement& renderer)
 {
     if (is<CSSImageValue>(value))
-        return downcast<CSSImageValue>(value).knownToBeOpaque(&renderer);
+        return downcast<CSSImageValue>(value).knownToBeOpaque(renderer);
 
     if (is<CSSImageGeneratorValue>(value))
         return downcast<CSSImageGeneratorValue>(value).knownToBeOpaque(renderer);
@@ -90,18 +91,7 @@ CSSCrossfadeValue::~CSSCrossfadeValue()
 
 String CSSCrossfadeValue::customCSSText() const
 {
-    StringBuilder result;
-    if (m_isPrefixed)
-        result.appendLiteral("-webkit-cross-fade(");
-    else
-        result.appendLiteral("cross-fade(");
-    result.append(m_fromValue->cssText());
-    result.appendLiteral(", ");
-    result.append(m_toValue->cssText());
-    result.appendLiteral(", ");
-    result.append(m_percentageValue->cssText());
-    result.append(')');
-    return result.toString();
+    return makeString(m_isPrefixed ? "-webkit-" : "", "cross-fade(", m_fromValue->cssText(), ", ", m_toValue->cssText(), ", ", m_percentageValue->cssText(), ')');
 }
 
 FloatSize CSSCrossfadeValue::fixedSize(const RenderElement& renderer)
@@ -228,7 +218,7 @@ RefPtr<CSSCrossfadeValue> CSSCrossfadeValue::blend(const CSSCrossfadeValue& from
     double toPercentage = m_percentageValue->doubleValue();
     if (m_percentageValue->isPercentage())
         toPercentage /= 100.0;
-    auto percentageValue = CSSPrimitiveValue::create(blendFunc(fromPercentage, toPercentage, progress), CSSPrimitiveValue::CSS_NUMBER);
+    auto percentageValue = CSSPrimitiveValue::create(blendFunc(fromPercentage, toPercentage, progress), CSSUnitType::CSS_NUMBER);
 
     return CSSCrossfadeValue::create(WTFMove(fromImageValue), WTFMove(toImageValue), WTFMove(percentageValue), from.isPrefixed() && isPrefixed());
 }

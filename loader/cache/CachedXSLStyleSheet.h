@@ -35,19 +35,19 @@ class TextResourceDecoder;
 
 class CachedXSLStyleSheet final : public CachedResource {
 public:
-    CachedXSLStyleSheet(CachedResourceRequest&&, SessionID);
+    CachedXSLStyleSheet(CachedResourceRequest&&, const PAL::SessionID&, const CookieJar*);
     virtual ~CachedXSLStyleSheet();
 
     const String& sheet() const { return m_sheet; }
 
 private:
-    void checkNotify() final;
+    void checkNotify(const NetworkLoadMetrics&) final;
     bool mayTryReplaceEncodedData() const final { return true; }
     void didAddClient(CachedResourceClient&) final;
     void setEncoding(const String&) final;
     String encoding() const final;
     const TextResourceDecoder* textResourceDecoder() const final { return m_decoder.get(); }
-    void finishLoading(SharedBuffer*) final;
+    void finishLoading(SharedBuffer*, const NetworkLoadMetrics&) final;
 
     String m_sheet;
     RefPtr<TextResourceDecoder> m_decoder;
@@ -55,6 +55,6 @@ private:
 
 } // namespace WebCore
 
-SPECIALIZE_TYPE_TRAITS_CACHED_RESOURCE(CachedXSLStyleSheet, CachedResource::XSLStyleSheet)
+SPECIALIZE_TYPE_TRAITS_CACHED_RESOURCE(CachedXSLStyleSheet, CachedResource::Type::XSLStyleSheet)
 
 #endif // ENABLE(XSLT)

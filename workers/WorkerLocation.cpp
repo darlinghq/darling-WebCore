@@ -48,32 +48,34 @@ String WorkerLocation::host() const
 
 String WorkerLocation::hostname() const
 {
-    return m_url.host();
+    return m_url.host().toString();
 }
 
 String WorkerLocation::port() const
 {
-    return m_url.port() ? String::number(m_url.port().value()) : emptyString();
+    auto port = m_url.port();
+    return port ? String::number(*port) : emptyString();
 }
 
 String WorkerLocation::pathname() const
 {
-    return m_url.path().isEmpty() ? "/" : m_url.path();
+    auto path = m_url.path();
+    return path.isEmpty() ? "/"_s : path.toString();
 }
 
 String WorkerLocation::search() const
 {
-    return m_url.query().isEmpty() ? emptyString() : "?" + m_url.query();
+    return m_url.query().isEmpty() ? emptyString() : m_url.queryWithLeadingQuestionMark().toString();
 }
 
 String WorkerLocation::hash() const
 {
-    return m_url.fragmentIdentifier().isEmpty() ? emptyString() : "#" + m_url.fragmentIdentifier();
+    return m_url.fragmentIdentifier().isEmpty() ? emptyString() : m_url.fragmentIdentifierWithLeadingNumberSign().toString();
 }
 
 String WorkerLocation::origin() const
 {
-    return SecurityOrigin::create(m_url)->toString();
+    return m_origin;
 }
 
 } // namespace WebCore

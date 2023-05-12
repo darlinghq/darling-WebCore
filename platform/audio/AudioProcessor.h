@@ -40,6 +40,8 @@ class AudioBus;
 // or as the processor for a basic (one input - one output) AudioNode.
 
 class AudioProcessor {
+    WTF_MAKE_NONCOPYABLE(AudioProcessor);
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     AudioProcessor(float sampleRate, unsigned numberOfChannels)
         : m_initialized(false)
@@ -48,7 +50,7 @@ public:
     {
     }
 
-    virtual ~AudioProcessor() { }
+    virtual ~AudioProcessor() = default;
 
     // Full initialization can be done here instead of in the constructor.
     virtual void initialize() = 0;
@@ -56,6 +58,10 @@ public:
 
     // Processes the source to destination bus.  The number of channels must match in source and destination.
     virtual void process(const AudioBus* source, AudioBus* destination, size_t framesToProcess) = 0;
+
+    // Forces all AudioParams in the processor to run the timeline, bypassing any other processing the processor
+    // would do in process().
+    virtual void processOnlyAudioParams(size_t) { }
 
     // Resets filter state
     virtual void reset() = 0;
@@ -69,6 +75,7 @@ public:
 
     virtual double tailTime() const = 0;
     virtual double latencyTime() const = 0;
+    virtual bool requiresTailProcessing() const = 0;
 
 protected:
     bool m_initialized;

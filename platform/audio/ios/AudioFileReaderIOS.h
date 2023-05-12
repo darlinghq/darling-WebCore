@@ -27,8 +27,9 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef AudioFileReaderIOS_h
-#define AudioFileReaderIOS_h
+#pragma once
+
+#if PLATFORM(IOS_FAMILY)
 
 #include <AudioToolbox/AudioFile.h>
 #include <AudioToolbox/ExtendedAudioFile.h>
@@ -42,8 +43,8 @@ class AudioBus;
 
 class AudioFileReader {
 public:
-    AudioFileReader(const char* filePath);
-    AudioFileReader(const void* data, size_t dataSize);
+    explicit AudioFileReader(const char* filePath);
+    explicit AudioFileReader(const void* data, size_t dataSize);
     ~AudioFileReader();
 
     RefPtr<AudioBus> createBus(float sampleRate, bool mixToMono); // Returns nullptr on error
@@ -67,4 +68,4 @@ private:
 
 } // namespace WebCore
 
-#endif // AudioFileReaderIOS_h
+#endif // PLATFORM(IOS_FAMILY)

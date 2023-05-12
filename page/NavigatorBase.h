@@ -25,20 +25,27 @@
 
 #pragma once
 
+#include "ContextDestructionObserver.h"
+#include "ExceptionOr.h"
 #include <wtf/Forward.h>
 #include <wtf/RefCounted.h>
+#include <wtf/UniqueRef.h>
 #include <wtf/Vector.h>
+#include <wtf/WeakPtr.h>
 
 namespace WebCore {
 
-class NavigatorBase : public RefCounted<NavigatorBase> {
+class ScriptExecutionContext;
+class ServiceWorkerContainer;
+
+class NavigatorBase : public RefCounted<NavigatorBase>, public ContextDestructionObserver, public CanMakeWeakPtr<NavigatorBase> {
 public:
     virtual ~NavigatorBase();
 
     static String appName();
     String appVersion() const;
-    virtual String userAgent() const = 0;
-    static String platform();
+    virtual const String& userAgent() const = 0;
+    virtual String platform() const;
 
     static String appCodeName();
     static String product();
@@ -46,10 +53,22 @@ public:
     static String vendor();
     static String vendorSub();
 
-    static bool onLine();
+    virtual bool onLine() const = 0;
 
     static String language();
     static Vector<String> languages();
+
+protected:
+    explicit NavigatorBase(ScriptExecutionContext*);
+
+#if ENABLE(SERVICE_WORKER)
+public:
+    ServiceWorkerContainer& serviceWorker();
+    ExceptionOr<ServiceWorkerContainer&> serviceWorker(ScriptExecutionContext&);
+
+private:
+    std::unique_ptr<ServiceWorkerContainer> m_serviceWorkerContainer;
+#endif
 };
 
 } // namespace WebCore

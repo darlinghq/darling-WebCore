@@ -36,7 +36,7 @@ typedef struct objc_object* id;
 #endif
 
 namespace JSC {
-    class ExecState;
+    class CallFrame;
     class JSGlobalObject;
     class JSObject;
 }
@@ -50,7 +50,7 @@ class Scrollbar;
 class PluginViewBase : public Widget {
 public:
     virtual PlatformLayer* platformLayer() const { return 0; }
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     virtual bool willProvidePluginLayer() const { return false; }
     virtual void attachPluginLayer() { }
     virtual void detachPluginLayer() { }
@@ -69,10 +69,6 @@ public:
     // FIXME: This is a hack that works around the fact that the WebKit2 PluginView isn't a ScrollableArea.
     virtual bool wantsWheelEvents() { return false; }
     virtual bool supportsKeyboardFocus() const { return false; }
-    virtual bool canProcessDrag() const { return false; }
-
-    virtual bool shouldAlwaysAutoStart() const { return false; }
-    virtual void beginSnapshottingRunningPlugin() { }
 
     virtual bool shouldAllowNavigationFromDrags() const { return false; }
 
@@ -85,7 +81,7 @@ public:
 
     virtual RefPtr<JSC::Bindings::Instance> bindingInstance() { return nullptr; }
     
-    virtual void willDetatchRenderer() { }
+    virtual void willDetachRenderer() { }
 
 #if PLATFORM(COCOA)
     virtual id accessibilityAssociatedPluginParentForElement(Element*) const { return nullptr; }

@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 Google Inc. All rights reserved.
- * Copyright (C) 2013 Apple Inc. All rights reserved.
+ * Copyright (C) 2013-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -37,84 +37,84 @@
 #include "Event.h"
 #include "JSDOMConvertNumbers.h"
 #include "JSDOMConvertStrings.h"
+#include "JSDOMWindow.h"
 #include "JSEvent.h"
-#include "JSMainThreadExecState.h"
-#include "JSMainThreadExecStateInstrumentation.h"
-#include <runtime/JSLock.h>
-#include <runtime/VMEntryScope.h>
+#include "JSExecState.h"
+#include "JSExecStateInstrumentation.h"
+#include <JavaScriptCore/JSLock.h>
+#include <JavaScriptCore/VMEntryScope.h>
 #include <wtf/Ref.h>
 
+namespace WebCore {
 using namespace JSC;
 
-namespace WebCore {
-
-JSErrorHandler::JSErrorHandler(JSObject* function, JSObject* wrapper, bool isAttribute, DOMWrapperWorld& world)
-    : JSEventListener(function, wrapper, isAttribute, world)
+inline JSErrorHandler::JSErrorHandler(JSObject& listener, JSObject& wrapper, bool isAttribute, DOMWrapperWorld& world)
+    : JSEventListener(&listener, &wrapper, isAttribute, world)
 {
 }
 
-JSErrorHandler::~JSErrorHandler()
+Ref<JSErrorHandler> JSErrorHandler::create(JSC::JSObject& listener, JSC::JSObject& wrapper, bool isAttribute, DOMWrapperWorld& world)
 {
+    return adoptRef(*new JSErrorHandler(listener, wrapper, isAttribute, world));
 }
 
-void JSErrorHandler::handleEvent(ScriptExecutionContext* scriptExecutionContext, Event* event)
+JSErrorHandler::~JSErrorHandler() = default;
+
+void JSErrorHandler::handleEvent(ScriptExecutionContext& scriptExecutionContext, Event& event)
 {
-    if (!is<ErrorEvent>(*event))
+    if (!is<ErrorEvent>(event))
         return JSEventListener::handleEvent(scriptExecutionContext, event);
 
-    ASSERT(scriptExecutionContext);
-    if (!scriptExecutionContext)
-        return;
+    VM& vm = scriptExecutionContext.vm();
+    JSLockHolder lock(vm);
 
-    ErrorEvent& errorEvent = downcast<ErrorEvent>(*event);
-
-    JSLockHolder lock(scriptExecutionContext->vm());
-
-    JSObject* jsFunction = this->jsFunction(scriptExecutionContext);
+    JSObject* jsFunction = this->ensureJSFunction(scriptExecutionContext);
     if (!jsFunction)
         return;
 
-    JSDOMGlobalObject* globalObject = toJSDOMGlobalObject(scriptExecutionContext, isolatedWorld());
+    auto* globalObject = toJSDOMGlobalObject(scriptExecutionContext, isolatedWorld());
     if (!globalObject)
         return;
 
-    ExecState* exec = globalObject->globalExec();
-
-    CallData callData;
-    CallType callType = jsFunction->methodTable()->getCallData(jsFunction, callData);
-
-    if (callType != CallType::None) {
+    auto callData = getCallData(vm, jsFunction);
+    if (callData.type != CallData::Type::None) {
         Ref<JSErrorHandler> protectedThis(*this);
 
-        Event* savedEvent = globalObject->currentEvent();
-        globalObject->setCurrentEvent(event);
+        RefPtr<Event> savedEvent;
+        auto* jsFunctionWindow = jsDynamicCast<JSDOMWindow*>(vm, jsFunction->globalObject());
+        if (jsFunctionWindow) {
+            savedEvent = jsFunctionWindow->currentEvent();
+            jsFunctionWindow->setCurrentEvent(&event);
+        }
+
+        auto& errorEvent = downcast<ErrorEvent>(event);
 
         MarkedArgumentBuffer args;
-        args.append(toJS<IDLDOMString>(*exec, errorEvent.message()));
-        args.append(toJS<IDLUSVString>(*exec, errorEvent.filename()));
+        args.append(toJS<IDLDOMString>(*globalObject, errorEvent.message()));
+        args.append(toJS<IDLUSVString>(*globalObject, errorEvent.filename()));
         args.append(toJS<IDLUnsignedLong>(errorEvent.lineno()));
         args.append(toJS<IDLUnsignedLong>(errorEvent.colno()));
-        args.append(errorEvent.error(*exec, *globalObject));
+        args.append(errorEvent.error(*globalObject));
+        ASSERT(!args.hasOverflowed());
 
         VM& vm = globalObject->vm();
         VMEntryScope entryScope(vm, vm.entryScope ? vm.entryScope->globalObject() : globalObject);
 
-        InspectorInstrumentationCookie cookie = JSMainThreadExecState::instrumentFunctionCall(scriptExecutionContext, callType, callData);
+        JSExecState::instrumentFunction(&scriptExecutionContext, callData);
 
         NakedPtr<JSC::Exception> exception;
-        JSValue returnValue = scriptExecutionContext->isDocument()
-            ? JSMainThreadExecState::profiledCall(exec, JSC::ProfilingReason::Other, jsFunction, callType, callData, globalObject, args, exception)
-            : JSC::profiledCall(exec, JSC::ProfilingReason::Other, jsFunction, callType, callData, globalObject, args, exception);
+        JSValue returnValue = JSExecState::profiledCall(globalObject, JSC::ProfilingReason::Other, jsFunction, callData, globalObject, args, exception);
 
-        InspectorInstrumentation::didCallFunction(cookie, scriptExecutionContext);
+        InspectorInstrumentation::didCallFunction(&scriptExecutionContext);
 
-        globalObject->setCurrentEvent(savedEvent);
+        if (jsFunctionWindow)
+            jsFunctionWindow->setCurrentEvent(savedEvent.get());
 
         if (exception)
-            reportException(exec, exception);
+            reportException(globalObject, exception);
         else {
             if (returnValue.isTrue())
-                event->preventDefault();
+                event.preventDefault();
         }
     }
 }

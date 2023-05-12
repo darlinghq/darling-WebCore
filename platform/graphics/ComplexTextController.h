@@ -37,6 +37,8 @@ typedef unsigned short CGGlyph;
 typedef const struct __CTRun * CTRunRef;
 typedef const struct __CTLine * CTLineRef;
 
+typedef struct hb_buffer_t hb_buffer_t;
+
 namespace WebCore {
 
 class FontCascade;
@@ -63,7 +65,7 @@ public:
     // Returns the width of everything we've consumed so far.
     float runWidthSoFar() const { return m_runWidthSoFar; }
 
-    float totalWidth() const { return m_totalWidth; }
+    FloatSize totalAdvance() const { return m_totalAdvance; }
 
     float minGlyphBoundingBoxX() const { return m_minGlyphBoundingBoxX; }
     float maxGlyphBoundingBoxX() const { return m_maxGlyphBoundingBoxX; }
@@ -75,6 +77,11 @@ public:
         static Ref<ComplexTextRun> create(CTRunRef ctRun, const Font& font, const UChar* characters, unsigned stringLocation, unsigned stringLength, unsigned indexBegin, unsigned indexEnd)
         {
             return adoptRef(*new ComplexTextRun(ctRun, font, characters, stringLocation, stringLength, indexBegin, indexEnd));
+        }
+
+        static Ref<ComplexTextRun> create(hb_buffer_t* buffer, const Font& font, const UChar* characters, unsigned stringLocation, unsigned stringLength, unsigned indexBegin, unsigned indexEnd)
+        {
+            return adoptRef(*new ComplexTextRun(buffer, font, characters, stringLocation, stringLength, indexBegin, indexEnd));
         }
 
         static Ref<ComplexTextRun> create(const Font& font, const UChar* characters, unsigned stringLocation, unsigned stringLength, unsigned indexBegin, unsigned indexEnd, bool ltr)
@@ -135,6 +142,7 @@ public:
 
     private:
         ComplexTextRun(CTRunRef, const Font&, const UChar* characters, unsigned stringLocation, unsigned stringLength, unsigned indexBegin, unsigned indexEnd);
+        ComplexTextRun(hb_buffer_t*, const Font&, const UChar* characters, unsigned stringLocation, unsigned stringLength, unsigned indexBegin, unsigned indexEnd);
         ComplexTextRun(const Font&, const UChar* characters, unsigned stringLocation, unsigned stringLength, unsigned indexBegin, unsigned indexEnd, bool ltr);
         WEBCORE_EXPORT ComplexTextRun(const Vector<FloatSize>& advances, const Vector<FloatPoint>& origins, const Vector<Glyph>& glyphs, const Vector<unsigned>& stringIndices, FloatSize initialAdvance, const Font&, const UChar* characters, unsigned stringLocation, unsigned stringLength, unsigned indexBegin, unsigned indexEnd, bool ltr);
 
@@ -207,7 +215,7 @@ private:
     unsigned m_currentCharacter { 0 };
     unsigned m_end { 0 };
 
-    float m_totalWidth { 0 };
+    FloatSize m_totalAdvance;
     float m_runWidthSoFar { 0 };
     unsigned m_numGlyphsSoFar { 0 };
     unsigned m_currentRun { 0 };

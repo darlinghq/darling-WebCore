@@ -25,12 +25,9 @@
 
 namespace WebCore {
 
-enum AnyStepHandling { RejectAny, AnyIsDefaultStep };
+enum class AnyStepHandling : bool { Reject, Default };
 
-enum class RangeLimitations {
-    Valid,
-    Invalid
-};
+enum class RangeLimitations : bool { Valid, Invalid };
 
 class StepRange {
 public:
@@ -43,12 +40,12 @@ public:
     struct StepDescription {
         WTF_MAKE_FAST_ALLOCATED;
     public:
-        int defaultStep;
-        int defaultStepBase;
-        int stepScaleFactor;
-        StepValueShouldBe stepValueShouldBe;
+        int defaultStep { 1 };
+        int defaultStepBase { 0 };
+        int stepScaleFactor { 1 };
+        StepValueShouldBe stepValueShouldBe { StepValueShouldBeReal };
 
-        StepDescription(int defaultStep, int defaultStepBase, int stepScaleFactor, StepValueShouldBe stepValueShouldBe = StepValueShouldBeReal)
+        constexpr StepDescription(int defaultStep, int defaultStepBase, int stepScaleFactor, StepValueShouldBe stepValueShouldBe = StepValueShouldBeReal)
             : defaultStep(defaultStep)
             , defaultStepBase(defaultStepBase)
             , stepScaleFactor(stepScaleFactor)
@@ -56,13 +53,7 @@ public:
         {
         }
 
-        StepDescription()
-            : defaultStep(1)
-            , defaultStepBase(0)
-            , stepScaleFactor(1)
-            , stepValueShouldBe(StepValueShouldBeReal)
-        {
-        }
+        StepDescription() = default;
 
         Decimal defaultValue() const
         {

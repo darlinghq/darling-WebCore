@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2011 Google Inc. All rights reserved.
+ * Copyright (C) 2018-2020 Apple Inc. All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -28,28 +29,33 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef TextChecking_h
-#define TextChecking_h
+#pragma once
 
-#include <wtf/RefCounted.h>
+#include "CharacterRange.h"
+#include <wtf/EnumTraits.h>
+#include <wtf/ObjectIdentifier.h>
+#include <wtf/OptionSet.h>
 #include <wtf/Vector.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
 
-enum TextCheckingType {
-    TextCheckingTypeNone        = 0,
-    TextCheckingTypeSpelling    = 1 << 1,
-    TextCheckingTypeGrammar     = 1 << 2,
-    TextCheckingTypeLink        = 1 << 5,
-    TextCheckingTypeQuote       = 1 << 6,
-    TextCheckingTypeDash        = 1 << 7,
-    TextCheckingTypeReplacement = 1 << 8,
-    TextCheckingTypeCorrection  = 1 << 9,
-    TextCheckingTypeShowCorrectionPanel = 1 << 10
+enum class TextCheckingType : uint8_t {
+    None                    = 0,
+    Spelling                = 1 << 0,
+    Grammar                 = 1 << 1,
+    Link                    = 1 << 2,
+    Quote                   = 1 << 3,
+    Dash                    = 1 << 4,
+    Replacement             = 1 << 5,
+    Correction              = 1 << 6,
+    ShowCorrectionPanel     = 1 << 7,
 };
 
-typedef unsigned TextCheckingTypeMask;
+#if PLATFORM(MAC)
+typedef uint64_t NSTextCheckingTypes;
+WEBCORE_EXPORT NSTextCheckingTypes nsTextCheckingTypes(OptionSet<TextCheckingType>);
+#endif
 
 enum TextCheckingProcessType {
     TextCheckingProcessBatch,
@@ -57,58 +63,85 @@ enum TextCheckingProcessType {
 };
 
 struct GrammarDetail {
-    int location;
-    int length;
+    CharacterRange range;
     Vector<String> guesses;
     String userDescription;
 };
 
 struct TextCheckingResult {
     TextCheckingType type;
-    int location;
-    int length;
+    CharacterRange range;
     Vector<GrammarDetail> details;
     String replacement;
 };
 
-const int unrequestedTextCheckingSequence = -1;
+struct TextCheckingGuesses {
+    Vector<String> guesses;
+    bool misspelled { false };
+    bool ungrammatical { false };
+};
+
+enum TextCheckingRequestIdentifierType { };
+using TextCheckingRequestIdentifier = ObjectIdentifier<TextCheckingRequestIdentifierType>;
 
 class TextCheckingRequestData {
-    friend class SpellCheckRequest; // For access to m_sequence.
+    friend class SpellCheckRequest; // For access to m_identifier.
 public:
-    TextCheckingRequestData()
-        : m_sequence(unrequestedTextCheckingSequence)
-        , m_mask(TextCheckingTypeNone)
-        , m_processType(TextCheckingProcessIncremental)
-    { }
-    TextCheckingRequestData(int sequence, const String& text, TextCheckingTypeMask mask, TextCheckingProcessType processType)
-        : m_sequence(sequence)
-        , m_text(text)
-        , m_mask(mask)
-        , m_processType(processType)
-    { }
+    TextCheckingRequestData() = default;
+    TextCheckingRequestData(Optional<TextCheckingRequestIdentifier> identifier, const String& text, OptionSet<TextCheckingType> checkingTypes, TextCheckingProcessType processType)
+        : m_text { text }
+        , m_identifier { identifier }
+        , m_processType { processType }
+        , m_checkingTypes { checkingTypes }
+    {
+    }
 
-    int sequence() const { return m_sequence; }
-    String text() const { return m_text; }
-    TextCheckingTypeMask mask() const { return m_mask; }
+    Optional<TextCheckingRequestIdentifier> identifier() const { return m_identifier; }
+    const String& text() const { return m_text; }
+    OptionSet<TextCheckingType> checkingTypes() const { return m_checkingTypes; }
     TextCheckingProcessType processType() const { return m_processType; }
 
 private:
-    int m_sequence;
     String m_text;
-    TextCheckingTypeMask m_mask;
-    TextCheckingProcessType m_processType;
+    Optional<TextCheckingRequestIdentifier> m_identifier;
+    TextCheckingProcessType m_processType { TextCheckingProcessIncremental };
+    OptionSet<TextCheckingType> m_checkingTypes;
 };
 
 class TextCheckingRequest : public RefCounted<TextCheckingRequest> {
 public:
-    virtual ~TextCheckingRequest() { }
+    virtual ~TextCheckingRequest() = default;
 
     virtual const TextCheckingRequestData& data() const = 0;
     virtual void didSucceed(const Vector<TextCheckingResult>&) = 0;
     virtual void didCancel() = 0;
 };
 
-}
+} // namespace WebCore
 
-#endif // TextChecking_h
+namespace WTF {
+
+template<> struct EnumTraits<WebCore::TextCheckingProcessType> {
+    using values = EnumValues<
+        WebCore::TextCheckingProcessType,
+        WebCore::TextCheckingProcessType::TextCheckingProcessBatch,
+        WebCore::TextCheckingProcessType::TextCheckingProcessIncremental
+    >;
+};
+
+template<> struct EnumTraits<WebCore::TextCheckingType> {
+    using values = EnumValues<
+        WebCore::TextCheckingType,
+        WebCore::TextCheckingType::None,
+        WebCore::TextCheckingType::Spelling,
+        WebCore::TextCheckingType::Grammar,
+        WebCore::TextCheckingType::Link,
+        WebCore::TextCheckingType::Quote,
+        WebCore::TextCheckingType::Dash,
+        WebCore::TextCheckingType::Replacement,
+        WebCore::TextCheckingType::Correction,
+        WebCore::TextCheckingType::ShowCorrectionPanel
+    >;
+};
+
+} // namespace WTF

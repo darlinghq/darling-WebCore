@@ -32,39 +32,51 @@
 
 #if ENABLE(WEB_RTC)
 
-#include "RTCRtpParameters.h"
-#include "RTCRtpSenderReceiverBase.h"
+#include "MediaStreamTrack.h"
+#include "RTCRtpReceiverBackend.h"
+#include "RTCRtpSynchronizationSource.h"
+#include "RTCRtpTransform.h"
+#include "ScriptWrappable.h"
 
 namespace WebCore {
 
+class DeferredPromise;
+class PeerConnectionBackend;
+struct RTCRtpCapabilities;
 
-class RTCRtpReceiver : public RTCRtpSenderReceiverBase {
+class RTCRtpReceiver final : public RefCounted<RTCRtpReceiver>, public ScriptWrappable  {
+    WTF_MAKE_ISO_ALLOCATED(RTCRtpReceiver);
 public:
-    class Backend {
-    public:
-        virtual ~Backend() { }
-        virtual RTCRtpParameters getParameters() { return { }; }
-    };
-
-    static Ref<RTCRtpReceiver> create(Ref<MediaStreamTrack>&& track, Backend* backend = nullptr)
+    static Ref<RTCRtpReceiver> create(PeerConnectionBackend& connection, Ref<MediaStreamTrack>&& track, std::unique_ptr<RTCRtpReceiverBackend>&& backend)
     {
-        return adoptRef(*new RTCRtpReceiver(WTFMove(track), backend));
+        return adoptRef(*new RTCRtpReceiver(connection, WTFMove(track), WTFMove(backend)));
     }
+    ~RTCRtpReceiver();
+
+    static Optional<RTCRtpCapabilities> getCapabilities(ScriptExecutionContext&, const String& kind);
 
     void stop();
 
-    // FIXME: We should pass a UniqueRef here.
-    void setBackend(std::unique_ptr<Backend>&& backend) { m_backend = WTFMove(backend); }
-
-    bool isDispatched() const { return m_isDispatched; }
-    void setDispatched(bool isDispatched) { m_isDispatched = isDispatched; }
+    void setBackend(std::unique_ptr<RTCRtpReceiverBackend>&& backend) { m_backend = WTFMove(backend); }
     RTCRtpParameters getParameters() { return m_backend ? m_backend->getParameters() : RTCRtpParameters(); }
+    Vector<RTCRtpContributingSource> getContributingSources() const { return m_backend ? m_backend->getContributingSources() : Vector<RTCRtpContributingSource> { }; }
+    Vector<RTCRtpSynchronizationSource> getSynchronizationSources() const { return m_backend ? m_backend->getSynchronizationSources() : Vector<RTCRtpSynchronizationSource> { }; }
+
+    MediaStreamTrack& track() { return m_track.get(); }
+
+    RTCRtpReceiverBackend* backend() { return m_backend.get(); }
+    void getStats(Ref<DeferredPromise>&&);
+
+    Optional<RTCRtpTransform::Internal> transform();
+    ExceptionOr<void> setTransform(Optional<RTCRtpTransform>&&);
 
 private:
-    explicit RTCRtpReceiver(Ref<MediaStreamTrack>&&, Backend*);
+    RTCRtpReceiver(PeerConnectionBackend&, Ref<MediaStreamTrack>&&, std::unique_ptr<RTCRtpReceiverBackend>&&);
 
-    bool m_isDispatched { false };
-    std::unique_ptr<Backend> m_backend;
+    Ref<MediaStreamTrack> m_track;
+    std::unique_ptr<RTCRtpReceiverBackend> m_backend;
+    WeakPtr<PeerConnectionBackend> m_connection;
+    Optional<RTCRtpTransform> m_transform;
 };
 
 } // namespace WebCore

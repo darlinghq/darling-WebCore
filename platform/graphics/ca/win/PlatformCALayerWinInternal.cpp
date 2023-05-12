@@ -34,11 +34,9 @@
 #include "PlatformCALayer.h"
 #include "TileController.h"
 #include "TiledBacking.h"
-#include "WebCoreHeaderDetection.h"
 #include <QuartzCore/CACFLayer.h>
 #include <wtf/MainThread.h>
 
-using namespace std;
 using namespace WebCore;
 
 PlatformCALayerWinInternal::PlatformCALayerWinInternal(PlatformCALayer* owner)
@@ -46,9 +44,7 @@ PlatformCALayerWinInternal::PlatformCALayerWinInternal(PlatformCALayer* owner)
 {
 }
 
-PlatformCALayerWinInternal::~PlatformCALayerWinInternal()
-{
-}
+PlatformCALayerWinInternal::~PlatformCALayerWinInternal() = default;
 
 struct DisplayOnMainThreadContext {
     RetainPtr<CACFLayerRef> layer;
@@ -131,9 +127,10 @@ void PlatformCALayerWinInternal::drawRepaintCounters(CACFLayerRef caLayer, CGCon
     if (borderWidth > 0)
         backgroundColor = CACFLayerGetBorderColor(caLayer);
     else
-        backgroundColor = cachedCGColor(Color(255, 0, 0));
+        backgroundColor = cachedCGColor(Color::red);
 
-    PlatformCALayer::drawRepaintIndicator(context, owner(), drawCount, backgroundColor);
+    GraphicsContext graphicsContext(context);
+    PlatformCALayer::drawRepaintIndicator(graphicsContext, owner(), drawCount, backgroundColor);
 }
 
 void PlatformCALayerWinInternal::internalSetNeedsDisplay(const FloatRect* dirtyRect)
@@ -165,11 +162,11 @@ void PlatformCALayerWinInternal::setNeedsDisplayInRect(const FloatRect& dirtyRec
             // We assume a maximum of 4 digits and a font size of 18.
             repaintCounterRect.setWidth(80);
             repaintCounterRect.setHeight(22);
-            if (owner()->owner()->platformCALayerContentsOrientation() == WebCore::GraphicsLayer::CompositingCoordinatesTopDown)
+            if (owner()->owner()->platformCALayerContentsOrientation() == WebCore::GraphicsLayer::CompositingCoordinatesOrientation::TopDown)
                 repaintCounterRect.setY(layerBounds.height() - (layerBounds.y() + repaintCounterRect.height()));
             internalSetNeedsDisplay(&repaintCounterRect);
         }
-        if (owner()->owner()->platformCALayerContentsOrientation() == WebCore::GraphicsLayer::CompositingCoordinatesTopDown) {
+        if (owner()->owner()->platformCALayerContentsOrientation() == WebCore::GraphicsLayer::CompositingCoordinatesOrientation::TopDown) {
             FloatRect flippedDirtyRect = dirtyRect;
             flippedDirtyRect.setY(owner()->bounds().height() - (flippedDirtyRect.y() + flippedDirtyRect.height()));
             internalSetNeedsDisplay(&flippedDirtyRect);
@@ -210,7 +207,7 @@ void PlatformCALayerWinInternal::getSublayers(PlatformCALayerList& list) const
 
     list.resize(count);
     for (size_t arrayIndex = 0; arrayIndex < count; ++arrayIndex)
-        list[arrayIndex] = PlatformCALayer::platformCALayer(const_cast<void*>(CFArrayGetValueAtIndex(sublayers, arrayIndex)));
+        list[arrayIndex] = PlatformCALayer::platformCALayerForLayer(const_cast<void*>(CFArrayGetValueAtIndex(sublayers, arrayIndex)));
 }
 
 void PlatformCALayerWinInternal::removeAllSublayers()
@@ -221,7 +218,7 @@ void PlatformCALayerWinInternal::removeAllSublayers()
 
 void PlatformCALayerWinInternal::insertSublayer(PlatformCALayer& layer, size_t index)
 {
-    index = min(index, sublayerCount());
+    index = std::min(index, sublayerCount());
 
     layer.removeFromSuperlayer();
     CACFLayerInsertSublayer(owner()->platformLayer(), layer.platformLayer(), index);
@@ -260,7 +257,7 @@ PlatformCALayer* PlatformCALayerWinInternal::sublayerAtIndex(int index) const
     if (!sublayers || index < 0 || CFArrayGetCount(sublayers) <= index)
         return nullptr;
     
-    return PlatformCALayer::platformCALayer(static_cast<CACFLayerRef>(const_cast<void*>(CFArrayGetValueAtIndex(sublayers, index))));
+    return PlatformCALayer::platformCALayerForLayer(static_cast<CACFLayerRef>(const_cast<void*>(CFArrayGetValueAtIndex(sublayers, index)))).get();
 }
 
 void PlatformCALayerWinInternal::setBounds(const FloatRect& rect)
@@ -315,15 +312,7 @@ void PlatformCALayerWinInternal::setBorderWidth(float value)
 
 void PlatformCALayerWinInternal::setBorderColor(const Color& value)
 {
-    CGFloat components[4] = { 0, 0, 0, 0 };
-    RetainPtr<CGColorSpaceRef> colorSpace = adoptCF(CGColorSpaceCreateDeviceRGB());
-
-    if (value.isValid())
-        value.getRGBA(components[0], components[1], components[2], components[3]);
-
-    RetainPtr<CGColorRef> color = adoptCF(CGColorCreate(colorSpace.get(), components));
-
-    CACFLayerSetBorderColor(owner()->platformLayer(), color.get());
+    CACFLayerSetBorderColor(owner()->platformLayer(), cachedCGColor(value));
 }
 
 #endif

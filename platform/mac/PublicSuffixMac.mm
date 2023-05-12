@@ -26,41 +26,61 @@
 #import "config.h"
 #import "PublicSuffix.h"
 
-#import "WebCoreSystemInterface.h"
-#import "WebCoreNSURLExtras.h"
-
 #if ENABLE(PUBLIC_SUFFIX_LIST)
 
-@interface NSString (WebCoreNSURLExtras)
-- (BOOL)_web_looksLikeIPAddress;
-@end
+#import <pal/spi/cf/CFNetworkSPI.h>
+#import <wtf/HashMap.h>
+#import <wtf/text/StringHash.h>
+#import <wtf/URL.h>
+#import <wtf/cocoa/NSURLExtras.h>
 
 namespace WebCore {
 
 bool isPublicSuffix(const String& domain)
 {
-    NSString *host = decodeHostName(domain);
-    return host && wkIsPublicSuffix(host);
+    // Explicitly cast the domain to a NSString before calling decodeHostName() so we get a NSString back instead of a String.
+    NSString *host = decodeHostName((NSString *)domain);
+    return host && _CFHostIsDomainTopLevel((__bridge CFStringRef)host);
 }
 
 String topPrivatelyControlledDomain(const String& domain)
 {
-    if ([domain _web_looksLikeIPAddress])
+    if (domain.isEmpty())
+        return { };
+    if (!domain.isAllASCII())
         return domain;
 
-    if (!domain.containsOnlyASCII())
-        return domain;
+    static Lock cacheLock;
+    auto locker = holdLock(cacheLock);
+
+    static NeverDestroyed<HashMap<String, String, ASCIICaseInsensitiveHash>> cache;
+
+    auto isolatedDomain = domain.isolatedCopy();
     
-    const auto& lowercaseDomain = domain.convertToASCIILowercase();
-    if (lowercaseDomain == "localhost")
-        return lowercaseDomain;
+    constexpr auto maximumSizeToPreventUnlimitedGrowth = 128;
+    if (cache.get().size() == maximumSizeToPreventUnlimitedGrowth)
+        cache.get().remove(cache.get().random());
 
-    size_t separatorPosition;
-    for (unsigned labelStart = 0; (separatorPosition = lowercaseDomain.find('.', labelStart)) != notFound; labelStart = separatorPosition + 1) {
-        if (isPublicSuffix(lowercaseDomain.substring(separatorPosition + 1)))
-            return lowercaseDomain.substring(labelStart);
-    }
-    return String();
+    return cache.get().ensure(isolatedDomain, [&isolatedDomain] {
+        const auto lowercaseDomain = isolatedDomain.convertToASCIILowercase();
+        if (lowercaseDomain == "localhost")
+            return lowercaseDomain;
+
+        if (URL::hostIsIPAddress(lowercaseDomain))
+            return lowercaseDomain;
+
+        size_t separatorPosition;
+        for (unsigned labelStart = 0; (separatorPosition = lowercaseDomain.find('.', labelStart)) != notFound; labelStart = separatorPosition + 1) {
+            if (isPublicSuffix(lowercaseDomain.substring(separatorPosition + 1)))
+                return lowercaseDomain.substring(labelStart);
+        }
+        return String();
+    }).iterator->value.isolatedCopy();
+}
+
+String decodeHostName(const String& domain)
+{
+    return WTF::decodeHostName(domain);
 }
 
 }

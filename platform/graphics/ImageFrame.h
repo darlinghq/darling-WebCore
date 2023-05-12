@@ -27,16 +27,16 @@
 
 #include "Color.h"
 #include "DecodingOptions.h"
-#include "ImageBackingStore.h"
 #include "ImageOrientation.h"
 #include "ImageTypes.h"
 #include "IntSize.h"
 #include "NativeImage.h"
+#include <wtf/Seconds.h>
 
 namespace WebCore {
 
 class ImageFrame {
-    friend class ImageFrameCache;
+    friend class ImageSource;
 public:
     enum class Caching { Metadata, MetadataAndImage };
 
@@ -52,11 +52,6 @@ public:
     unsigned clearImage();
     unsigned clear();
 
-#if !USE(CG)
-    bool initialize(const ImageBackingStore&);
-    bool initialize(const IntSize&, bool premultiplyAlpha);
-#endif
-
     void setDecodingStatus(DecodingStatus);
     DecodingStatus decodingStatus() const;
 
@@ -65,36 +60,27 @@ public:
     bool isComplete() const { return m_decodingStatus == DecodingStatus::Complete; }
 
     IntSize size() const;
-    IntSize sizeRespectingOrientation() const { return !m_orientation.usesWidthAsHeight() ? size() : size().transposedSize(); }
-    unsigned frameBytes() const { return hasNativeImage() ? (size().area() * sizeof(RGBA32)).unsafeGet() : 0; }
+    unsigned frameBytes() const { return hasNativeImage() ? (size().area() * sizeof(uint32_t)).unsafeGet() : 0; }
     SubsamplingLevel subsamplingLevel() const { return m_subsamplingLevel; }
 
-#if !USE(CG)
-    enum class DisposalMethod { Unspecified, DoNotDispose, RestoreToBackground, RestoreToPrevious };
-    void setDisposalMethod(DisposalMethod method) { m_disposalMethod = method; }
-    DisposalMethod disposalMethod() const { return m_disposalMethod; }
-#endif
-
-    NativeImagePtr nativeImage() const { return m_nativeImage; }
+    RefPtr<NativeImage> nativeImage() const { return m_nativeImage; }
 
     void setOrientation(ImageOrientation orientation) { m_orientation = orientation; };
     ImageOrientation orientation() const { return m_orientation; }
 
-    void setDuration(float duration) { m_duration = duration; }
-    float duration() const { return m_duration; }
+    void setDensityCorrectedSize(const IntSize& size) { m_densityCorrectedSize = size; }
+    Optional<IntSize> densityCorrectedSize() const { return m_densityCorrectedSize; }
+
+    void setDuration(const Seconds& duration) { m_duration = duration; }
+    Seconds duration() const { return m_duration; }
 
     void setHasAlpha(bool hasAlpha) { m_hasAlpha = hasAlpha; }
     bool hasAlpha() const { return !hasMetadata() || m_hasAlpha; }
 
-    bool hasNativeImage(const std::optional<SubsamplingLevel>& = { }) const;
-    bool hasFullSizeNativeImage(const std::optional<SubsamplingLevel>& = { }) const;
-    bool hasDecodedNativeImageCompatibleWithOptions(const std::optional<SubsamplingLevel>&, const DecodingOptions&) const;
+    bool hasNativeImage(const Optional<SubsamplingLevel>& = { }) const;
+    bool hasFullSizeNativeImage(const Optional<SubsamplingLevel>& = { }) const;
+    bool hasDecodedNativeImageCompatibleWithOptions(const Optional<SubsamplingLevel>&, const DecodingOptions&) const;
     bool hasMetadata() const { return !size().isEmpty(); }
-
-#if !USE(CG)
-    ImageBackingStore* backingStore() const { return m_backingStore ? m_backingStore.get() : nullptr; }
-    bool hasBackingStore() const { return backingStore(); }
-#endif
 
     Color singlePixelSolidColor() const;
 
@@ -102,17 +88,13 @@ private:
     DecodingStatus m_decodingStatus { DecodingStatus::Invalid };
     IntSize m_size;
 
-#if !USE(CG)
-    std::unique_ptr<ImageBackingStore> m_backingStore;
-    DisposalMethod m_disposalMethod { DisposalMethod::Unspecified };
-#endif
-
-    NativeImagePtr m_nativeImage;
+    RefPtr<NativeImage> m_nativeImage;
     SubsamplingLevel m_subsamplingLevel { SubsamplingLevel::Default };
     DecodingOptions m_decodingOptions;
 
-    ImageOrientation m_orientation { DefaultImageOrientation };
-    float m_duration { 0 };
+    ImageOrientation m_orientation { ImageOrientation::None };
+    Optional<IntSize> m_densityCorrectedSize;
+    Seconds m_duration;
     bool m_hasAlpha { true };
 };
 

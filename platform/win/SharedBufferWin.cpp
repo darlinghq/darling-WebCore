@@ -39,7 +39,7 @@ RefPtr<SharedBuffer> SharedBuffer::createFromReadingFile(const String& filePath)
         return nullptr;
 
     String nullifiedPath = filePath;
-    HANDLE fileHandle = CreateFileW(nullifiedPath.charactersWithNullTermination().data(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    HANDLE fileHandle = CreateFileW(nullifiedPath.wideCharacters().data(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
     if (fileHandle == INVALID_HANDLE_VALUE) {
         LOG_ERROR("Failed to open file %s to create shared buffer, GetLastError() = %u", filePath.ascii().data(), GetLastError());
         return nullptr;

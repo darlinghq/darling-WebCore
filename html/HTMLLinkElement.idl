@@ -22,19 +22,23 @@
 [
     ExportMacro=WEBCORE_EXPORT,
     JSGenerateToNativeObject,
+    Exposed=Window
 ] interface HTMLLinkElement : HTMLElement {
     [Reflect] attribute boolean disabled;
-    [Reflect] attribute DOMString charset;
-    [Reflect, URL] attribute USVString href;
-    [Reflect] attribute DOMString hreflang;
-    [Reflect] attribute DOMString media;
-    [Reflect] attribute DOMString rel;
-    [Reflect] attribute DOMString rev;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString charset;
+    [CEReactions=NotNeeded, Reflect, URL] attribute USVString href;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString hreflang;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString media;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString rel;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString rev;
     [PutForwards=value] readonly attribute DOMTokenList sizes;
-    [Reflect] attribute DOMString target;
-    [Reflect] attribute DOMString type;
-    attribute DOMString as;
-    attribute DOMString? crossOrigin;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString target;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString type;
+    [CEReactions=NotNeeded] attribute DOMString as;
+    [CEReactions=NotNeeded] attribute DOMString? crossOrigin;
+    [CEReactions=NotNeeded, Reflect, EnabledBySetting=LinkPreloadResponsiveImages] attribute DOMString imageSrcset;
+    [CEReactions=NotNeeded, Reflect, EnabledBySetting=LinkPreloadResponsiveImages] attribute DOMString imageSizes;
+    [EnabledBySetting=ReferrerPolicyAttribute, ImplementedAs=referrerPolicyForBindings, CEReactions=NotNeeded] attribute DOMString referrerPolicy;
 
     // DOM Level 2 Style
     readonly attribute StyleSheet sheet;
@@ -42,6 +46,6 @@
     [PutForwards=value] readonly attribute DOMTokenList relList;
 
     [Reflect] attribute DOMString nonce;
-    [Reflect, EnabledBySetting=SubresourceIntegrity] attribute DOMString integrity;
+    [CEReactions=NotNeeded, Reflect, EnabledBySetting=SubresourceIntegrity] attribute DOMString integrity;
 };
 

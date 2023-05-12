@@ -20,7 +20,6 @@
 
 #pragma once
 
-#include "ActiveDOMCallback.h"
 #include "IDLTypes.h"
 #include "JSCallbackData.h"
 #include "TestCallbackFunctionRethrow.h"
@@ -28,20 +27,20 @@
 
 namespace WebCore {
 
-class JSTestCallbackFunctionRethrow final : public TestCallbackFunctionRethrow, public ActiveDOMCallback {
+class JSTestCallbackFunctionRethrow final : public TestCallbackFunctionRethrow {
 public:
     static Ref<JSTestCallbackFunctionRethrow> create(JSC::JSObject* callback, JSDOMGlobalObject* globalObject)
     {
         return adoptRef(*new JSTestCallbackFunctionRethrow(callback, globalObject));
     }
 
-    virtual ScriptExecutionContext* scriptExecutionContext() const { return ContextDestructionObserver::scriptExecutionContext(); }
+    ScriptExecutionContext* scriptExecutionContext() const { return ContextDestructionObserver::scriptExecutionContext(); }
 
-    virtual ~JSTestCallbackFunctionRethrow();
+    ~JSTestCallbackFunctionRethrow() final;
     JSCallbackDataStrong* callbackData() { return m_data; }
 
     // Functions
-    virtual CallbackResult<typename IDLDOMString::ImplementationType> handleEvent(typename IDLSequence<IDLLong>::ParameterType argument) override;
+    CallbackResult<typename IDLDOMString::ImplementationType> handleEvent(typename IDLSequence<IDLLong>::ParameterType argument) override;
 
 private:
     JSTestCallbackFunctionRethrow(JSC::JSObject*, JSDOMGlobalObject*);

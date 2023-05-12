@@ -22,6 +22,7 @@
 #pragma once
 
 #include "Cursor.h"
+#include "DisabledAdaptations.h"
 #include "FocusDirection.h"
 #include "HostWindow.h"
 #include <wtf/Forward.h>
@@ -36,12 +37,13 @@ namespace WebCore {
 class ChromeClient;
 class ColorChooser;
 class ColorChooserClient;
+class DataListSuggestionPicker;
+class DataListSuggestionsClient;
 class DateTimeChooser;
 class DateTimeChooserClient;
 class FileChooser;
 class FileIconLoader;
 class FloatRect;
-class FrameLoadRequest;
 class Element;
 class Frame;
 class Geolocation;
@@ -55,7 +57,10 @@ class PopupMenuClient;
 class PopupOpeningObserver;
 class SearchPopupMenu;
 
+struct ContactInfo;
+struct ContactsRequestData;
 struct DateTimeChooserParameters;
+struct ShareDataWithParsedURL;
 struct ViewportArguments;
 struct WindowFeatures;
     
@@ -71,27 +76,26 @@ public:
     void invalidateContentsAndRootView(const IntRect&) override;
     void invalidateContentsForSlowScroll(const IntRect&) override;
     void scroll(const IntSize&, const IntRect&, const IntRect&) override;
-#if USE(COORDINATED_GRAPHICS)
-    void delegatedScrollRequested(const IntPoint& scrollPoint) override;
-#endif
     IntPoint screenToRootView(const IntPoint&) const override;
     IntRect rootViewToScreen(const IntRect&) const override;
-#if PLATFORM(IOS)
     IntPoint accessibilityScreenToRootView(const IntPoint&) const override;
     IntRect rootViewToAccessibilityScreen(const IntRect&) const override;
-#endif
     PlatformPageClient platformPageClient() const override;
-    void scrollbarsModeDidChange() const override;
     void setCursor(const Cursor&) override;
     void setCursorHiddenUntilMouseMoves(bool) override;
 
-    void scheduleAnimation() override { }
+    RefPtr<ImageBuffer> createImageBuffer(const FloatSize&, RenderingMode, RenderingPurpose, float resolutionScale, ColorSpace, PixelFormat) const override;
+
+#if ENABLE(WEBGL)
+    RefPtr<GraphicsContextGL> createGraphicsContextGL(const GraphicsContextGLAttributes&) const override;
+#endif
 
     PlatformDisplayID displayID() const override;
-    void windowScreenDidChange(PlatformDisplayID) override;
+    void windowScreenDidChange(PlatformDisplayID, Optional<unsigned>) override;
 
     FloatSize screenSize() const override;
     FloatSize availableScreenSize() const override;
+    FloatSize overrideScreenSize() const override;
 
     void scrollRectIntoView(const IntRect&) const;
 
@@ -111,7 +115,7 @@ public:
     void focusedElementChanged(Element*) const;
     void focusedFrameChanged(Frame*) const;
 
-    WEBCORE_EXPORT Page* createWindow(Frame&, const FrameLoadRequest&, const WindowFeatures&, const NavigationAction&) const;
+    WEBCORE_EXPORT Page* createWindow(Frame&, const WindowFeatures&, const NavigationAction&) const;
     WEBCORE_EXPORT void show() const;
 
     bool canRunModal() const;
@@ -143,9 +147,7 @@ public:
 
     void mouseDidMoveOverElement(const HitTestResult&, unsigned modifierFlags);
 
-    void setToolTip(const HitTestResult&);
-
-    WEBCORE_EXPORT void print(Frame&);
+    WEBCORE_EXPORT bool print(Frame&);
 
     WEBCORE_EXPORT void enableSuddenTermination();
     WEBCORE_EXPORT void disableSuddenTermination();
@@ -154,9 +156,20 @@ public:
     std::unique_ptr<ColorChooser> createColorChooser(ColorChooserClient&, const Color& initialColor);
 #endif
 
+#if ENABLE(DATALIST_ELEMENT)
+    std::unique_ptr<DataListSuggestionPicker> createDataListSuggestionPicker(DataListSuggestionsClient&);
+#endif
+
+#if ENABLE(DATE_AND_TIME_INPUT_TYPES)
+    std::unique_ptr<DateTimeChooser> createDateTimeChooser(DateTimeChooserClient&);
+#endif
+
     void runOpenPanel(Frame&, FileChooser&);
+    void showShareSheet(ShareDataWithParsedURL&, CompletionHandler<void(bool)>&&);
+    void showContactPicker(const ContactsRequestData&, CompletionHandler<void(Optional<Vector<ContactInfo>>&&)>&&);
     void loadIconForFiles(const Vector<String>&, FileIconLoader&);
 
+    void dispatchDisabledAdaptationsDidChange(const OptionSet<DisabledAdaptations>&) const;
     void dispatchViewportPropertiesDidChange(const ViewportArguments&) const;
 
     bool requiresFullscreenForVideoPlayback();
@@ -167,11 +180,10 @@ public:
 
     bool selectItemWritingDirectionIsNatural();
     bool selectItemAlignmentFollowsMenuWritingDirection();
-    bool hasOpenedPopup() const;
     RefPtr<PopupMenu> createPopupMenu(PopupMenuClient&) const;
     RefPtr<SearchPopupMenu> createSearchPopupMenu(PopupMenuClient&) const;
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     // FIXME: Can we come up with a better name for this setter?
     void setDispatchViewportDataDidChangeSuppressed(bool dispatchViewportDataDidChangeSuppressed) { m_isDispatchViewportDataDidChangeSuppressed = dispatchViewportDataDidChangeSuppressed; }
 #endif
@@ -184,11 +196,12 @@ public:
 private:
     void notifyPopupOpeningObservers() const;
 
+    void getToolTip(const HitTestResult&, String&, TextDirection&);
+
     Page& m_page;
     ChromeClient& m_client;
-    PlatformDisplayID m_displayID { 0 };
     Vector<PopupOpeningObserver*> m_popupOpeningObservers;
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     bool m_isDispatchViewportDataDidChangeSuppressed { false };
 #endif
 };

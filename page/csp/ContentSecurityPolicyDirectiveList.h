@@ -30,7 +30,7 @@
 #include "ContentSecurityPolicyHash.h"
 #include "ContentSecurityPolicyMediaListDirective.h"
 #include "ContentSecurityPolicySourceListDirective.h"
-#include "URL.h"
+#include <wtf/URL.h>
 
 namespace WebCore {
 
@@ -62,7 +62,11 @@ public:
     const ContentSecurityPolicyDirective* violatedDirectiveForFormAction(const URL&, bool didReceiveRedirectResponse) const;
     const ContentSecurityPolicyDirective* violatedDirectiveForFrame(const URL&, bool didReceiveRedirectResponse) const;
     const ContentSecurityPolicyDirective* violatedDirectiveForFrameAncestor(const Frame&) const;
+    const ContentSecurityPolicyDirective* violatedDirectiveForFrameAncestorOrigins(const Vector<RefPtr<SecurityOrigin>>&) const;
     const ContentSecurityPolicyDirective* violatedDirectiveForImage(const URL&, bool didReceiveRedirectResponse) const;
+#if ENABLE(APPLICATION_MANIFEST)
+    const ContentSecurityPolicyDirective* violatedDirectiveForManifest(const URL&, bool didReceiveRedirectResponse) const;
+#endif
     const ContentSecurityPolicyDirective* violatedDirectiveForMedia(const URL&, bool didReceiveRedirectResponse) const;
     const ContentSecurityPolicyDirective* violatedDirectiveForObjectSource(const URL&, bool didReceiveRedirectResponse, ContentSecurityPolicySourceListDirective::ShouldAllowEmptyURLIfSourceListIsNotNone) const;
     const ContentSecurityPolicyDirective* violatedDirectiveForPluginType(const String& type, const String& typeAttribute) const;
@@ -72,6 +76,7 @@ public:
     const ContentSecurityPolicyDirective* defaultSrc() const { return m_defaultSrc.get(); }
 
     bool hasBlockAllMixedContentDirective() const { return m_hasBlockAllMixedContentDirective; }
+    bool hasFrameAncestorsDirective() const { return !!m_frameAncestors; }
 
     const String& evalDisabledErrorMessage() const { return m_evalDisabledErrorMessage; }
     const String& webAssemblyDisabledErrorMessage() const { return m_webAssemblyDisabledErrorMessage; }
@@ -84,16 +89,19 @@ public:
 private:
     void parse(const String&, ContentSecurityPolicy::PolicyFrom);
 
-    bool parseDirective(const UChar* begin, const UChar* end, String& name, String& value);
-    void parseReportURI(const String& name, const String& value);
-    void parsePluginTypes(const String& name, const String& value);
-    void addDirective(const String& name, const String& value);
-    void applySandboxPolicy(const String& name, const String& sandboxPolicy);
-    void setUpgradeInsecureRequests(const String& name);
-    void setBlockAllMixedContentEnabled(const String& name);
+    struct ParsedDirective {
+        String name;
+        String value;
+    };
+    template<typename CharacterType> Optional<ParsedDirective> parseDirective(StringParsingBuffer<CharacterType>);
+    void parseReportURI(ParsedDirective&&);
+    void addDirective(ParsedDirective&&);
+    void applySandboxPolicy(ParsedDirective&&);
+    void setUpgradeInsecureRequests(ParsedDirective&&);
+    void setBlockAllMixedContentEnabled(ParsedDirective&&);
 
     template <class CSPDirectiveType>
-    void setCSPDirective(const String& name, const String& value, std::unique_ptr<CSPDirectiveType>&);
+    void setCSPDirective(ParsedDirective&&, std::unique_ptr<CSPDirectiveType>&);
 
     ContentSecurityPolicySourceListDirective* operativeDirective(ContentSecurityPolicySourceListDirective*) const;
 
@@ -121,6 +129,9 @@ private:
     std::unique_ptr<ContentSecurityPolicySourceListDirective> m_frameAncestors;
     std::unique_ptr<ContentSecurityPolicySourceListDirective> m_frameSrc;
     std::unique_ptr<ContentSecurityPolicySourceListDirective> m_imgSrc;
+#if ENABLE(APPLICATION_MANIFEST)
+    std::unique_ptr<ContentSecurityPolicySourceListDirective> m_manifestSrc;
+#endif
     std::unique_ptr<ContentSecurityPolicySourceListDirective> m_mediaSrc;
     std::unique_ptr<ContentSecurityPolicySourceListDirective> m_objectSrc;
     std::unique_ptr<ContentSecurityPolicySourceListDirective> m_scriptSrc;

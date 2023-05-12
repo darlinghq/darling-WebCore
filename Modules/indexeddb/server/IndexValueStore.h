@@ -45,8 +45,9 @@ class MemoryIndex;
 typedef HashMap<IDBKeyData, std::unique_ptr<IndexValueEntry>, IDBKeyDataHash, IDBKeyDataHashTraits> IndexKeyValueMap;
 
 class IndexValueStore {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
-    IndexValueStore(bool unique);
+    explicit IndexValueStore(bool unique);
 
     const IDBKeyData* lowestValueForKey(const IDBKeyData&) const;
     Vector<IDBKeyData> allValuesForKey(const IDBKeyData&, uint32_t limit) const;

@@ -28,57 +28,77 @@
 #include "Timer.h"
 #include <wtf/Deque.h>
 #include <wtf/Function.h>
+#include <wtf/MainThread.h>
+#include <wtf/UniqueRef.h>
 #include <wtf/WeakPtr.h>
+
+namespace WTF {
+class Lock;
+};
 
 namespace WebCore {
 
 template <typename T>
 class TaskDispatcher {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
-    TaskDispatcher(T& context)
+    explicit TaskDispatcher(T* context)
         : m_context(context)
     {
     }
 
-    void postTask(WTF::Function<void()>&& f)
+    void postTask(Function<void()>&& function)
     {
-        m_context.postTask(WTFMove(f));
+        ASSERT(m_context);
+        m_context->enqueueTaskForDispatcher(WTFMove(function));
     }
 
 private:
-    T& m_context;
+    T* m_context;
 };
 
 template<>
-class TaskDispatcher<Timer> {
+class TaskDispatcher<Timer> : public CanMakeWeakPtr<TaskDispatcher<Timer>> {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     TaskDispatcher();
-    void postTask(WTF::Function<void()>&&);
+    void postTask(Function<void()>&&);
 
 private:
     static Timer& sharedTimer();
+    static WTF::Lock& sharedLock();
     static void sharedTimerFired();
     static Deque<WeakPtr<TaskDispatcher<Timer>>>& pendingDispatchers();
 
     void dispatchOneTask();
 
-    WeakPtrFactory<TaskDispatcher> m_weakPtrFactory;
-    Deque<WTF::Function<void()>> m_pendingTasks;
+    Deque<Function<void()>> m_pendingTasks;
 };
 
 template <typename T>
-class GenericTaskQueue {
+class GenericTaskQueue : public CanMakeWeakPtr<GenericTaskQueue<T>> {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     GenericTaskQueue()
-        : m_weakPtrFactory(this)
-        , m_dispatcher()
+        : m_dispatcher(makeUniqueRef<TaskDispatcher<T>>())
     {
     }
 
-    GenericTaskQueue(T& t)
-        : m_weakPtrFactory(this)
-        , m_dispatcher(t)
+    explicit GenericTaskQueue(T& t)
+        : m_dispatcher(makeUniqueRef<TaskDispatcher<T>>(&t))
     {
+    }
+
+    explicit GenericTaskQueue(T* t)
+        : m_dispatcher(makeUniqueRef<TaskDispatcher<T>>(t))
+        , m_isClosed(!t)
+    {
+    }
+
+    ~GenericTaskQueue()
+    {
+        if (!isMainThread())
+            m_dispatcher->postTask([dispatcher = WTFMove(m_dispatcher)] { });
     }
 
     typedef WTF::Function<void ()> TaskFunction;
@@ -89,8 +109,7 @@ public:
             return;
 
         ++m_pendingTasks;
-        auto weakThis = m_weakPtrFactory.createWeakPtr();
-        m_dispatcher.postTask([weakThis, task = WTFMove(task)] {
+        m_dispatcher->postTask([weakThis = makeWeakPtr(*this), task = WTFMove(task)] {
             if (!weakThis)
                 return;
             ASSERT(weakThis->m_pendingTasks);
@@ -107,14 +126,15 @@ public:
 
     void cancelAllTasks()
     {
-        m_weakPtrFactory.revokeAll();
+        CanMakeWeakPtr<GenericTaskQueue<T>>::weakPtrFactory().revokeAll();
         m_pendingTasks = 0;
     }
+
     bool hasPendingTasks() const { return m_pendingTasks; }
+    bool isClosed() const { return m_isClosed; }
 
 private:
-    WeakPtrFactory<GenericTaskQueue> m_weakPtrFactory;
-    TaskDispatcher<T> m_dispatcher;
+    UniqueRef<TaskDispatcher<T>> m_dispatcher;
     unsigned m_pendingTasks { 0 };
     bool m_isClosed { false };
 };

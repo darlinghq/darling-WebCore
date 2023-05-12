@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2008 Apple Inc. All Rights Reserved.
+ * Copyright (C) 2008-2019 Apple Inc. All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,33 +26,34 @@
 #include "config.h"
 #include "JSImageData.h"
 
-#include "JSDOMConvertBufferSource.h"
+#include "JSDOMConvert.h"
 #include "JSDOMWrapperCache.h"
-#include <heap/HeapInlines.h>
-#include <runtime/IdentifierInlines.h>
+#include <JavaScriptCore/HeapInlines.h>
+#include <JavaScriptCore/IdentifierInlines.h>
+#include <JavaScriptCore/JSObjectInlines.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/text/WTFString.h>
 
+namespace WebCore {
 using namespace JSC;
 
-namespace WebCore {
-
-JSValue toJSNewlyCreated(ExecState* state, JSDOMGlobalObject* globalObject, Ref<ImageData>&& imageData)
+JSValue toJSNewlyCreated(JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject* globalObject, Ref<ImageData>&& imageData)
 {
+    VM& vm = lexicalGlobalObject->vm();
     auto* data = imageData->data();
     auto* wrapper = createWrapper<ImageData>(globalObject, WTFMove(imageData));
-    Identifier dataName = Identifier::fromString(state, "data");
-    wrapper->putDirect(state->vm(), dataName, toJS(state, globalObject, data), DontDelete | ReadOnly);
+    Identifier dataName = Identifier::fromString(vm, "data");
+    wrapper->putDirect(vm, dataName, toJS(lexicalGlobalObject, globalObject, data), PropertyAttribute::DontDelete | PropertyAttribute::ReadOnly);
     // FIXME: Adopt reportExtraMemoryVisited, and switch to reportExtraMemoryAllocated.
     // https://bugs.webkit.org/show_bug.cgi?id=142595
-    state->heap()->deprecatedReportExtraMemory(data->length());
+    vm.heap.deprecatedReportExtraMemory(data->length());
     
     return wrapper;
 }
 
-JSValue toJS(ExecState* state, JSDOMGlobalObject* globalObject, ImageData& imageData)
+JSValue toJS(JSGlobalObject* lexicalGlobalObject, JSDOMGlobalObject* globalObject, ImageData& imageData)
 {
-    return wrap(state, globalObject, imageData);
+    return wrap(lexicalGlobalObject, globalObject, imageData);
 }
 
 }

@@ -37,8 +37,7 @@
 #include "EventTarget.h"
 #include "NotificationDirection.h"
 #include "NotificationPermission.h"
-#include "Timer.h"
-#include "URL.h"
+#include <wtf/URL.h>
 #include "WritingMode.h"
 
 namespace WebCore {
@@ -47,7 +46,7 @@ class Document;
 class NotificationPermissionCallback;
 
 class Notification final : public RefCounted<Notification>, public ActiveDOMObject, public EventTargetWithInlineData {
-    WTF_MAKE_FAST_ALLOCATED;
+    WTF_MAKE_ISO_ALLOCATED_EXPORT(Notification, WEBCORE_EXPORT);
 public:
     using Permission = NotificationPermission;
     using Direction = NotificationDirection;
@@ -61,7 +60,7 @@ public:
     };
     static Ref<Notification> create(Document&, const String& title, const Options&);
     
-    virtual ~Notification();
+    WEBCORE_EXPORT virtual ~Notification();
 
     void show();
     void close();
@@ -73,7 +72,7 @@ public:
     const String& tag() const { return m_tag; }
     const URL& icon() const { return m_icon; }
 
-    TextDirection direction() const { return m_direction == Direction::Rtl ? RTL : LTR; }
+    TextDirection direction() const { return m_direction == Direction::Rtl ? TextDirection::RTL : TextDirection::LTR; }
 
     WEBCORE_EXPORT void dispatchClickEvent();
     WEBCORE_EXPORT void dispatchCloseEvent();
@@ -93,15 +92,21 @@ public:
 private:
     Notification(Document&, const String& title, const Options&);
 
+    Document* document() const;
     EventTargetInterface eventTargetInterface() const final { return NotificationEventTargetInterfaceType; }
+
+    void showSoon();
 
     // ActiveDOMObject
     const char* activeDOMObjectName() const final;
-    bool canSuspendForDocumentSuspension() const final;
+    void suspend(ReasonForSuspension);
     void stop() final;
+    bool virtualHasPendingActivity() const final;
 
+    // EventTarget
     void refEventTarget() final { ref(); }
     void derefEventTarget() final { deref(); }
+    void eventListenersDidChange() final;
 
     String m_title;
     Direction m_direction;
@@ -112,8 +117,7 @@ private:
 
     enum State { Idle, Showing, Closed };
     State m_state { Idle };
-
-    std::unique_ptr<Timer> m_taskTimer;
+    bool m_hasRelevantEventListener { false };
 };
 
 } // namespace WebCore

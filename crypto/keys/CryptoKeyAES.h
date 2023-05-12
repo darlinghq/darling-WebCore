@@ -31,29 +31,13 @@
 #include <wtf/Function.h>
 #include <wtf/Vector.h>
 
-#if ENABLE(SUBTLE_CRYPTO)
+#if ENABLE(WEB_CRYPTO)
 
 namespace WebCore {
 
 class CryptoAlgorithmParameters;
 
 struct JsonWebKey;
-
-class AesKeyAlgorithm final : public KeyAlgorithm {
-public:
-    AesKeyAlgorithm(const String& name, size_t length)
-        : KeyAlgorithm(name)
-        , m_length(length)
-    {
-    }
-
-    KeyAlgorithmClass keyAlgorithmClass() const final { return KeyAlgorithmClass::AES; }
-
-    size_t length() const { return m_length; }
-
-private:
-    size_t m_length;
-};
 
 class CryptoKeyAES final : public CryptoKey {
 public:
@@ -70,7 +54,7 @@ public:
     static bool isValidAESAlgorithm(CryptoAlgorithmIdentifier);
 
     static RefPtr<CryptoKeyAES> generate(CryptoAlgorithmIdentifier, size_t lengthBits, bool extractable, CryptoKeyUsageBitmap);
-    static RefPtr<CryptoKeyAES> importRaw(CryptoAlgorithmIdentifier, Vector<uint8_t>&& keyData, bool extractable, CryptoKeyUsageBitmap);
+    WEBCORE_EXPORT static RefPtr<CryptoKeyAES> importRaw(CryptoAlgorithmIdentifier, Vector<uint8_t>&& keyData, bool extractable, CryptoKeyUsageBitmap);
     using CheckAlgCallback = Function<bool(size_t, const String&)>;
     static RefPtr<CryptoKeyAES> importJwk(CryptoAlgorithmIdentifier, JsonWebKey&&, bool extractable, CryptoKeyUsageBitmap, CheckAlgCallback&&);
 
@@ -85,8 +69,7 @@ private:
     CryptoKeyAES(CryptoAlgorithmIdentifier, const Vector<uint8_t>& key, bool extractable, CryptoKeyUsageBitmap);
     CryptoKeyAES(CryptoAlgorithmIdentifier, Vector<uint8_t>&& key, bool extractable, CryptoKeyUsageBitmap);
 
-    std::unique_ptr<KeyAlgorithm> buildAlgorithm() const final;
-    std::unique_ptr<CryptoKeyData> exportData() const final;
+    KeyAlgorithm algorithm() const final;
 
     Vector<uint8_t> m_key;
 };
@@ -95,6 +78,4 @@ private:
 
 SPECIALIZE_TYPE_TRAITS_CRYPTO_KEY(CryptoKeyAES, CryptoKeyClass::AES)
 
-SPECIALIZE_TYPE_TRAITS_KEY_ALGORITHM(AesKeyAlgorithm, KeyAlgorithmClass::AES)
-
-#endif // ENABLE(SUBTLE_CRYPTO)
+#endif // ENABLE(WEB_CRYPTO)

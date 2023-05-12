@@ -23,9 +23,9 @@
 #include "Color.h"
 #include "Filter.h"
 #include "GraphicsContext.h"
-#include "TextStream.h"
 #include <wtf/NeverDestroyed.h>
 #include <wtf/StdLibExtras.h>
+#include <wtf/text/TextStream.h>
 #include <wtf/text/WTFString.h>
 
 namespace WebCore {
@@ -35,9 +35,9 @@ Ref<SourceAlpha> SourceAlpha::create(FilterEffect& sourceEffect)
     return adoptRef(*new SourceAlpha(sourceEffect));
 }
 
-const AtomicString& SourceAlpha::effectName()
+const AtomString& SourceAlpha::effectName()
 {
-    static NeverDestroyed<const AtomicString> s_effectName("SourceAlpha", AtomicString::ConstructFromLiteral);
+    static MainThreadNeverDestroyed<const AtomString> s_effectName("SourceAlpha", AtomString::ConstructFromLiteral);
     return s_effectName;
 }
 
@@ -54,28 +54,23 @@ void SourceAlpha::platformApplySoftware()
         return;
     GraphicsContext& filterContext = resultImage->context();
 
-    ImageBuffer* imageBuffer = inputEffect(0)->asImageBuffer();
+    ImageBuffer* imageBuffer = inputEffect(0)->imageBufferResult();
     if (!imageBuffer)
         return;
 
     FloatRect imageRect(FloatPoint(), absolutePaintRect().size());
     filterContext.fillRect(imageRect, Color::black);
-    filterContext.drawImageBuffer(*imageBuffer, IntPoint(), CompositeDestinationIn);
+    filterContext.drawImageBuffer(*imageBuffer, IntPoint(), CompositeOperator::DestinationIn);
 }
 
-void SourceAlpha::dump()
+TextStream& SourceAlpha::externalRepresentation(TextStream& ts, RepresentationType) const
 {
-}
-
-TextStream& SourceAlpha::externalRepresentation(TextStream& ts, int indent) const
-{
-    writeIndent(ts, indent);
-    ts << "[SourceAlpha]\n";
+    ts << indent << "[SourceAlpha]\n";
     return ts;
 }
 
 SourceAlpha::SourceAlpha(FilterEffect& sourceEffect)
-    : FilterEffect(sourceEffect.filter())
+    : FilterEffect(sourceEffect.filter(), Type::SourceAlpha)
 {
     setOperatingColorSpace(sourceEffect.operatingColorSpace());
     inputEffects().append(&sourceEffect);

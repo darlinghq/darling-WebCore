@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc. All Rights Reserved.
+ * Copyright (C) 2016-2019 Apple Inc. All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,10 +28,12 @@
 
 #include "JSDOMWrapper.h"
 #include "Node.h"
-#include <interpreter/FrameTracers.h>
-#include <jit/SnippetParams.h>
+#include <JavaScriptCore/FrameTracers.h>
+#include <JavaScriptCore/SnippetParams.h>
 
 #if ENABLE(JIT)
+
+IGNORE_WARNINGS_BEGIN("frame-address")
 
 namespace WebCore { namespace DOMJIT {
 
@@ -53,13 +55,9 @@ inline CCallHelpers::Jump branchIfNotWeakIsLive(CCallHelpers& jit, GPRReg weakIm
 }
 
 template<typename WrappedNode>
-JSC::EncodedJSValue JIT_OPERATION toWrapperSlow(JSC::ExecState* exec, JSC::JSGlobalObject* globalObject, void* result)
+JSC::EncodedJSValue toWrapperSlowImpl(JSC::JSGlobalObject* globalObject, void* result)
 {
-    ASSERT(exec);
-    ASSERT(result);
-    ASSERT(globalObject);
-    JSC::NativeCallFrameTracer tracer(&exec->vm(), exec);
-    return JSC::JSValue::encode(toJS(exec, static_cast<JSDOMGlobalObject*>(globalObject), *static_cast<WrappedNode*>(result)));
+    return JSC::JSValue::encode(toJS(globalObject, static_cast<JSDOMGlobalObject*>(globalObject), *static_cast<WrappedNode*>(result)));
 }
 
 template<typename WrappedType>
@@ -138,7 +136,7 @@ inline CCallHelpers::Jump branchIfNotNode(CCallHelpers& jit, GPRReg target)
 inline CCallHelpers::Jump branchIfElement(CCallHelpers& jit, GPRReg target)
 {
     return jit.branch8(
-        CCallHelpers::AboveOrEqual,
+        CCallHelpers::Equal,
         CCallHelpers::Address(target, JSC::JSCell::typeInfoTypeOffset()),
         CCallHelpers::TrustedImm32(JSC::JSType(JSElementType)));
 }
@@ -146,7 +144,7 @@ inline CCallHelpers::Jump branchIfElement(CCallHelpers& jit, GPRReg target)
 inline CCallHelpers::Jump branchIfNotElement(CCallHelpers& jit, GPRReg target)
 {
     return jit.branch8(
-        CCallHelpers::Below,
+        CCallHelpers::NotEqual,
         CCallHelpers::Address(target, JSC::JSCell::typeInfoTypeOffset()),
         CCallHelpers::TrustedImm32(JSC::JSType(JSElementType)));
 }
@@ -179,11 +177,30 @@ inline CCallHelpers::Jump branchTestIsElementFlagOnNode(MacroAssembler& jit, CCa
     return jit.branchTest32(condition, CCallHelpers::Address(nodeAddress, Node::nodeFlagsMemoryOffset()), CCallHelpers::TrustedImm32(Node::flagIsElement()));
 }
 
+inline CCallHelpers::Jump branchTestIsShadowRootFlagOnNode(MacroAssembler& jit, CCallHelpers::ResultCondition condition, GPRReg nodeAddress)
+{
+    return jit.branchTest32(condition, CCallHelpers::Address(nodeAddress, Node::nodeFlagsMemoryOffset()), CCallHelpers::TrustedImm32(Node::flagIsShadowRoot()));
+}
+
+inline CCallHelpers::Jump branchTestIsElementOrShadowRootFlagOnNode(MacroAssembler& jit, CCallHelpers::ResultCondition condition, GPRReg nodeAddress)
+{
+    return jit.branchTest32(condition, CCallHelpers::Address(nodeAddress, Node::nodeFlagsMemoryOffset()),
+        CCallHelpers::TrustedImm32(Node::flagIsShadowRoot() | Node::flagIsElement()));
+}
+
 inline CCallHelpers::Jump branchTestIsHTMLFlagOnNode(MacroAssembler& jit, CCallHelpers::ResultCondition condition, GPRReg nodeAddress)
 {
     return jit.branchTest32(condition, CCallHelpers::Address(nodeAddress, Node::nodeFlagsMemoryOffset()), CCallHelpers::TrustedImm32(Node::flagIsHTML()));
 }
 
+JSC_DECLARE_JIT_OPERATION(operationToJSNode, JSC::EncodedJSValue, (JSC::JSGlobalObject*, void*));
+JSC_DECLARE_JIT_OPERATION(operationToJSContainerNode, JSC::EncodedJSValue, (JSC::JSGlobalObject*, void*));
+JSC_DECLARE_JIT_OPERATION(operationToJSElement, JSC::EncodedJSValue, (JSC::JSGlobalObject*, void*));
+JSC_DECLARE_JIT_OPERATION(operationToJSHTMLElement, JSC::EncodedJSValue, (JSC::JSGlobalObject*, void*));
+JSC_DECLARE_JIT_OPERATION(operationToJSDocument, JSC::EncodedJSValue, (JSC::JSGlobalObject*, void*));
+
 } }
+
+IGNORE_WARNINGS_END
 
 #endif

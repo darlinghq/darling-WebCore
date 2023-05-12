@@ -26,15 +26,16 @@
 #include "config.h"
 #include "PerformanceLogging.h"
 
+#include "BackForwardCache.h"
 #include "CommonVM.h"
 #include "DOMWindow.h"
 #include "Document.h"
+#include "Frame.h"
 #include "FrameLoader.h"
 #include "FrameLoaderClient.h"
 #include "JSDOMWindow.h"
 #include "Logging.h"
-#include "MainFrame.h"
-#include "PageCache.h"
+#include "Page.h"
 
 namespace WebCore {
 
@@ -47,6 +48,8 @@ static const char* toString(PerformanceLogging::PointOfInterest poi)
     case PerformanceLogging::MainFrameLoadCompleted:
         return "MainFrameLoadCompleted";
     }
+    RELEASE_ASSERT_NOT_REACHED();
+    return "";
 }
 #endif
 
@@ -55,11 +58,12 @@ HashMap<const char*, size_t> PerformanceLogging::memoryUsageStatistics(ShouldInc
     HashMap<const char*, size_t> stats;
 
     auto& vm = commonVM();
+    JSC::JSLockHolder locker(vm);
     stats.add("javascript_gc_heap_capacity", vm.heap.capacity());
     stats.add("javascript_gc_heap_extra_memory_size", vm.heap.extraMemorySize());
 
-    auto& pageCache = PageCache::singleton();
-    stats.add("pagecache_page_count", pageCache.pageCount());
+    auto& backForwardCache = BackForwardCache::singleton();
+    stats.add("backforward_cache_page_count", backForwardCache.pageCount());
 
     stats.add("document_count", Document::allDocuments().size());
 
@@ -79,8 +83,8 @@ HashCountedSet<const char*> PerformanceLogging::javaScriptObjectCounts()
     return WTFMove(*commonVM().heap.objectTypeCounts());
 }
 
-PerformanceLogging::PerformanceLogging(MainFrame& mainFrame)
-    : m_mainFrame(mainFrame)
+PerformanceLogging::PerformanceLogging(Page& page)
+    : m_page(page)
 {
 }
 
@@ -90,7 +94,7 @@ void PerformanceLogging::didReachPointOfInterest(PointOfInterest poi)
     UNUSED_PARAM(poi);
 #else
     // Ignore synthetic main frames used internally by SVG and web inspector.
-    if (m_mainFrame.loader().client().isEmptyFrameLoaderClient())
+    if (m_page.mainFrame().loader().client().isEmptyFrameLoaderClient())
         return;
 
     auto stats = memoryUsageStatistics(ShouldIncludeExpensiveComputations::No);
@@ -104,7 +108,7 @@ void PerformanceLogging::didReachPointOfInterest(PointOfInterest poi)
 
 #if !PLATFORM(COCOA)
 void PerformanceLogging::getPlatformMemoryUsageStatistics(HashMap<const char*, size_t>&) { }
-std::optional<uint64_t> PerformanceLogging::physicalFootprint() { return std::nullopt; }
+Optional<uint64_t> PerformanceLogging::physicalFootprint() { return WTF::nullopt; }
 #endif
 
 }

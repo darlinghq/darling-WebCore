@@ -27,72 +27,80 @@
 #ifndef ThreadGlobalData_h
 #define ThreadGlobalData_h
 
+#include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/text/StringHash.h>
 
-#include <wtf/ThreadSpecific.h>
-using WTF::ThreadSpecific;
+namespace JSC {
+class CallFrame;
+class JSGlobalObject;
+}
 
 namespace WebCore {
 
-    class QualifiedNameCache;
-    class ThreadTimers;
+class QualifiedNameCache;
+class ThreadTimers;
 
-    struct CachedResourceRequestInitiators;
-    struct EventNames;
-    struct ICUConverterWrapper;
-    struct TECConverterWrapper;
-
-    class ThreadGlobalData {
-        WTF_MAKE_NONCOPYABLE(ThreadGlobalData);
-    public:
-        WEBCORE_EXPORT ThreadGlobalData();
-        WEBCORE_EXPORT ~ThreadGlobalData();
-        void destroy(); // called on workers to clean up the ThreadGlobalData before the thread exits.
-
-        const CachedResourceRequestInitiators& cachedResourceRequestInitiators() { return *m_cachedResourceRequestInitiators; }
-        EventNames& eventNames() { return *m_eventNames; }
-        ThreadTimers& threadTimers() { return *m_threadTimers; }
-        QualifiedNameCache& qualifiedNameCache() { return *m_qualifiedNameCache; }
-
-        ICUConverterWrapper& cachedConverterICU() { return *m_cachedConverterICU; }
-
-#if PLATFORM(MAC)
-        TECConverterWrapper& cachedConverterTEC() { return *m_cachedConverterTEC; }
-#endif
+struct CachedResourceRequestInitiators;
+struct EventNames;
+struct ICUConverterWrapper;
+struct MIMETypeRegistryThreadGlobalData;
 
 #if USE(WEB_THREAD)
-        void setWebCoreThreadData();
+class ThreadGlobalData : public ThreadSafeRefCounted<ThreadGlobalData> {
+#else
+class ThreadGlobalData {
+#endif
+    WTF_MAKE_NONCOPYABLE(ThreadGlobalData);
+    WTF_MAKE_FAST_ALLOCATED;
+public:
+    WEBCORE_EXPORT ThreadGlobalData();
+    WEBCORE_EXPORT ~ThreadGlobalData();
+    void destroy(); // called on workers to clean up the ThreadGlobalData before the thread exits.
+
+    const CachedResourceRequestInitiators& cachedResourceRequestInitiators() { return *m_cachedResourceRequestInitiators; }
+    EventNames& eventNames() { return *m_eventNames; }
+    ThreadTimers& threadTimers() { return *m_threadTimers; }
+    QualifiedNameCache& qualifiedNameCache() { return *m_qualifiedNameCache; }
+
+    ICUConverterWrapper& cachedConverterICU() { return *m_cachedConverterICU; }
+
+    JSC::JSGlobalObject* currentState() const { return m_currentState; }
+    void setCurrentState(JSC::JSGlobalObject* state) { m_currentState = state; }
+
+#if USE(WEB_THREAD)
+    void setWebCoreThreadData();
 #endif
 
-    private:
-        std::unique_ptr<CachedResourceRequestInitiators> m_cachedResourceRequestInitiators;
-        std::unique_ptr<EventNames> m_eventNames;
-        std::unique_ptr<ThreadTimers> m_threadTimers;
-        std::unique_ptr<QualifiedNameCache> m_qualifiedNameCache;
+    bool isInRemoveAllEventListeners() const { return m_isInRemoveAllEventListeners; }
+    void setIsInRemoveAllEventListeners(bool value) { m_isInRemoveAllEventListeners = value; }
+
+    const MIMETypeRegistryThreadGlobalData& mimeTypeRegistryThreadGlobalData();
+
+private:
+    std::unique_ptr<CachedResourceRequestInitiators> m_cachedResourceRequestInitiators;
+    std::unique_ptr<EventNames> m_eventNames;
+    std::unique_ptr<ThreadTimers> m_threadTimers;
+    std::unique_ptr<QualifiedNameCache> m_qualifiedNameCache;
+    JSC::JSGlobalObject* m_currentState { nullptr };
 
 #ifndef NDEBUG
-        bool m_isMainThread;
+    bool m_isMainThread;
 #endif
 
-        std::unique_ptr<ICUConverterWrapper> m_cachedConverterICU;
+    bool m_isInRemoveAllEventListeners { false };
 
-#if PLATFORM(MAC)
-        std::unique_ptr<TECConverterWrapper> m_cachedConverterTEC;
-#endif
+    std::unique_ptr<ICUConverterWrapper> m_cachedConverterICU;
+    std::unique_ptr<MIMETypeRegistryThreadGlobalData> m_MIMETypeRegistryThreadGlobalData;
 
-        WEBCORE_EXPORT static ThreadSpecific<ThreadGlobalData>* staticData;
-#if USE(WEB_THREAD)
-        WEBCORE_EXPORT static ThreadGlobalData* sharedMainThreadStaticData;
-#endif
-        WEBCORE_EXPORT friend ThreadGlobalData& threadGlobalData();
-    };
+    WEBCORE_EXPORT friend ThreadGlobalData& threadGlobalData();
+};
 
 #if USE(WEB_THREAD)
 WEBCORE_EXPORT ThreadGlobalData& threadGlobalData();
 #else
 WEBCORE_EXPORT ThreadGlobalData& threadGlobalData() PURE_FUNCTION;
 #endif
-    
+
 } // namespace WebCore
 
 #endif // ThreadGlobalData_h

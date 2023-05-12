@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 Apple Inc.  All rights reserved.
+ * Copyright (C) 2016-2019 Apple Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,6 +34,7 @@
 #include "GraphicsContext.h"
 #include "IntRect.h"
 #include "NotImplemented.h"
+#include "PlatformContextDirect2D.h"
 #include "StrokeStyleApplier.h"
 #include <d2d1.h>
 #include <wtf/MathExtras.h>
@@ -61,20 +62,19 @@ Path Path::polygonPathFromPoints(const Vector<FloatPoint>& points)
 
     path.moveTo(points.first());
 
-    ASSERT(path.activePath());
+    ASSERT(path.m_activePath);
 
-    path.activePath()->AddLines(d2dPoints.data(), d2dPoints.size());
+    path.m_activePath->AddLines(d2dPoints.data(), d2dPoints.size());
     path.closeSubpath();
 
     return path;
 }
 
-Path::Path()
-{
-}
+Path::Path() = default;
 
 Path::~Path()
 {
+    clearGeometries();
 }
 
 PlatformPathPtr Path::ensurePlatformPath()
@@ -84,41 +84,48 @@ PlatformPathPtr Path::ensurePlatformPath()
         ASSERT(SUCCEEDED(hr));
         if (FAILED(hr))
             return nullptr;
+        ASSERT(refCount(m_path.get()) == 1);
     }
 
     return m_path.get();
 }
 
+void Path::clearGeometries()
+{
+    // Manually clean these up so that we can use this vector with Direct2D APIs.
+    for (auto* geometry : m_geometries)
+        geometry->Release();
+    m_geometries.clear();
+}
+
 void Path::appendGeometry(ID2D1Geometry* geometry)
 {
-    unsigned geometryCount = m_path ? m_path->GetSourceGeometryCount() : 0;
-    Vector<ID2D1Geometry*> geometries(geometryCount, nullptr);
+#if ASSERT_ENABLED
+    unsigned before = refCount(geometry);
+#endif
 
-    // Note: 'GetSourceGeometries' returns geometries that have a +1 ref count.
-    // so they must be released before we return.
-    if (geometryCount)
-        m_path->GetSourceGeometries(geometries.data(), geometryCount);
+    unsigned geometryCount = m_path ? m_path->GetSourceGeometryCount() : 0;
+
+    RELEASE_ASSERT(m_geometries.size() == geometryCount);
 
     geometry->AddRef();
-    geometries.append(geometry);
+    m_geometries.append(geometry);
 
     auto fillMode = m_path ? m_path->GetFillMode() : D2D1_FILL_MODE_WINDING;
 
-    COMPtr<ID2D1GeometryGroup> protectedPath = m_path;
     m_path = nullptr;
 
-    HRESULT hr = GraphicsContext::systemFactory()->CreateGeometryGroup(fillMode, geometries.data(), geometries.size(), &m_path);
+    HRESULT hr = GraphicsContext::systemFactory()->CreateGeometryGroup(fillMode, m_geometries.data(), m_geometries.size(), &m_path);
     RELEASE_ASSERT(SUCCEEDED(hr));
 
-    for (auto entry : geometries)
-        entry->Release();
+    ASSERT(refCount(geometry) == before + 1);
 }
 
 void Path::createGeometryWithFillMode(WindRule webkitFillMode, COMPtr<ID2D1GeometryGroup>& path) const
 {
     RELEASE_ASSERT(m_path);
 
-    auto fillMode = (webkitFillMode == RULE_EVENODD) ? D2D1_FILL_MODE_ALTERNATE : D2D1_FILL_MODE_WINDING;
+    auto fillMode = (webkitFillMode == WindRule::EvenOdd) ? D2D1_FILL_MODE_ALTERNATE : D2D1_FILL_MODE_WINDING;
 
     if (fillMode == m_path->GetFillMode()) {
         path = m_path;
@@ -127,83 +134,80 @@ void Path::createGeometryWithFillMode(WindRule webkitFillMode, COMPtr<ID2D1Geome
 
     unsigned geometryCount = m_path->GetSourceGeometryCount();
 
-    Vector<ID2D1Geometry*> geometries(geometryCount, nullptr);
-    ASSERT(geometryCount);
+    ASSERT(m_geometries.size() == geometryCount);
 
-    // Note: 'GetSourceGeometries' returns geometries that have a +1 ref count.
-    // so they must be released before we return.
-    m_path->GetSourceGeometries(geometries.data(), geometryCount);
-
-    HRESULT hr = GraphicsContext::systemFactory()->CreateGeometryGroup(fillMode, geometries.data(), geometries.size(), &path);
+    HRESULT hr = GraphicsContext::systemFactory()->CreateGeometryGroup(fillMode, const_cast<ID2D1Geometry**>(m_geometries.data()), m_geometries.size(), &path);
     RELEASE_ASSERT(SUCCEEDED(hr));
-
-    for (auto entry : geometries)
-        entry->Release();
+    ASSERT(refCount(path.get()) == 1);
 }
 
 Path::Path(const Path& other)
 {
-    if (other.platformPath() && other.activePath()) {
-        auto otherPath = other.platformPath();
+#if ASSERT_ENABLED
+    unsigned pathCount = refCount(other.m_path.get());
+    unsigned activePathCount = refCount(other.m_activePath.get());
+#endif
+    m_path = other.m_path;
+    m_activePath = other.m_activePath;
+    m_geometries = other.m_geometries;
+    for (auto* geometry : m_geometries)
+        geometry->AddRef();
 
-        unsigned geometryCount = otherPath->GetSourceGeometryCount();
+    ASSERT(!m_path || refCount(m_path.get()) == pathCount + 1);
+    ASSERT(!m_activePath || refCount(m_activePath.get()) == activePathCount + 1);
+}
+    
+Path::Path(Path&& other)
+{
+#if ASSERT_ENABLED
+    unsigned pathCount = refCount(other.m_path.get());
+    unsigned activePathCount = refCount(other.m_activePath.get());
+#endif
+    m_path = WTFMove(other.m_path);
+    m_activePath = WTFMove(other.m_activePath);
+    m_geometries = WTFMove(other.m_geometries);
 
-        Vector<ID2D1Geometry*> geometries(geometryCount, nullptr);
-        ASSERT(geometryCount);
-
-        // Note: 'GetSourceGeometries' returns geometries that have a +1 ref count.
-        // so they must be released before we return.
-        otherPath->GetSourceGeometries(geometries.data(), geometryCount);
-
-        HRESULT hr = GraphicsContext::systemFactory()->CreateGeometryGroup(other.m_path->GetFillMode(), geometries.data(), geometryCount, &m_path);
-        RELEASE_ASSERT(SUCCEEDED(hr));
-
-        for (auto entry : geometries)
-            entry->Release();
-    }
+    ASSERT(refCount(m_path.get()) == pathCount);
+    ASSERT(refCount(m_activePath.get()) == activePathCount);
 }
 
 Path& Path::operator=(const Path& other)
 {
+    if (this == &other)
+        return *this;
+#if ASSERT_ENABLED
+    unsigned pathCount = refCount(other.m_path.get());
+    unsigned activePathCount = refCount(other.m_activePath.get());
+#endif
     m_path = other.m_path;
     m_activePath = other.m_activePath;
-    m_activePathGeometry = other.m_activePathGeometry;
+    m_geometries = other.m_geometries;
+    for (auto* geometry : m_geometries)
+        geometry->AddRef();
+
+    ASSERT(!m_path || refCount(m_path.get()) == pathCount + 1);
+    ASSERT(!m_activePath || refCount(m_activePath.get()) == activePathCount + 1);
 
     return *this;
 }
 
-HRESULT Path::initializePathState()
+Path& Path::operator=(Path&& other)
 {
-    m_path = nullptr;
-    m_activePath = nullptr;
-    m_activePathGeometry = nullptr;
+    if (this == &other)
+        return *this;
 
-    GraphicsContext::systemFactory()->CreatePathGeometry(&m_activePathGeometry);
+#if ASSERT_ENABLED
+    unsigned pathCount = refCount(other.m_path.get());
+    unsigned activePathCount = refCount(other.m_activePath.get());
+#endif
+    m_path = WTFMove(other.m_path);
+    m_activePath = WTFMove(other.m_activePath);
+    m_geometries = WTFMove(other.m_geometries);
 
-    Vector<ID2D1Geometry*> geometries;
-    geometries.append(m_activePathGeometry.get());
+    ASSERT(refCount(m_path.get()) == pathCount);
+    ASSERT(refCount(m_activePath.get()) == activePathCount);
 
-    HRESULT hr = GraphicsContext::systemFactory()->CreateGeometryGroup(D2D1_FILL_MODE_WINDING, geometries.data(), geometries.size(), &m_path);
-    if (FAILED(hr))
-        return hr;
-
-    return m_activePathGeometry->Open(&m_activePath);
-}
-
-void Path::drawDidComplete() const
-{
-    FloatPoint currentPoint = this->currentPoint();
-
-    // To maintain proper semantics with CG, we need to clear our Direct2D
-    // path objects when a draw has finished.
-    HRESULT hr = const_cast<Path*>(this)->initializePathState();
-
-    if (!SUCCEEDED(hr))
-        return;
-
-    m_activePath->SetFillMode(D2D1_FILL_MODE_WINDING);
-
-    m_activePath->BeginFigure(currentPoint, D2D1_FIGURE_BEGIN_FILLED);
+    return *this;
 }
 
 bool Path::contains(const FloatPoint& point, WindRule rule) const
@@ -215,28 +219,48 @@ bool Path::contains(const FloatPoint& point, WindRule rule) const
         return false;
 
     BOOL contains;
-    if (!SUCCEEDED(m_path->FillContainsPoint(D2D1::Point2F(point.x(), point.y()), nullptr, &contains)))
+    if (!SUCCEEDED(m_path->FillContainsPoint(point, nullptr, &contains)))
         return false;
 
     return contains;
 }
 
-bool Path::strokeContains(StrokeStyleApplier* applier, const FloatPoint& point) const
+bool Path::strokeContains(StrokeStyleApplier& applier, const FloatPoint& point) const
 {
     if (isNull())
         return false;
 
-    ASSERT(applier);
+    PlatformContextDirect2D scratchContextD2D(scratchRenderTarget());
+    GraphicsContext scratchContext(&scratchContextD2D, GraphicsContext::BitmapRenderingContextType::GPUMemory);
+    applier.strokeStyle(&scratchContext);
 
-    GraphicsContext scratchContext(scratchRenderTarget());
-    applier->strokeStyle(&scratchContext);
+#if ASSERT_ENABLED
+    unsigned before = refCount(m_path.get());
+#endif
 
     BOOL containsPoint = false;
     HRESULT hr = m_path->StrokeContainsPoint(point, scratchContext.strokeThickness(), scratchContext.platformStrokeStyle(), nullptr, 1.0f, &containsPoint);
     if (!SUCCEEDED(hr))
         return false;
 
+    ASSERT(refCount(m_path.get()) == before);
     return containsPoint;
+}
+
+void Path::closeAnyOpenGeometries(unsigned figureEndStyle) const
+{
+    if (m_figureIsOpened) {
+        ASSERT(m_activePath);
+
+        auto endStyle = static_cast<D2D1_FIGURE_END>(figureEndStyle);
+        m_activePath->EndFigure(endStyle);
+        m_figureIsOpened = false;
+
+        HRESULT hr = m_activePath->Close();
+        ASSERT(SUCCEEDED(hr));
+    }
+
+    m_activePath = nullptr;
 }
 
 void Path::translate(const FloatSize& size)
@@ -249,41 +273,36 @@ void Path::transform(const AffineTransform& transform)
     if (transform.isIdentity() || isEmpty())
         return;
 
-    bool pathIsActive = false;
-    if (m_activePath) {
-        m_activePath->Close();
-        m_activePath = nullptr;
-        m_activePathGeometry = nullptr;
-        pathIsActive = true;
-    }
+    if (m_activePath)
+        closeAnyOpenGeometries(D2D1_FIGURE_END_OPEN);
 
-    const D2D1_MATRIX_3X2_F& d2dTransform = static_cast<const D2D1_MATRIX_3X2_F>(transform);
+#if ASSERT_ENABLED
+    unsigned before = refCount(m_path.get());
+#endif
+
     COMPtr<ID2D1TransformedGeometry> transformedPath;
-    if (!SUCCEEDED(GraphicsContext::systemFactory()->CreateTransformedGeometry(m_path.get(), d2dTransform, &transformedPath)))
+    if (!SUCCEEDED(GraphicsContext::systemFactory()->CreateTransformedGeometry(m_path.get(), transform, &transformedPath)))
         return;
 
-    Vector<ID2D1Geometry*> geometries;
-    geometries.append(transformedPath.get());
-
-    if (pathIsActive) {
-        GraphicsContext::systemFactory()->CreatePathGeometry(&m_activePathGeometry);
-        m_activePathGeometry->Open(&m_activePath);
-        geometries.append(m_activePathGeometry.get());
-    }
+    ASSERT(refCount(m_path.get()) == before);
+    ASSERT(refCount(transformedPath.get()) == 1);
 
     auto fillMode = m_path->GetFillMode();
 
     m_path = nullptr;
 
-    HRESULT hr = GraphicsContext::systemFactory()->CreateGeometryGroup(fillMode, geometries.data(), geometries.size(), &m_path);
+    clearGeometries();
+
+    transformedPath->AddRef();
+    m_geometries.append(transformedPath.get());
+
+    HRESULT hr = GraphicsContext::systemFactory()->CreateGeometryGroup(fillMode, m_geometries.data(), m_geometries.size(), &m_path);
     RELEASE_ASSERT(SUCCEEDED(hr));
+    ASSERT(refCount(m_path.get()) == 1);
 }
 
-FloatRect Path::boundingRect() const
+FloatRect Path::boundingRectSlowCase() const
 {
-    if (isNull())
-        return FloatRect();
-
     D2D1_RECT_F bounds = { };
     if (!SUCCEEDED(m_path->GetBounds(nullptr, &bounds)))
         return FloatRect();
@@ -291,13 +310,26 @@ FloatRect Path::boundingRect() const
     return bounds;
 }
 
-FloatRect Path::fastBoundingRect() const
+FloatRect Path::fastBoundingRectSlowCase() const
+{
+    D2D1_RECT_F bounds = { };
+    if (!SUCCEEDED(m_path->GetBounds(nullptr, &bounds)))
+        return FloatRect();
+
+    return bounds;
+}
+
+FloatRect Path::fastBoundingRectForStroke(const PlatformContextDirect2D& platformContext) const
 {
     if (isNull())
         return FloatRect();
 
+    float tolerance = 10;
+
+    auto* strokeStyle = const_cast<PlatformContextDirect2D&>(platformContext).strokeStyle();
+
     D2D1_RECT_F bounds = { };
-    if (!SUCCEEDED(m_path->GetBounds(nullptr, &bounds)))
+    if (!SUCCEEDED(m_path->GetWidenedBounds(platformContext.strokeThickness(), strokeStyle, nullptr, tolerance, &bounds)))
         return FloatRect();
 
     return bounds;
@@ -308,61 +340,108 @@ FloatRect Path::strokeBoundingRect(StrokeStyleApplier* applier) const
     if (isNull())
         return FloatRect();
 
-    if (!applier)
-        return boundingRect();
+    PlatformContextDirect2D scratchContextD2D(scratchRenderTarget());
+    GraphicsContext scratchContext(&scratchContextD2D, GraphicsContext::BitmapRenderingContextType::GPUMemory);
 
-    UNUSED_PARAM(applier);
-    notImplemented();
+    if (applier)
+        applier->strokeStyle(&scratchContext);
 
-    // Just return regular bounding rect for now.
-    return boundingRect();
+    return fastBoundingRectForStroke(scratchContextD2D);
 }
 
-void Path::moveTo(const FloatPoint& point)
+void Path::openFigureAtCurrentPointIfNecessary()
 {
+    if (m_figureIsOpened)
+        return;
+
     if (!m_activePath) {
-        GraphicsContext::systemFactory()->CreatePathGeometry(&m_activePathGeometry);
-
-        appendGeometry(m_activePathGeometry.get());
-
-        if (!SUCCEEDED(m_activePathGeometry->Open(&m_activePath)))
-            return;
-
-        m_activePath->SetFillMode(D2D1_FILL_MODE_WINDING);
+        COMPtr<ID2D1PathGeometry> activePathGeometry;
+        GraphicsContext::systemFactory()->CreatePathGeometry(&activePathGeometry);
+        HRESULT hr = activePathGeometry->Open(&m_activePath);
+        RELEASE_ASSERT(SUCCEEDED(hr));
+        appendGeometry(activePathGeometry.leakRef());
+        ASSERT(refCount(m_activePath.get()) == 1);
     }
 
-    m_activePath->BeginFigure(point, D2D1_FIGURE_BEGIN_FILLED);
+    m_activePath->SetFillMode(D2D1_FILL_MODE_WINDING);
+    m_activePath->BeginFigure(currentPoint(), D2D1_FIGURE_BEGIN_FILLED);
+    m_figureIsOpened = true;
 }
 
-void Path::addLineTo(const FloatPoint& point)
+void Path::moveToSlowCase(const FloatPoint& point)
 {
-    ASSERT(m_activePath.get());
+    if (m_activePath)
+        closeAnyOpenGeometries(D2D1_FIGURE_END_OPEN);
 
+    COMPtr<ID2D1PathGeometry> activePathGeometry;
+    GraphicsContext::systemFactory()->CreatePathGeometry(&activePathGeometry);
+
+    if (!SUCCEEDED(activePathGeometry->Open(&m_activePath)))
+        return;
+
+    appendGeometry(activePathGeometry.leakRef());
+
+    ASSERT(refCount(m_activePath.get()) == 1);
+
+    m_activePath->SetFillMode(D2D1_FILL_MODE_WINDING);
+    m_activePath->BeginFigure(point, D2D1_FIGURE_BEGIN_FILLED);
+    m_figureIsOpened = true;
+}
+
+void Path::addLineToSlowCase(const FloatPoint& point)
+{
+    openFigureAtCurrentPointIfNecessary();
     m_activePath->AddLine(point);
 }
 
-void Path::addQuadCurveTo(const FloatPoint& cp, const FloatPoint& p)
+void Path::addQuadCurveToSlowCase(const FloatPoint& cp, const FloatPoint& p)
 {
-    ASSERT(m_activePath.get());
-
+    openFigureAtCurrentPointIfNecessary();
     m_activePath->AddQuadraticBezier(D2D1::QuadraticBezierSegment(cp, p));
 }
 
-void Path::addBezierCurveTo(const FloatPoint& cp1, const FloatPoint& cp2, const FloatPoint& p)
+void Path::addBezierCurveToSlowCase(const FloatPoint& cp1, const FloatPoint& cp2, const FloatPoint& p)
 {
-    ASSERT(m_activePath.get());
-
-    FloatPoint beforePoint = currentPoint();
-
+    openFigureAtCurrentPointIfNecessary();
     m_activePath->AddBezier(D2D1::BezierSegment(cp1, cp2, p));
 }
 
 void Path::addArcTo(const FloatPoint& p1, const FloatPoint& p2, float radius)
 {
-    UNUSED_PARAM(p1);
-    UNUSED_PARAM(p2);
-    UNUSED_PARAM(radius);
-    notImplemented();
+    FloatPoint p0 = currentPoint();
+
+    if (p1 == p0 || p1 == p2 || WTF::areEssentiallyEqual(radius, 0.0f))
+        return addLineTo(p1);
+
+    float direction = (p2.x() - p1.x()) * (p0.y() - p1.y()) + (p2.y() - p1.y()) * (p1.x() - p0.x());
+    if (WTF::areEssentiallyEqual(direction, 0.0f))
+        return addLineTo(p1);
+
+    auto a2 = toFloatPoint(p0 - p1).lengthSquared();
+    auto b2 = toFloatPoint(p1 - p2).lengthSquared();
+    auto c2 = toFloatPoint(p0 - p2).lengthSquared();
+
+    double cosx = (a2 + b2 - c2) / (2.0 * std::sqrt(a2 * b2));
+    double sinx = std::sqrt(1.0 - cosx * cosx);
+    double d = radius / ((1 - cosx) / sinx);
+
+    auto an = toFloatPoint(p1 - p0).scaled(1.0 / std::sqrt(a2));
+    auto bn = toFloatPoint(p1 - p2).scaled(1.0 / std::sqrt(b2));
+
+    auto startPoint = toFloatPoint(p1 - an.scaled(d));
+    auto p4 = toFloatPoint(p1 - bn.scaled(d));
+
+    bool anticlockwise = (direction < 0);
+    an.scale(radius * (anticlockwise ? 1 : -1));
+
+    FloatPoint center(startPoint.x() + an.y(), startPoint.y() - an.x());
+
+    double angle0 = atan2(startPoint.y() - center.y(), startPoint.x() - center.x());
+    double angle1 = atan2(p4.y() - center.y(), p4.x() - center.x());
+
+    openFigureAtCurrentPointIfNecessary();
+    addLineTo(startPoint);
+    addArc(center, radius, angle0, angle1, anticlockwise);
 }
 
 static bool equalRadiusWidths(const FloatSize& topLeftRadius, const FloatSize& topRightRadius, const FloatSize& bottomLeftRadius, const FloatSize& bottomRightRadius)
@@ -394,6 +473,7 @@ void Path::platformAddPathForRoundedRect(const FloatRect& rect, const FloatSize&
         HRESULT hr = GraphicsContext::systemFactory()->CreateRoundedRectangleGeometry(D2D1::RoundedRect(rectToDraw, radiusWidth, radiusHeight), &roundRect);
         RELEASE_ASSERT(SUCCEEDED(hr));
         appendGeometry(roundRect.get());
+        ASSERT(refCount(roundRect.get()) == 2);
         return;
     }
 
@@ -402,11 +482,17 @@ void Path::platformAddPathForRoundedRect(const FloatRect& rect, const FloatSize&
 
 void Path::closeSubpath()
 {
-    if (isNull())
+    if (isNull()) {
+        m_activePath = nullptr;
         return;
+    }
 
-    ASSERT(m_activePath.get());
-    m_activePath->EndFigure(D2D1_FIGURE_END_OPEN);
+    if (!m_activePath) {
+        ASSERT(!m_figureIsOpened);
+        return;
+    }
+
+    closeAnyOpenGeometries(D2D1_FIGURE_END_CLOSED);
 }
 
 static FloatPoint arcStart(const FloatPoint& center, float radius, float startAngle)
@@ -418,21 +504,22 @@ static FloatPoint arcStart(const FloatPoint& center, float radius, float startAn
     return startingPoint;
 }
 
-static void drawArcSection(ID2D1GeometrySink* sink, const FloatPoint& center, float radius, float startAngle, float endAngle, bool clockwise)
+const float twoPi = 2.0f * piFloat;
+
+static void drawArcSection(ID2D1GeometrySink* sink, const FloatPoint& center, float radius, float startAngle, float endAngle, bool anticlockwise)
 {
     // Direct2D wants us to specify the end point of the arc, not the center. It will be drawn from
     // whatever the current point in the 'm_activePath' is.
-    FloatPoint p = center;
+    FloatPoint endPoint = center;
     float endX = radius * std::cos(endAngle);
     float endY = radius * std::sin(endAngle);
-    p.move(endX, endY);
+    endPoint.move(endX, endY);
 
-    float arcDeg = rad2deg(endAngle - startAngle);
-    D2D1_SWEEP_DIRECTION direction = clockwise ? D2D1_SWEEP_DIRECTION_CLOCKWISE : D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE;
-    sink->AddArc(D2D1::ArcSegment(p, D2D1::SizeF(radius, radius), arcDeg, direction, D2D1_ARC_SIZE_SMALL));
+    D2D1_SWEEP_DIRECTION direction = anticlockwise ? D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE : D2D1_SWEEP_DIRECTION_CLOCKWISE;
+    sink->AddArc(D2D1::ArcSegment(endPoint, D2D1::SizeF(radius, radius), 0, direction, D2D1_ARC_SIZE_SMALL));
 }
 
-void Path::addArc(const FloatPoint& center, float radius, float startAngle, float endAngle, bool clockwise)
+void Path::addArcSlowCase(const FloatPoint& center, float radius, float startAngle, float endAngle, bool anticlockwise)
 {
     auto arcStartPoint = arcStart(center, radius, startAngle);
     if (!m_activePath)
@@ -443,27 +530,46 @@ void Path::addArc(const FloatPoint& center, float radius, float startAngle, floa
         addLineTo(arcStartPoint);
     }
 
-    // Direct2D has problems drawing large arcs. It gets confused if drawing a complete (or
-    // nearly complete) circle in the counter-clockwise direction. So, draw any arcs larger
-    // than 180 degrees in two pieces.
-    float fullSweep = endAngle - startAngle;
-    float negate = fullSweep < 0 ? -1.0f : 1.0f;
-    float maxSweep = negate * std::min(std::abs(fullSweep), piFloat);
-    float firstArcEnd = startAngle + maxSweep;
-    drawArcSection(m_activePath.get(), center, radius, startAngle, firstArcEnd, clockwise);
+    if (WTF::areEssentiallyEqual(std::abs(endAngle - startAngle), twoPi))
+        return addEllipse(FloatRect(center.x() - radius, center.y() - radius, 2.0 * radius, 2.0 * radius));
 
-    if (WTF::areEssentiallyEqual(firstArcEnd, endAngle))
-        return;
+    if (anticlockwise) {
+        if (endAngle > startAngle) {
+            endAngle -= twoPi * std::ceil((endAngle - startAngle) / twoPi);
+            ASSERT(endAngle <= startAngle);
+        }
+    } else {
+        if (startAngle > endAngle) {
+            startAngle -= twoPi * std::ceil((startAngle - endAngle) / twoPi);
+            ASSERT(startAngle <= endAngle);
+        }
+    }
 
-    drawArcSection(m_activePath.get(), center, radius, firstArcEnd, endAngle, clockwise);
+    const float delta = anticlockwise ? -piOverTwoFloat : piOverTwoFloat;
+    float remainingArcAngle = endAngle - startAngle;
+
+    while ((remainingArcAngle > 0 && remainingArcAngle > delta) || (remainingArcAngle < 0 && remainingArcAngle < delta)) {
+        const double currentEndAngle = startAngle + delta;
+        drawArcSection(m_activePath.get(), center, radius, startAngle, currentEndAngle, anticlockwise);
+        startAngle = currentEndAngle;
+        remainingArcAngle -= delta;
+    }
+
+    // Handle any remaining part of the arc:
+    if (std::abs(remainingArcAngle) > 1e-6)
+        drawArcSection(m_activePath.get(), center, radius, startAngle, startAngle + remainingArcAngle, anticlockwise);
 }
 
 void Path::addRect(const FloatRect& r)
 {
+    if (!m_activePath)
+        moveTo(r.location());
+
     COMPtr<ID2D1RectangleGeometry> rectangle;
     HRESULT hr = GraphicsContext::systemFactory()->CreateRectangleGeometry(r, &rectangle);
     RELEASE_ASSERT(SUCCEEDED(hr));
     appendGeometry(rectangle.get());
+    ASSERT(refCount(rectangle.get()) == 2);
 }
 
 void Path::addEllipse(FloatPoint p, float radiusX, float radiusY, float rotation, float startAngle, float endAngle, bool anticlockwise)
@@ -476,10 +582,15 @@ void Path::addEllipse(FloatPoint p, float radiusX, float radiusY, float rotation
 
 void Path::addEllipse(const FloatRect& r)
 {
+    if (!m_activePath)
+        moveTo(r.location());
+
     COMPtr<ID2D1EllipseGeometry> ellipse;
-    HRESULT hr = GraphicsContext::systemFactory()->CreateEllipseGeometry(D2D1::Ellipse(r.center(), r.width(), r.height()), &ellipse);
+    // Note: The radii of the ellipse contained within a rectange are half the width and height of the rect.
+    HRESULT hr = GraphicsContext::systemFactory()->CreateEllipseGeometry(D2D1::Ellipse(r.center(), 0.5 * r.width(), 0.5 * r.height()), &ellipse);
     RELEASE_ASSERT(SUCCEEDED(hr));
     appendGeometry(ellipse.get());
+    ASSERT(refCount(ellipse.get()) == 2);
 }
 
 void Path::addPath(const Path& path, const AffineTransform& transform)
@@ -501,30 +612,21 @@ void Path::clear()
 
     m_path = nullptr;
     m_activePath = nullptr;
-    m_activePathGeometry = nullptr;
+    clearGeometries();
 }
 
-bool Path::isEmpty() const
+bool Path::isEmptySlowCase() const
 {
-    if (isNull())
-        return true;
-
     if (!m_path->GetSourceGeometryCount())
         return true;
+
+    ASSERT(m_path->GetSourceGeometryCount() == m_geometries.size());
 
     return false;
 }
 
-bool Path::hasCurrentPoint() const
+FloatPoint Path::currentPointSlowCase() const
 {
-    return !isEmpty();
-}
-    
-FloatPoint Path::currentPoint() const 
-{
-    if (isNull())
-        return FloatPoint();
-
     float length = 0;
     HRESULT hr = m_path->ComputeLength(nullptr, &length);
     if (!SUCCEEDED(hr))
@@ -549,12 +651,14 @@ float Path::length() const
     return length;
 }
 
-void Path::apply(const PathApplierFunction& function) const
+void Path::applySlowCase(const PathApplierFunction&) const
 {
-    if (isNull())
-        return;
-
     notImplemented();
+}
+
+bool Path::isNull() const
+{
+    return !m_path;
 }
 
 }

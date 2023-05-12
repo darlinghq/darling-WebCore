@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2006-2016 Apple Inc.  All rights reserved.
+ * Copyright (C) 2006-2018 Apple Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -77,11 +77,11 @@ void BitmapImage::drawFrameMatchingSourceSize(GraphicsContext& ctxt, const Float
     size_t frames = frameCount();
     for (size_t i = 0; i < frames; ++i) {
         auto image = frameImageAtIndex(i).get();
-        auto imageSize = image->GetSize();
-        if (image && clampTo<size_t>(imageSize.height) == static_cast<size_t>(srcSize.height()) && clampTo<size_t>(imageSize.width) == static_cast<size_t>(srcSize.width())) {
+        auto imageSize = nativeImageSize(image);
+        if (image && clampTo<int>(imageSize.height()) == static_cast<int>(srcSize.height()) && clampTo<int>(imageSize.width()) == static_cast<int>(srcSize.width())) {
             size_t currentFrame = m_currentFrame;
             m_currentFrame = i;
-            draw(ctxt, dstRect, FloatRect(0.0f, 0.0f, srcSize.width(), srcSize.height()), compositeOp, BlendModeNormal, ImageOrientationDescription());
+            draw(ctxt, dstRect, FloatRect(0.0f, 0.0f, srcSize.width(), srcSize.height()), { compositeOp });
             m_currentFrame = currentFrame;
             return;
         }
@@ -89,19 +89,7 @@ void BitmapImage::drawFrameMatchingSourceSize(GraphicsContext& ctxt, const Float
 
     // No image of the correct size was found, fallback to drawing the current frame
     FloatSize imageSize = BitmapImage::size();
-    draw(ctxt, dstRect, FloatRect(0.0f, 0.0f, imageSize.width(), imageSize.height()), compositeOp, BlendModeNormal, ImageOrientationDescription());
-}
-
-void Image::drawPattern(GraphicsContext& ctxt, const FloatRect& destRect, const FloatRect& tileRect, const AffineTransform& patternTransform,
-    const FloatPoint& phase, const FloatSize& spacing, CompositeOperator op, BlendMode blendMode)
-{
-    if (!nativeImageForCurrentFrame())
-        return;
-
-    ctxt.drawPattern(*this, destRect, tileRect, patternTransform, phase, spacing, op, blendMode);
-
-    if (imageObserver())
-        imageObserver()->didDraw(*this);
+    draw(ctxt, dstRect, FloatRect(0.0f, 0.0f, imageSize.width(), imageSize.height()), { compositeOp });
 }
 
 } // namespace WebCore

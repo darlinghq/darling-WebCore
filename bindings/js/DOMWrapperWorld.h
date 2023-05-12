@@ -26,59 +26,85 @@
 
 namespace WebCore {
 
-class DeprecatedCSSOMValue;
-class ScriptController;
+class WindowProxy;
 
 typedef HashMap<void*, JSC::Weak<JSC::JSObject>> DOMObjectWrapperMap;
 
 class DOMWrapperWorld : public RefCounted<DOMWrapperWorld> {
 public:
-    static Ref<DOMWrapperWorld> create(JSC::VM& vm, bool isNormal = false)
+    enum class Type {
+        Normal,   // Main (e.g. Page)
+        User,     // User Scripts (e.g. Extensions)
+        Internal, // WebKit Internal (e.g. Media Controls)
+    };
+
+    static Ref<DOMWrapperWorld> create(JSC::VM& vm, Type type = Type::Internal, const String& name = { })
     {
-        return adoptRef(*new DOMWrapperWorld(vm, isNormal));
+        return adoptRef(*new DOMWrapperWorld(vm, type, name));
     }
     WEBCORE_EXPORT ~DOMWrapperWorld();
 
     // Free as much memory held onto by this world as possible.
     WEBCORE_EXPORT void clearWrappers();
 
-    void didCreateWindowProxy(ScriptController* scriptController) { m_scriptControllersWithWindowProxies.add(scriptController); }
-    void didDestroyWindowProxy(ScriptController* scriptController) { m_scriptControllersWithWindowProxies.remove(scriptController); }
+    void didCreateWindowProxy(WindowProxy* controller) { m_jsWindowProxies.add(controller); }
+    void didDestroyWindowProxy(WindowProxy* controller) { m_jsWindowProxies.remove(controller); }
 
     void setShadowRootIsAlwaysOpen() { m_shadowRootIsAlwaysOpen = true; }
     bool shadowRootIsAlwaysOpen() const { return m_shadowRootIsAlwaysOpen; }
 
-    // FIXME: can we make this private?
-    DOMObjectWrapperMap m_wrappers;
-    HashMap<DeprecatedCSSOMValue*, void*> m_deprecatedCSSOMValueRoots;
+    void disableLegacyOverrideBuiltInsBehavior() { m_shouldDisableLegacyOverrideBuiltInsBehavior = true; }
+    bool shouldDisableLegacyOverrideBuiltInsBehavior() const { return m_shouldDisableLegacyOverrideBuiltInsBehavior; }
 
-    bool isNormal() const { return m_isNormal; }
+    DOMObjectWrapperMap& wrappers() { return m_wrappers; }
+
+    Type type() const { return m_type; }
+    bool isNormal() const { return m_type == Type::Normal; }
+
+    const String& name() const { return m_name; }
 
     JSC::VM& vm() const { return m_vm; }
 
 protected:
-    DOMWrapperWorld(JSC::VM&, bool isNormal);
+    DOMWrapperWorld(JSC::VM&, Type, const String& name);
 
 private:
     JSC::VM& m_vm;
-    HashSet<ScriptController*> m_scriptControllersWithWindowProxies;
-    bool m_isNormal;
+    HashSet<WindowProxy*> m_jsWindowProxies;
+    DOMObjectWrapperMap m_wrappers;
+
+    String m_name;
+    Type m_type { Type::Internal };
+
     bool m_shadowRootIsAlwaysOpen { false };
+    bool m_shouldDisableLegacyOverrideBuiltInsBehavior { false };
 };
 
 DOMWrapperWorld& normalWorld(JSC::VM&);
 WEBCORE_EXPORT DOMWrapperWorld& mainThreadNormalWorld();
+
 inline DOMWrapperWorld& debuggerWorld() { return mainThreadNormalWorld(); }
 inline DOMWrapperWorld& pluginWorld() { return mainThreadNormalWorld(); }
 
-inline DOMWrapperWorld& currentWorld(JSC::ExecState* exec)
+DOMWrapperWorld& currentWorld(JSC::JSGlobalObject&);
+DOMWrapperWorld& worldForDOMObject(JSC::JSObject&);
+
+// Helper function for code paths that must not share objects across isolated DOM worlds.
+bool isWorldCompatible(JSC::JSGlobalObject&, JSC::JSValue);
+
+inline DOMWrapperWorld& currentWorld(JSC::JSGlobalObject& lexicalGlobalObject)
 {
-    return JSC::jsCast<JSDOMGlobalObject*>(exec->lexicalGlobalObject())->world();
+    return JSC::jsCast<JSDOMGlobalObject*>(&lexicalGlobalObject)->world();
 }
 
-inline DOMWrapperWorld& worldForDOMObject(JSC::JSObject* object)
+inline DOMWrapperWorld& worldForDOMObject(JSC::JSObject& object)
 {
-    return JSC::jsCast<JSDOMGlobalObject*>(object->globalObject())->world();
+    return JSC::jsCast<JSDOMGlobalObject*>(object.globalObject())->world();
 }
-    
+
+inline bool isWorldCompatible(JSC::JSGlobalObject& lexicalGlobalObject, JSC::JSValue value)
+{
+    return !value.isObject() || &worldForDOMObject(*value.getObject()) == &currentWorld(lexicalGlobalObject);
+}
+
 } // namespace WebCore

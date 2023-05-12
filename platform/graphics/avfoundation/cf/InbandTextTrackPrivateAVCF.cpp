@@ -34,8 +34,8 @@
 #include "InbandTextTrackPrivate.h"
 #include "InbandTextTrackPrivateAVF.h"
 #include "Logging.h"
-#include "MediaTimeAVFoundation.h"
 #include <JavaScriptCore/ArrayBuffer.h>
+#include <pal/avfoundation/MediaTimeAVFoundation.h>
 #include <wtf/SoftLinking.h>
 
 #include <AVFoundationCF/AVCFPlayerItemLegibleOutput.h>
@@ -63,27 +63,27 @@ void InbandTextTrackPrivateAVCF::disconnect()
 InbandTextTrackPrivate::Kind InbandTextTrackPrivateAVCF::kind() const
 {
     if (!m_mediaSelectionOption)
-        return InbandTextTrackPrivate::None;
+        return InbandTextTrackPrivate::Kind::None;
 
     CFStringRef mediaType = AVCFMediaSelectionOptionGetMediaType(mediaSelectionOption());
     
     if (CFStringCompare(mediaType, AVCFMediaTypeClosedCaption, kCFCompareCaseInsensitive) == kCFCompareEqualTo)
-        return InbandTextTrackPrivate::Captions;
+        return InbandTextTrackPrivate::Kind::Captions;
     if (CFStringCompare(mediaType, AVCFMediaTypeSubtitle, kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
         if (AVCFMediaSelectionOptionHasMediaCharacteristic(mediaSelectionOption(), AVCFMediaCharacteristicContainsOnlyForcedSubtitles))
-            return InbandTextTrackPrivate::Forced;
+            return InbandTextTrackPrivate::Kind::Forced;
 
         // An "SDH" track is a subtitle track created for the deaf or hard-of-hearing. "captions" in WebVTT are
         // "labeled as appropriate for the hard-of-hearing", so tag SDH sutitles as "captions".
         if (AVCFMediaSelectionOptionHasMediaCharacteristic(mediaSelectionOption(), AVCFMediaCharacteristicTranscribesSpokenDialogForAccessibility))
-            return InbandTextTrackPrivate::Captions;
+            return InbandTextTrackPrivate::Kind::Captions;
         if (AVCFMediaSelectionOptionHasMediaCharacteristic(mediaSelectionOption(), AVCFMediaCharacteristicDescribesMusicAndSoundForAccessibility))
-            return InbandTextTrackPrivate::Captions;
+            return InbandTextTrackPrivate::Kind::Captions;
         
-        return InbandTextTrackPrivate::Subtitles;
+        return InbandTextTrackPrivate::Kind::Subtitles;
     }
 
-    return InbandTextTrackPrivate::Captions;
+    return InbandTextTrackPrivate::Kind::Captions;
 }
 
 bool InbandTextTrackPrivateAVCF::isClosedCaptions() const
@@ -137,7 +137,7 @@ bool InbandTextTrackPrivateAVCF::isEasyToRead() const
     return AVCFMediaSelectionOptionHasMediaCharacteristic(mediaSelectionOption(), AVCFMediaCharacteristicEasyToRead);
 }
 
-AtomicString InbandTextTrackPrivateAVCF::label() const
+AtomString InbandTextTrackPrivateAVCF::label() const
 {
     if (!m_mediaSelectionOption)
         return emptyAtom();
@@ -167,10 +167,10 @@ AtomicString InbandTextTrackPrivateAVCF::label() const
         title = adoptCF(AVCFMetadataItemCopyStringValue(titleMetadata));
     }
 
-    return title ? AtomicString(title.get()) : emptyAtom();
+    return title ? AtomString(title.get()) : emptyAtom();
 }
 
-AtomicString InbandTextTrackPrivateAVCF::language() const
+AtomString InbandTextTrackPrivateAVCF::language() const
 {
     if (!m_mediaSelectionOption)
         return emptyAtom();
@@ -194,16 +194,16 @@ bool InbandTextTrackPrivateAVCF::readNativeSampleBuffer(CFArrayRef nativeSamples
     if (!sampleBuffer)
         return false;
 
-    duration = toMediaTime(sampleBuffer->duration);
+    duration = PAL::toMediaTime(sampleBuffer->duration);
     formatDescription = sampleBuffer->formatDescription;
 
     size_t bufferLength = CFDataGetLength(sampleBuffer->buffer);
-    if (bufferLength < ISOBox::boxHeaderSize()) {
+    if (bufferLength < ISOBox::minimumBoxSize()) {
         LOG(Media, "InbandTextTrackPrivateLegacyAVCF::readNativeSampleBuffer(%p) - ERROR: CFBuffer size length unexpectedly small (%zu)!!", this, bufferLength);
         return false;
     }
 
-    m_sampleInputBuffer.resize(m_sampleInputBuffer.size() + bufferLength);
+    m_sampleInputBuffer.grow(m_sampleInputBuffer.size() + bufferLength);
     CFDataGetBytes(sampleBuffer->buffer, CFRangeMake(0, bufferLength), reinterpret_cast<UInt8*>(m_sampleInputBuffer.data()) + m_sampleInputBuffer.size() - bufferLength);
 
     buffer = ArrayBuffer::create(m_sampleInputBuffer.data(), m_sampleInputBuffer.size());

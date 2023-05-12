@@ -61,7 +61,6 @@
 #define TS_LEFT_BUTTON_HOVER  19
 #define TS_RIGHT_BUTTON_HOVER   20
 
-using namespace std;
 
 namespace WebCore {
 
@@ -105,9 +104,7 @@ ScrollbarThemeWin::ScrollbarThemeWin()
     }
 }
 
-ScrollbarThemeWin::~ScrollbarThemeWin()
-{
-}
+ScrollbarThemeWin::~ScrollbarThemeWin() = default;
 
 static int scrollbarThicknessInPixels()
 {

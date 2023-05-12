@@ -31,6 +31,7 @@ namespace WebCore {
 class SVGInlineTextBox;
 
 class RenderSVGInlineText final : public RenderText {
+    WTF_MAKE_ISO_ALLOCATED(RenderSVGInlineText);
 public:
     RenderSVGInlineText(Text&, const String&);
 
@@ -47,6 +48,8 @@ public:
     // Preserves floating point precision for the use in DRT. It knows how to round and does a better job than enclosingIntRect.
     FloatRect floatLinesBoundingBox() const;
 
+    SVGInlineTextBox* firstTextBox() const;
+
 private:
     const char* renderName() const override { return "RenderSVGInlineText"; }
 
@@ -58,8 +61,7 @@ private:
 
     bool isSVGInlineText() const override { return true; }
 
-    VisiblePosition positionForPoint(const LayoutPoint&, const RenderRegion*) override;
-    LayoutRect localCaretRect(InlineBox*, unsigned caretOffset, LayoutUnit* extraWidthToEndOfLine = 0) override;
+    VisiblePosition positionForPoint(const LayoutPoint&, const RenderFragmentContainer*) override;
     IntRect linesBoundingBox() const override;
     std::unique_ptr<InlineTextBox> createTextBox() override;
 

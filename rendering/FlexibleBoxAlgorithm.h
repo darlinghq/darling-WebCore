@@ -32,8 +32,8 @@
 
 #include "LayoutUnit.h"
 #include "RenderStyle.h"
+#include <wtf/Forward.h>
 #include <wtf/Noncopyable.h>
-#include <wtf/Vector.h>
 
 namespace WebCore {
 
@@ -71,18 +71,21 @@ class FlexLayoutAlgorithm {
     WTF_MAKE_NONCOPYABLE(FlexLayoutAlgorithm);
 
 public:
-    FlexLayoutAlgorithm(const RenderStyle&, LayoutUnit lineBreakLength, const Vector<FlexItem>& allItems);
+    FlexLayoutAlgorithm(const RenderStyle&, LayoutUnit lineBreakLength, const Vector<FlexItem>& allItems, LayoutUnit gapBetweenItems, LayoutUnit gapBetweenLines);
 
     // The hypothetical main size of an item is the flex base size clamped
     // according to its min and max main size properties
     bool computeNextFlexLine(size_t& nextIndex, Vector<FlexItem>& lineItems, LayoutUnit& sumFlexBaseSize, double& totalFlexGrow, double& totalFlexShrink, double& totalWeightedFlexShrink, LayoutUnit& sumHypotheticalMainSize);
 
 private:
-    bool isMultiline() const { return m_style.flexWrap() != FlexNoWrap; }
+    bool isMultiline() const { return m_style.flexWrap() != FlexWrap::NoWrap; }
 
     const RenderStyle& m_style;
     LayoutUnit m_lineBreakLength;
     const Vector<FlexItem>& m_allItems;
+
+    const LayoutUnit m_gapBetweenItems;
+    const LayoutUnit m_gapBetweenLines;
 };
 
 } // namespace WebCore

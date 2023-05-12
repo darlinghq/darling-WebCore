@@ -27,7 +27,6 @@
 
 #if ENABLE(CSS_SCROLL_SNAP)
 
-#include "AxisScrollSnapOffsets.h"
 #include "PlatformWheelEvent.h"
 #include "ScrollTypes.h"
 #include <wtf/Optional.h>
@@ -39,11 +38,12 @@ class FloatPoint;
 class FloatSize;
 
 class ScrollingMomentumCalculator {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     ScrollingMomentumCalculator(const FloatSize& viewportSize, const FloatSize& contentSize, const FloatPoint& initialOffset, const FloatSize& initialDelta, const FloatSize& initialVelocity);
     static std::unique_ptr<ScrollingMomentumCalculator> create(const FloatSize& viewportSize, const FloatSize& contentSize, const FloatPoint& initialOffset, const FloatSize& initialDelta, const FloatSize& initialVelocity);
     WEBCORE_EXPORT static void setPlatformMomentumScrollingPredictionEnabled(bool);
-    virtual ~ScrollingMomentumCalculator() { }
+    virtual ~ScrollingMomentumCalculator() = default;
 
     virtual FloatPoint scrollOffsetAfterElapsedTime(Seconds) = 0;
     virtual Seconds animationDuration() = 0;
@@ -61,7 +61,7 @@ protected:
     FloatSize m_contentSize;
 
 private:
-    std::optional<FloatSize> m_retargetedScrollOffset;
+    Optional<FloatSize> m_retargetedScrollOffset;
 };
 
 class BasicScrollingMomentumCalculator final : public ScrollingMomentumCalculator {
@@ -82,7 +82,7 @@ private:
     FloatSize m_snapAnimationCurveCoefficients[4] { };
     bool m_forceLinearAnimationCurve { false };
     bool m_momentumCalculatorRequiresInitialization { true };
-    std::optional<FloatSize> m_predictedDestinationOffset;
+    Optional<FloatSize> m_predictedDestinationOffset;
 };
 
 } // namespace WebCore

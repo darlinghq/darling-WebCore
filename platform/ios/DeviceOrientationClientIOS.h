@@ -23,25 +23,24 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef DeviceOrientationClientIOS_h
-#define DeviceOrientationClientIOS_h
+#pragma once
+
+#if PLATFORM(IOS_FAMILY) && ENABLE(DEVICE_ORIENTATION)
 
 #include "DeviceOrientationClient.h"
 #include "DeviceOrientationController.h"
 #include "DeviceOrientationData.h"
+#include "DeviceOrientationUpdateProvider.h"
+#include "MotionManagerClient.h"
 #include <wtf/RefPtr.h>
 
-#ifdef __OBJC__
-@class WebCoreMotionManager;
-#else
-class WebCoreMotionManager;
-#endif
+OBJC_CLASS WebCoreMotionManager;
 
 namespace WebCore {
 
-class DeviceOrientationClientIOS : public DeviceOrientationClient {
+class DeviceOrientationClientIOS : public DeviceOrientationClient, public MotionManagerClient {
 public:
-    DeviceOrientationClientIOS();
+    DeviceOrientationClientIOS(RefPtr<DeviceOrientationUpdateProvider>&&);
     ~DeviceOrientationClientIOS() override;
     void setController(DeviceOrientationController*) override;
     void startUpdating() override;
@@ -49,15 +48,16 @@ public:
     DeviceOrientationData* lastOrientation() const override;
     void deviceOrientationControllerDestroyed() override;
 
-    void orientationChanged(double, double, double, double, double);
+    void orientationChanged(double, double, double, double, double) override;
 
 private:
-    WebCoreMotionManager* m_motionManager;
-    DeviceOrientationController* m_controller;
+    WebCoreMotionManager* m_motionManager  { nullptr };
+    DeviceOrientationController* m_controller  { nullptr };
     RefPtr<DeviceOrientationData> m_currentDeviceOrientation;
-    bool m_updating;
+    RefPtr<DeviceOrientationUpdateProvider> m_deviceOrientationUpdateProvider;
+    bool m_updating { false };
 };
 
 } // namespace WebCore
 
-#endif // DeviceOrientationClientIOS_h
+#endif // PLATFORM(IOS_FAMILY) && ENABLE(DEVICE_ORIENTATION)

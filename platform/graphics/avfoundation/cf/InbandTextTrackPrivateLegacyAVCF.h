@@ -26,7 +26,7 @@
 #ifndef InbandTextTrackPrivateLegacyAVCF_h
 #define InbandTextTrackPrivateLegacyAVCF_h
 
-#if ENABLE(VIDEO) && USE(AVFOUNDATION) && !HAVE(AVFOUNDATION_LEGIBLE_OUTPUT_SUPPORT) && !PLATFORM(IOS)
+#if ENABLE(VIDEO) && USE(AVFOUNDATION) && !HAVE(AVFOUNDATION_LEGIBLE_OUTPUT_SUPPORT) && !PLATFORM(IOS_FAMILY)
 
 #include "InbandTextTrackPrivateAVF.h"
 #include <AVFoundationCF/AVCFPlayerItemTrack.h>
@@ -43,15 +43,15 @@ public:
         return adoptRef(*new InbandTextTrackPrivateLegacyAVCF(player, track));
     }
 
-    ~InbandTextTrackPrivateLegacyAVCF() { }
+    ~InbandTextTrackPrivateLegacyAVCF() = default;
 
     InbandTextTrackPrivate::Kind kind() const override;
     bool isClosedCaptions() const override;
     bool containsOnlyForcedSubtitles() const override;
     bool isMainProgramContent() const override;
     bool isEasyToRead() const override;
-    AtomicString label() const override;
-    AtomicString language() const override;
+    AtomString label() const override;
+    AtomString language() const override;
 
     void disconnect() override;
 
@@ -67,6 +67,6 @@ protected:
 
 }
 
-#endif // ENABLE(VIDEO) && USE(AVFOUNDATION) && !HAVE(AVFOUNDATION_LEGIBLE_OUTPUT_SUPPORT) && !PLATFORM(IOS)
+#endif // ENABLE(VIDEO) && USE(AVFOUNDATION) && !HAVE(AVFOUNDATION_LEGIBLE_OUTPUT_SUPPORT) && !PLATFORM(IOS_FAMILY)
 
 #endif

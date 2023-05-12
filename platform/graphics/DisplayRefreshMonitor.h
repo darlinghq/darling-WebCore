@@ -23,15 +23,13 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
  */
 
-#ifndef DisplayRefreshMonitor_h
-#define DisplayRefreshMonitor_h
+#pragma once
 
-#if USE(REQUEST_ANIMATION_FRAME_DISPLAY_MONITOR)
-
+#include "AnimationFrameRate.h"
 #include "PlatformScreen.h"
 #include <wtf/HashSet.h>
 #include <wtf/Lock.h>
-#include <wtf/RefCounted.h>
+#include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/RefPtr.h>
 
 namespace WebCore {
@@ -39,14 +37,21 @@ namespace WebCore {
 class DisplayAnimationClient;
 class DisplayRefreshMonitorClient;
 
-class DisplayRefreshMonitor : public RefCounted<DisplayRefreshMonitor> {
+class DisplayRefreshMonitor : public ThreadSafeRefCounted<DisplayRefreshMonitor> {
 public:
     static RefPtr<DisplayRefreshMonitor> create(DisplayRefreshMonitorClient&);
     WEBCORE_EXPORT virtual ~DisplayRefreshMonitor();
-    
+
+    virtual void displayLinkFired() { }
+
+    virtual void setPreferredFramesPerSecond(FramesPerSecond) { }
+
     // Return true if callback request was scheduled, false if it couldn't be
     // (e.g., hardware refresh is not available)
     virtual bool requestRefreshCallback() = 0;
+
+    virtual void stop() { }
+
     void windowScreenDidChange(PlatformDisplayID);
     
     bool hasClients() const { return m_clients.size(); }
@@ -57,9 +62,19 @@ public:
 
     bool shouldBeTerminated() const
     {
-        const int maxInactiveFireCount = 10;
+        const int maxInactiveFireCount = 1;
         return !m_scheduled && m_unscheduledFireCount > maxInactiveFireCount;
     }
+
+    static RefPtr<DisplayRefreshMonitor> createDefaultDisplayRefreshMonitor(PlatformDisplayID);
+
+protected:
+    WEBCORE_EXPORT explicit DisplayRefreshMonitor(PlatformDisplayID);
+    WEBCORE_EXPORT static void handleDisplayRefreshedNotificationOnMainThread(void* data);
+
+    friend class DisplayRefreshMonitorManager;
+    
+    Lock& mutex() { return m_mutex; }
 
     bool isActive() const { return m_active; }
     void setIsActive(bool active) { m_active = active; }
@@ -70,30 +85,19 @@ public:
     bool isPreviousFrameDone() const { return m_previousFrameDone; }
     void setIsPreviousFrameDone(bool done) { m_previousFrameDone = done; }
 
-    Lock& mutex() { return m_mutex; }
-
-    static RefPtr<DisplayRefreshMonitor> createDefaultDisplayRefreshMonitor(PlatformDisplayID);
-
-protected:
-    WEBCORE_EXPORT explicit DisplayRefreshMonitor(PlatformDisplayID);
-    WEBCORE_EXPORT static void handleDisplayRefreshedNotificationOnMainThread(void* data);
+    virtual bool hasRequestedRefreshCallback() const { return false; }
 
 private:
     void displayDidRefresh();
 
-    bool m_active;
-    bool m_scheduled;
-    bool m_previousFrameDone;
-    int m_unscheduledFireCount; // Number of times the display link has fired with no clients.
-    PlatformDisplayID m_displayID;
-    Lock m_mutex;
-
     HashSet<DisplayRefreshMonitorClient*> m_clients;
-    HashSet<DisplayRefreshMonitorClient*>* m_clientsToBeNotified;
+    HashSet<DisplayRefreshMonitorClient*>* m_clientsToBeNotified { nullptr };
+    Lock m_mutex;
+    PlatformDisplayID m_displayID { 0 };
+    int m_unscheduledFireCount { 0 }; // Number of times the display link has fired with no clients.
+    bool m_active { true };
+    bool m_scheduled { false };
+    bool m_previousFrameDone { true };
 };
 
 }
-
-#endif // USE(REQUEST_ANIMATION_FRAME_DISPLAY_MONITOR)
-
-#endif

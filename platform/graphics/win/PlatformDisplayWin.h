@@ -33,8 +33,23 @@
 namespace WebCore {
 
 class PlatformDisplayWin final : public PlatformDisplay {
+public:
+    static std::unique_ptr<PlatformDisplayWin> create()
+    {
+        return std::unique_ptr<PlatformDisplayWin>(new PlatformDisplayWin());
+    }
+
+    virtual ~PlatformDisplayWin() = default;
+
 private:
+    PlatformDisplayWin()
+        : PlatformDisplay(NativeDisplayOwned::No)
+    {
+    }
+
     Type type() const override { return PlatformDisplay::Type::Windows; }
+
+    void initializeEGLDisplay() final;
 };
 
 } // namespace WebCore

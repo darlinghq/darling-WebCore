@@ -28,16 +28,25 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// FIXME 169871: should be subclass of EventTarget
 [
+    ActiveDOMObject,
     Conditional=MEDIA_STREAM,
-    NoInterfaceObject,
-] interface MediaDevices {
+    SecureContext,
+    Exposed=Window
+] interface MediaDevices : EventTarget {
     attribute EventHandler ondevicechange;
     Promise<sequence<MediaDeviceInfo>> enumerateDevices();
 
     MediaTrackSupportedConstraints getSupportedConstraints();
     [PrivateIdentifier, PublicIdentifier] Promise<MediaStream> getUserMedia(optional MediaStreamConstraints constraints);
+    [EnabledBySetting=ScreenCapture] Promise<MediaStream> getDisplayMedia(optional DisplayMediaStreamConstraints constraints);
+};
+
+[
+    Conditional=MEDIA_STREAM,
+] dictionary DisplayMediaStreamConstraints {
+    (boolean or MediaTrackConstraints) video = true;
+    (boolean or MediaTrackConstraints) audio = false;
 };
 
 [
@@ -45,4 +54,14 @@
 ] dictionary MediaStreamConstraints {
     (boolean or MediaTrackConstraints) video = false;
     (boolean or MediaTrackConstraints) audio = false;
+};
+
+[
+    Conditional=MEDIA_STREAM,
+    EnabledBySetting=ScreenCapture
+] enum DisplayCaptureSurfaceType {
+    "monitor",
+    "window",
+    "application",
+    "browser"
 };

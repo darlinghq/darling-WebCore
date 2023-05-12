@@ -29,18 +29,19 @@
 #if ENABLE(APPLE_PAY)
 
 #include "Payment.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
 
-ApplePayPaymentAuthorizedEvent::ApplePayPaymentAuthorizedEvent(const AtomicString& type, const Payment& payment)
-    : Event(type, false, false)
-    , m_payment(payment.toApplePayPayment())
+WTF_MAKE_ISO_ALLOCATED_IMPL(ApplePayPaymentAuthorizedEvent);
+
+ApplePayPaymentAuthorizedEvent::ApplePayPaymentAuthorizedEvent(const AtomString& type, unsigned version, const Payment& payment)
+    : Event(type, CanBubble::No, IsCancelable::No)
+    , m_payment(payment.toApplePayPayment(version))
 {
 }
 
-ApplePayPaymentAuthorizedEvent::~ApplePayPaymentAuthorizedEvent()
-{
-}
+ApplePayPaymentAuthorizedEvent::~ApplePayPaymentAuthorizedEvent() = default;
 
 EventInterface ApplePayPaymentAuthorizedEvent::eventInterface() const
 {

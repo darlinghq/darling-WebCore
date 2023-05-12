@@ -38,7 +38,6 @@ namespace WebCore {
 class CompositeEditCommand;
 class Document;
 class Element;
-class Frame;
 
 String inputTypeNameForEditingAction(EditAction);
 
@@ -61,11 +60,9 @@ public:
     virtual void doApply() = 0;
 
 protected:
-    explicit EditCommand(Document&, EditAction = EditActionUnspecified);
+    explicit EditCommand(Document&, EditAction = EditAction::Unspecified);
     EditCommand(Document&, const VisibleSelection&, const VisibleSelection&);
 
-    const Frame& frame() const;
-    Frame& frame();
     const Document& document() const { return m_document; }
     Document& document() { return m_document; }
     CompositeEditCommand* parent() const { return m_parent; }
@@ -82,7 +79,7 @@ private:
     VisibleSelection m_startingSelection;
     VisibleSelection m_endingSelection;
     CompositeEditCommand* m_parent { nullptr };
-    EditAction m_editingAction { EditActionUnspecified };
+    EditAction m_editingAction { EditAction::Unspecified };
 };
 
 enum ShouldAssumeContentIsAlwaysEditable {
@@ -100,7 +97,7 @@ public:
 #endif
 
 protected:
-    explicit SimpleEditCommand(Document&, EditAction = EditActionUnspecified);
+    explicit SimpleEditCommand(Document&, EditAction = EditAction::Unspecified);
 
 #ifndef NDEBUG
     void addNodeAndDescendants(Node*, HashSet<Node*>&);

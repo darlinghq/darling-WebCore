@@ -25,9 +25,10 @@
 
 [
     Conditional=VIDEO,
-    Constructor,
-    ConstructorCallWith=ScriptExecutionContext,
+    Exposed=Window
 ] interface MediaController : EventTarget {
+    [CallWith=ScriptExecutionContext] constructor();
+
     readonly attribute TimeRanges buffered;
     readonly attribute TimeRanges seekable;
 
@@ -37,13 +38,13 @@
     readonly attribute boolean paused;
     readonly attribute TimeRanges played;
     readonly attribute DOMString playbackState;
-    void play();
-    void pause();
-    void unpause();
+    undefined play();
+    undefined pause();
+    undefined unpause();
 
     attribute unrestricted double defaultPlaybackRate;
     attribute unrestricted double playbackRate;
 
-    [SetterMayThrowException] attribute unrestricted double volume;
+    attribute unrestricted double volume;
     attribute boolean muted;
 };

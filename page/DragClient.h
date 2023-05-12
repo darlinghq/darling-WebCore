@@ -38,16 +38,19 @@ class Element;
 class Frame;
 class Image;
 
-class DragClient {
-public:
-    virtual void dragControllerDestroyed() = 0;
+#if ENABLE(ATTACHMENT_ELEMENT)
+struct PromisedAttachmentInfo;
+#endif
 
+class DragClient {
+    WTF_MAKE_FAST_ALLOCATED;
+public:
     virtual bool useLegacyDragClient() { return true; }
 
     virtual void willPerformDragDestinationAction(DragDestinationAction, const DragData&) = 0;
     virtual void willPerformDragSourceAction(DragSourceAction, const IntPoint&, DataTransfer&) = 0;
     virtual void didConcludeEditDrag() { }
-    virtual DragSourceAction dragSourceActionMaskForPoint(const IntPoint& rootViewPoint) = 0;
+    virtual OptionSet<DragSourceAction> dragSourceActionMaskForPoint(const IntPoint& rootViewPoint) = 0;
     
     virtual void startDrag(DragItem, DataTransfer&, Frame&) = 0;
     virtual void dragEnded() { }
@@ -58,12 +61,9 @@ public:
     // Mac-specific helper function to allow access to web archives and NSPasteboard extras in WebKit.
     // This is not abstract as that would require another #if PLATFORM(COCOA) for the SVGImage client empty implentation.
     virtual void declareAndWriteDragImage(const String&, Element&, const URL&, const String&, Frame*) { }
-#if ENABLE(ATTACHMENT_ELEMENT)
-    virtual void declareAndWriteAttachment(const String&, Element&, const URL&, const String&, Frame*) { }
-#endif
 #endif
 
-    virtual ~DragClient() { }
+    virtual ~DragClient() = default;
 };
     
 } // namespace WebCore

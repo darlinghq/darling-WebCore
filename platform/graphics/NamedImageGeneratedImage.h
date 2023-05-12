@@ -23,8 +23,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef NamedImageGeneratedImage_h
-#define NamedImageGeneratedImage_h
+#pragma once
 
 #include "FloatSize.h"
 #include "GeneratedImage.h"
@@ -39,19 +38,18 @@ public:
         return adoptRef(*new NamedImageGeneratedImage(name, size));
     }
 
-protected:
-    ImageDrawResult draw(GraphicsContext&, const FloatRect& dstRect, const FloatRect& srcRect, CompositeOperator, BlendMode, DecodingMode, ImageOrientationDescription) override;
-    void drawPattern(GraphicsContext&, const FloatRect& dstRect, const FloatRect& srcRect, const AffineTransform& patternTransform, const FloatPoint& phase, const FloatSize& spacing, CompositeOperator, BlendMode) override;
+private:
+    ImageDrawResult draw(GraphicsContext&, const FloatRect& dstRect, const FloatRect& srcRect, const ImagePaintingOptions& = { }) override;
+    void drawPattern(GraphicsContext&, const FloatRect& dstRect, const FloatRect& srcRect, const AffineTransform& patternTransform, const FloatPoint& phase, const FloatSize& spacing, const ImagePaintingOptions& = { }) override;
 
     NamedImageGeneratedImage(String name, const FloatSize&);
 
-private:
     bool isNamedImageGeneratedImage() const override { return true; }
-    void dump(TextStream&) const override;
+    void dump(WTF::TextStream&) const override;
 
     String m_name;
 };
 
 }
 
-#endif
+SPECIALIZE_TYPE_TRAITS_IMAGE(NamedImageGeneratedImage)

@@ -23,25 +23,24 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef DeviceMotionClientIOS_h
-#define DeviceMotionClientIOS_h
+#pragma once
+
+#if PLATFORM(IOS_FAMILY) && ENABLE(DEVICE_ORIENTATION)
 
 #include "DeviceMotionClient.h"
 #include "DeviceMotionController.h"
 #include "DeviceMotionData.h"
+#include "DeviceOrientationUpdateProvider.h"
+#include "MotionManagerClient.h"
 #include <wtf/RefPtr.h>
 
-#ifdef __OBJC__
-@class WebCoreMotionManager;
-#else
-class WebCoreMotionManager;
-#endif
+OBJC_CLASS WebCoreMotionManager;
 
 namespace WebCore {
 
-class DeviceMotionClientIOS : public DeviceMotionClient {
+class DeviceMotionClientIOS : public DeviceMotionClient, public MotionManagerClient {
 public:
-    DeviceMotionClientIOS();
+    DeviceMotionClientIOS(RefPtr<DeviceOrientationUpdateProvider>&&);
     ~DeviceMotionClientIOS() override;
     void setController(DeviceMotionController*) override;
     void startUpdating() override;
@@ -49,15 +48,16 @@ public:
     DeviceMotionData* lastMotion() const override;
     void deviceMotionControllerDestroyed() override;
 
-    void motionChanged(double, double, double, double, double, double, double, double, double);
+    void motionChanged(double, double, double, double, double, double, Optional<double>, Optional<double>, Optional<double>) override;
 
 private:
-    WebCoreMotionManager* m_motionManager;
-    DeviceMotionController* m_controller;
+    WebCoreMotionManager* m_motionManager { nullptr };
+    DeviceMotionController* m_controller { nullptr };
     RefPtr<DeviceMotionData> m_currentDeviceMotionData;
-    bool m_updating;
+    RefPtr<DeviceOrientationUpdateProvider> m_deviceOrientationUpdateProvider;
+    bool m_updating { false };
 };
 
 } // namespace WebCore
 
-#endif // DeviceMotionClientIOS_h
+#endif // PLATFORM(IOS_FAMILY) && ENABLE(DEVICE_ORIENTATION)

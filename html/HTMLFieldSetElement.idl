@@ -17,19 +17,21 @@
  * Boston, MA 02110-1301, USA.
  */
 
-interface HTMLFieldSetElement : HTMLElement {
-    [Reflect] attribute boolean disabled;
+[
+    Exposed=Window
+] interface HTMLFieldSetElement : HTMLElement {
+    [CEReactions=NotNeeded, Reflect] attribute boolean disabled;
     readonly attribute HTMLFormElement form;
-    [Reflect] attribute DOMString name;
+    [CEReactions=NotNeeded, Reflect] attribute DOMString name;
 
     readonly attribute DOMString type;
 
-    readonly attribute HTMLFormControlsCollection elements;
+    readonly attribute HTMLCollection elements;
 
     readonly attribute boolean         willValidate;
     readonly attribute ValidityState   validity;
     readonly attribute DOMString       validationMessage;
     boolean  checkValidity();
-    [EnabledAtRuntime=InteractiveFormValidation] boolean reportValidity();
-    void setCustomValidity(DOMString error);
+    [EnabledBySetting=InteractiveFormValidation] boolean reportValidity();
+    undefined setCustomValidity(DOMString error);
 };

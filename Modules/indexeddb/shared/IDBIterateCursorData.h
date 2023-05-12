@@ -35,31 +35,39 @@ struct IDBIterateCursorData {
     IDBKeyData keyData;
     IDBKeyData primaryKeyData;
     unsigned count;
+    IndexedDB::CursorIterateOption option { IndexedDB::CursorIterateOption::Reply };
 
-    IDBIterateCursorData isolatedCopy() const;
+    WEBCORE_EXPORT IDBIterateCursorData isolatedCopy() const;
 
 #if !LOG_DISABLED
     String loggingString() const;
 #endif
 
     template<class Encoder> void encode(Encoder&) const;
-    template<class Decoder> static bool decode(Decoder&, IDBIterateCursorData&);
+    template<class Decoder> static WARN_UNUSED_RETURN bool decode(Decoder&, IDBIterateCursorData&);
 };
 
 template<class Encoder>
 void IDBIterateCursorData::encode(Encoder& encoder) const
 {
     encoder << keyData << primaryKeyData << static_cast<uint64_t>(count);
+    encoder << option;
 }
 
 template<class Decoder>
 bool IDBIterateCursorData::decode(Decoder& decoder, IDBIterateCursorData& iteratorCursorData)
 {
-    if (!decoder.decode(iteratorCursorData.keyData))
+    Optional<IDBKeyData> keyData;
+    decoder >> keyData;
+    if (!keyData)
         return false;
+    iteratorCursorData.keyData = WTFMove(*keyData);
 
-    if (!decoder.decode(iteratorCursorData.primaryKeyData))
+    Optional<IDBKeyData> primaryKeyData;
+    decoder >> primaryKeyData;
+    if (!primaryKeyData)
         return false;
+    iteratorCursorData.primaryKeyData = WTFMove(*primaryKeyData);
 
     uint64_t count;
     if (!decoder.decode(count))
@@ -67,8 +75,10 @@ bool IDBIterateCursorData::decode(Decoder& decoder, IDBIterateCursorData& iterat
 
     if (count > std::numeric_limits<unsigned>::max())
         return false;
-
     iteratorCursorData.count = static_cast<unsigned>(count);
+
+    if (!decoder.decode(iteratorCursorData.option))
+        return false;
 
     return true;
 }

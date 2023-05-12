@@ -46,6 +46,7 @@ public:
     virtual ~MediaPlayerPrivateAVFoundationCF();
 
     void tracksChanged() override;
+    void resolvedURLChanged() override;
 
 #if HAVE(AVFOUNDATION_LOADER_DELEGATE)
     bool shouldWaitForLoadingOfResource(AVCFAssetResourceLoadingRequestRef);
@@ -60,6 +61,7 @@ public:
     static void registerMediaEngine(MediaEngineRegistrar);
 
 private:
+    friend class MediaPlayerFactoryAVFoundationCF;
     static void getSupportedTypes(HashSet<String, ASCIICaseInsensitiveHash>& types);
     static MediaPlayer::SupportsType supportsType(const MediaEngineSupportParameters&);
     static bool supportsKeySystem(const String& keySystem, const String& mimeType);
@@ -67,14 +69,12 @@ private:
 
     virtual void cancelLoad();
 
-    virtual PlatformMedia platformMedia() const;
-
     virtual void platformSetVisible(bool);
     virtual void platformPlay();
     virtual void platformPause();
     MediaTime currentMediaTime() const override;
     virtual void setVolume(float);
-    virtual void setClosedCaptionsVisible(bool);
+    void setClosedCaptionsVisible(bool) override;
     virtual void paint(GraphicsContext&, const FloatRect&);
     virtual void paintCurrentFrameInContext(GraphicsContext&, const FloatRect&);
     virtual PlatformLayer* platformLayer() const;
@@ -83,11 +83,10 @@ private:
 
     virtual void createAVPlayer();
     virtual void createAVPlayerItem();
-    virtual void createAVAssetForURL(const String& url);
+    virtual void createAVAssetForURL(const URL&);
     virtual MediaPlayerPrivateAVFoundation::ItemStatus playerItemStatus() const;
     virtual MediaPlayerPrivateAVFoundation::AssetStatus assetStatus() const;
 
-    virtual void checkPlayability();
     void setRate(float) override;
     double rate() const override;
     virtual void seekToTime(const MediaTime&, const MediaTime& negativeTolerance, const MediaTime& positiveTolerance);
@@ -116,12 +115,8 @@ private:
 
     virtual void contentsNeedsDisplay();
 
-    URL resolvedURL() const override;
-
-    bool hasSingleSecurityOrigin() const override;
-
 #if ENABLE(LEGACY_ENCRYPTED_MEDIA)
-    std::unique_ptr<CDMSession> createSession(const String&, CDMSessionClient*) override;
+    std::unique_ptr<LegacyCDMSession> createSession(const String&, LegacyCDMSessionClient*) override;
 #endif
 
     String languageOfPrimaryAudioTrack() const override;

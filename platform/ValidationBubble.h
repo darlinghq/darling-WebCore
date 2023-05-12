@@ -35,16 +35,17 @@
 
 #if PLATFORM(MAC)
 OBJC_CLASS NSPopover;
-#elif PLATFORM(IOS)
+#elif PLATFORM(IOS_FAMILY)
 OBJC_CLASS UIViewController;
 OBJC_CLASS WebValidationBubbleDelegate;
 OBJC_CLASS WebValidationBubbleTapRecognizer;
+OBJC_CLASS WebValidationBubbleViewController;
 #endif
 
 #if PLATFORM(MAC)
 OBJC_CLASS NSView;
 using PlatformView = NSView;
-#elif PLATFORM(IOS)
+#elif PLATFORM(IOS_FAMILY)
 OBJC_CLASS UIView;
 using PlatformView = UIView;
 #else
@@ -69,7 +70,7 @@ public:
     const String& message() const { return m_message; }
     double fontSize() const { return m_fontSize; }
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
     WEBCORE_EXPORT void setAnchorRect(const IntRect& anchorRect, UIViewController* presentingViewController = nullptr);
     WEBCORE_EXPORT void show();
 #else
@@ -84,8 +85,8 @@ private:
     double m_fontSize { 0 };
 #if PLATFORM(MAC)
     RetainPtr<NSPopover> m_popover;
-#elif PLATFORM(IOS)
-    RetainPtr<UIViewController> m_popoverController;
+#elif PLATFORM(IOS_FAMILY)
+    RetainPtr<WebValidationBubbleViewController> m_popoverController;
     RetainPtr<WebValidationBubbleTapRecognizer> m_tapRecognizer;
     RetainPtr<WebValidationBubbleDelegate> m_popoverDelegate;
     UIViewController *m_presentingViewController;

@@ -23,40 +23,36 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef LocalizedDateCache_h
-#define LocalizedDateCache_h
+#pragma once
 
-#include "DateComponents.h"
 #include "FontCascade.h"
 #include <wtf/HashMap.h>
-#include <wtf/NeverDestroyed.h>
 #include <wtf/RetainPtr.h>
-
-// FIXME: Rename this file to LocalizedDataCacheIOS.mm and remove this guard.
-#if PLATFORM(IOS)
 
 namespace WebCore {
     
+enum class DateComponentsType : uint8_t;
+
 class MeasureTextClient {
 public:
     virtual float measureText(const String&) const = 0;
-    virtual ~MeasureTextClient() { }
+    virtual ~MeasureTextClient() = default;
 };
 
 class LocalizedDateCache {
 public:
-    NSDateFormatter *formatterForDateType(DateComponents::Type);
-    float maximumWidthForDateType(DateComponents::Type, const FontCascade&, const MeasureTextClient&);
+    NSDateFormatter *formatterForDateType(DateComponentsType);
+    float maximumWidthForDateType(DateComponentsType, const FontCascade&, const MeasureTextClient&);
     void localeChanged();
 
 private:
     LocalizedDateCache();
     ~LocalizedDateCache();
 
-    NSDateFormatter *createFormatterForType(DateComponents::Type);
-    float calculateMaximumWidth(DateComponents::Type, const MeasureTextClient&);
+    NSDateFormatter *createFormatterForType(DateComponentsType);
+    float calculateMaximumWidth(DateComponentsType, const MeasureTextClient&);
 
-    // Using int instead of DateComponents::Type for the key because the enum
+    // Using int instead of DateComponentsType for the key because the enum
     // does not have a default hash and hash traits. Usage of the maps
     // casts the DateComponents::Type into an int as the key.
     typedef HashMap<int, RetainPtr<NSDateFormatter>> DateTypeFormatterMap;
@@ -73,6 +69,3 @@ private:
 LocalizedDateCache& localizedDateCache();
 
 } // namespace WebCore
-
-#endif // PLATFORM(IOS)
-#endif // LocalizedDateCache_h

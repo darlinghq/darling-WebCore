@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015 Apple Inc. All rights reserved.
+ * Copyright (C) 2015-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,19 +23,18 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef ContentFilterUnblockHandler_h
-#define ContentFilterUnblockHandler_h
+#pragma once
 
 #if ENABLE(CONTENT_FILTERING)
 
-#include "URL.h"
 #include <functional>
 #include <wtf/RetainPtr.h>
+#include <wtf/URL.h>
 #include <wtf/text/WTFString.h>
 
 OBJC_CLASS NSCoder;
 
-#if PLATFORM(IOS)
+#if PLATFORM(IOS_FAMILY)
 OBJC_CLASS WebFilterEvaluator;
 #endif
 
@@ -50,13 +49,13 @@ public:
 
     ContentFilterUnblockHandler() = default;
     WEBCORE_EXPORT ContentFilterUnblockHandler(String unblockURLHost, UnblockRequesterFunction);
-#if HAVE(PARENTAL_CONTROLS) && PLATFORM(IOS)
+#if HAVE(PARENTAL_CONTROLS_WITH_UNBLOCK_HANDLER)
     ContentFilterUnblockHandler(String unblockURLHost, RetainPtr<WebFilterEvaluator>);
 #endif
 
     WEBCORE_EXPORT bool needsUIProcess() const;
     WEBCORE_EXPORT void encode(NSCoder *) const;
-    WEBCORE_EXPORT static bool decode(NSCoder *, ContentFilterUnblockHandler&);
+    WEBCORE_EXPORT static WARN_UNUSED_RETURN bool decode(NSCoder *, ContentFilterUnblockHandler&);
     WEBCORE_EXPORT bool canHandleRequest(const ResourceRequest&) const;
     WEBCORE_EXPORT void requestUnblockAsync(DecisionHandlerFunction) const;
     void wrapWithDecisionHandler(const DecisionHandlerFunction&);
@@ -69,7 +68,7 @@ private:
     String m_unblockURLHost;
     URL m_unreachableURL;
     UnblockRequesterFunction m_unblockRequester;
-#if HAVE(PARENTAL_CONTROLS) && PLATFORM(IOS)
+#if HAVE(PARENTAL_CONTROLS_WITH_UNBLOCK_HANDLER)
     RetainPtr<WebFilterEvaluator> m_webFilterEvaluator;
 #endif
 };
@@ -77,5 +76,3 @@ private:
 } // namespace WebCore
 
 #endif // ENABLE(CONTENT_FILTERING)
-
-#endif // ContentFilterUnblockHandler_h

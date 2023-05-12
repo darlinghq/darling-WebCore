@@ -25,10 +25,13 @@
 
 #include "ClipStack.h"
 #include "FilterOperation.h"
-#include "GraphicsContext3D.h"
 #include "IntSize.h"
 #include "TextureMapper.h"
+#include "TextureMapperContextAttributes.h"
+#include "TextureMapperGLHeaders.h"
 #include "TransformationMatrix.h"
+#include <array>
+#include <wtf/Vector.h>
 
 namespace WebCore {
 
@@ -43,6 +46,7 @@ public:
     virtual ~TextureMapperGL();
 
     enum Flag {
+        NoFlag = 0x00,
         ShouldBlend = 0x01,
         ShouldFlipTexture = 0x02,
         ShouldUseARBTextureRect = 0x04,
@@ -51,7 +55,9 @@ public:
         ShouldRotateTexture180 = 0x20,
         ShouldRotateTexture270 = 0x40,
         ShouldConvertTextureBGRAToRGBA = 0x80,
-        ShouldConvertTextureARGBToRGBA = 0x100
+        ShouldConvertTextureARGBToRGBA = 0x100,
+        ShouldNotBlend = 0x200,
+        ShouldUseExternalOESTextureRect = 0x400
     };
 
     typedef int Flags;
@@ -60,37 +66,46 @@ public:
     void drawBorder(const Color&, float borderWidth, const FloatRect&, const TransformationMatrix&) override;
     void drawNumber(int number, const Color&, const FloatPoint&, const TransformationMatrix&) override;
     void drawTexture(const BitmapTexture&, const FloatRect&, const TransformationMatrix&, float opacity, unsigned exposedEdges) override;
-    virtual void drawTexture(Platform3DObject texture, Flags, const IntSize& textureSize, const FloatRect& targetRect, const TransformationMatrix& modelViewMatrix, float opacity, unsigned exposedEdges = AllEdges);
-    void drawSolidColor(const FloatRect&, const TransformationMatrix&, const Color&) override;
+    virtual void drawTexture(GLuint texture, Flags, const IntSize& textureSize, const FloatRect& targetRect, const TransformationMatrix& modelViewMatrix, float opacity, unsigned exposedEdges = AllEdges);
+    void drawTexturePlanarYUV(const std::array<GLuint, 3>& textures, const std::array<GLfloat, 9>& yuvToRgbMatrix, Flags, const IntSize& textureSize, const FloatRect& targetRect, const TransformationMatrix& modelViewMatrix, float opacity, unsigned exposedEdges = AllEdges);
+    void drawTextureSemiPlanarYUV(const std::array<GLuint, 2>& textures, bool uvReversed, const std::array<GLfloat, 9>& yuvToRgbMatrix, Flags, const IntSize& textureSize, const FloatRect& targetRect, const TransformationMatrix& modelViewMatrix, float opacity, unsigned exposedEdges = AllEdges);
+    void drawTexturePackedYUV(GLuint texture, const std::array<GLfloat, 9>& yuvToRgbMatrix, Flags, const IntSize& textureSize, const FloatRect& targetRect, const TransformationMatrix& modelViewMatrix, float opacity, unsigned exposedEdges = AllEdges);
+    void drawSolidColor(const FloatRect&, const TransformationMatrix&, const Color&, bool) override;
+    void clearColor(const Color&) override;
 
     void bindSurface(BitmapTexture* surface) override;
     BitmapTexture* currentSurface();
-    void beginClip(const TransformationMatrix&, const FloatRect&) override;
+    void beginClip(const TransformationMatrix&, const FloatRoundedRect&) override;
     void beginPainting(PaintFlags = 0) override;
     void endPainting() override;
     void endClip() override;
+    void beginPreserves3D() override;
+    void endPreserves3D() override;
     IntRect clipBounds() override;
     IntSize maxTextureSize() const override { return IntSize(2000, 2000); }
-    Ref<BitmapTexture> createTexture() override { return createTexture(GraphicsContext3D::DONT_CARE); }
-    Ref<BitmapTexture> createTexture(GC3Dint internalFormat) override;
-    inline GraphicsContext3D* graphicsContext3D() const { return m_context3D.get(); }
+    Ref<BitmapTexture> createTexture() override { return createTexture(GL_DONT_CARE); }
+    Ref<BitmapTexture> createTexture(GLint internalFormat) override;
 
     void drawFiltered(const BitmapTexture& sourceTexture, const BitmapTexture* contentTexture, const FilterOperation&, int pass);
 
     void setEnableEdgeDistanceAntialiasing(bool enabled) { m_enableEdgeDistanceAntialiasing = enabled; }
+    void drawTextureExternalOES(GLuint texture, Flags, const IntSize&, const FloatRect&, const TransformationMatrix& modelViewMatrix, float opacity);
 
 private:
     void drawTexturedQuadWithProgram(TextureMapperShaderProgram&, uint32_t texture, Flags, const IntSize&, const FloatRect&, const TransformationMatrix& modelViewMatrix, float opacity);
-    void draw(const FloatRect&, const TransformationMatrix& modelViewMatrix, TextureMapperShaderProgram&, GC3Denum drawingMode, Flags);
+    void drawTexturedQuadWithProgram(TextureMapperShaderProgram&, const Vector<std::pair<GLuint, GLuint> >& texturesAndSamplers, Flags, const IntSize&, const FloatRect&, const TransformationMatrix& modelViewMatrix, float opacity);
+    void draw(const FloatRect&, const TransformationMatrix& modelViewMatrix, TextureMapperShaderProgram&, GLenum drawingMode, Flags);
 
-    void drawUnitRect(TextureMapperShaderProgram&, GC3Denum drawingMode);
+    void drawUnitRect(TextureMapperShaderProgram&, GLenum drawingMode);
     void drawEdgeTriangles(TextureMapperShaderProgram&);
 
     bool beginScissorClip(const TransformationMatrix&, const FloatRect&);
+    bool beginRoundedRectClip(const TransformationMatrix&, const FloatRoundedRect&);
     void bindDefaultSurface();
     ClipStack& clipStack();
     inline TextureMapperGLData& data() { return *m_data; }
-    RefPtr<GraphicsContext3D> m_context3D;
+
+    TextureMapperContextAttributes m_contextAttributes;
     TextureMapperGLData* m_data;
     ClipStack m_clipStack;
     bool m_enableEdgeDistanceAntialiasing;

@@ -29,32 +29,34 @@
 
 #include "IDBConnectionToClient.h"
 #include "IDBDatabaseIdentifier.h"
+#include "StorageQuotaManager.h"
 #include "UniqueIDBDatabase.h"
 #include "UniqueIDBDatabaseConnection.h"
-#include <wtf/CrossThreadQueue.h>
-#include <wtf/CrossThreadTask.h>
+#include <pal/HysteresisActivity.h>
+#include <pal/SessionID.h>
+#include <wtf/CrossThreadTaskHandler.h>
 #include <wtf/HashMap.h>
 #include <wtf/Lock.h>
-#include <wtf/Ref.h>
-#include <wtf/RefCounted.h>
 #include <wtf/RefPtr.h>
+#include <wtf/WeakHashSet.h>
 
 namespace WebCore {
 
 class IDBCursorInfo;
 class IDBRequestData;
 class IDBValue;
+class StorageQuotaManager;
 
 struct IDBGetRecordData;
 
 namespace IDBServer {
 
-class IDBBackingStoreTemporaryFileHandler;
-
-class IDBServer : public RefCounted<IDBServer> {
+class IDBServer {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
-    static Ref<IDBServer> create(IDBBackingStoreTemporaryFileHandler&);
-    WEBCORE_EXPORT static Ref<IDBServer> create(const String& databaseDirectoryPath, IDBBackingStoreTemporaryFileHandler&);
+    using StorageQuotaManagerSpaceRequester = Function<StorageQuotaManager::Decision(const ClientOrigin&, uint64_t spaceRequested)>;
+    WEBCORE_EXPORT IDBServer(PAL::SessionID, const String& databaseDirectoryPath, StorageQuotaManagerSpaceRequester&&);
+    WEBCORE_EXPORT ~IDBServer();
 
     WEBCORE_EXPORT void registerConnection(IDBConnectionToClient&);
     WEBCORE_EXPORT void unregisterConnection(IDBConnectionToClient&);
@@ -84,14 +86,11 @@ public:
     WEBCORE_EXPORT void databaseConnectionPendingClose(uint64_t databaseConnectionIdentifier);
     WEBCORE_EXPORT void databaseConnectionClosed(uint64_t databaseConnectionIdentifier);
     WEBCORE_EXPORT void abortOpenAndUpgradeNeeded(uint64_t databaseConnectionIdentifier, const IDBResourceIdentifier& transactionIdentifier);
-    WEBCORE_EXPORT void didFireVersionChangeEvent(uint64_t databaseConnectionIdentifier, const IDBResourceIdentifier& requestIdentifier);
+    WEBCORE_EXPORT void didFireVersionChangeEvent(uint64_t databaseConnectionIdentifier, const IDBResourceIdentifier& requestIdentifier, IndexedDB::ConnectionClosedOnBehalfOfServer);
     WEBCORE_EXPORT void openDBRequestCancelled(const IDBRequestData&);
-    WEBCORE_EXPORT void confirmDidCloseFromServer(uint64_t databaseConnectionIdentifier);
 
-    WEBCORE_EXPORT void getAllDatabaseNames(uint64_t serverConnectionIdentifier, const SecurityOriginData& mainFrameOrigin, const SecurityOriginData& openingOrigin, uint64_t callbackID);
+    WEBCORE_EXPORT void getAllDatabaseNamesAndVersions(IDBConnectionIdentifier, const IDBResourceIdentifier&, const ClientOrigin&);
 
-    void postDatabaseTask(CrossThreadTask&&);
-    void postDatabaseTaskReply(CrossThreadTask&&);
 
     void registerDatabaseConnection(UniqueIDBDatabaseConnection&);
     void unregisterDatabaseConnection(UniqueIDBDatabaseConnection&);
@@ -102,35 +101,29 @@ public:
 
     std::unique_ptr<IDBBackingStore> createBackingStore(const IDBDatabaseIdentifier&);
 
-    WEBCORE_EXPORT void closeAndDeleteDatabasesModifiedSince(std::chrono::system_clock::time_point, Function<void ()>&& completionHandler);
-    WEBCORE_EXPORT void closeAndDeleteDatabasesForOrigins(const Vector<SecurityOriginData>&, Function<void ()>&& completionHandler);
+    WEBCORE_EXPORT HashSet<SecurityOriginData> getOrigins() const;
+    WEBCORE_EXPORT void closeAndDeleteDatabasesModifiedSince(WallTime);
+    WEBCORE_EXPORT void closeAndDeleteDatabasesForOrigins(const Vector<SecurityOriginData>&);
+    void closeDatabasesForOrigins(const Vector<SecurityOriginData>&, Function<bool(const SecurityOriginData&, const ClientOrigin&)>&&);
+    WEBCORE_EXPORT void renameOrigin(const WebCore::SecurityOriginData&, const WebCore::SecurityOriginData&);
+
+    StorageQuotaManager::Decision requestSpace(const ClientOrigin&, uint64_t taskSize);
+    WEBCORE_EXPORT static uint64_t diskUsage(const String& rootDirectory, const ClientOrigin&);
+
+    WEBCORE_EXPORT void stopDatabaseActivitiesOnMainThread();
+
+    Lock& lock() { return m_lock; };
 
 private:
-    IDBServer(IDBBackingStoreTemporaryFileHandler&);
-    IDBServer(const String& databaseDirectoryPath, IDBBackingStoreTemporaryFileHandler&);
-
     UniqueIDBDatabase& getOrCreateUniqueIDBDatabase(const IDBDatabaseIdentifier&);
 
-    void performGetAllDatabaseNames(uint64_t serverConnectionIdentifier, const SecurityOriginData& mainFrameOrigin, const SecurityOriginData& openingOrigin, uint64_t callbackID);
-    void didGetAllDatabaseNames(uint64_t serverConnectionIdentifier, uint64_t callbackID, const Vector<String>& databaseNames);
+    void upgradeFilesIfNecessary();
+    void removeDatabasesModifiedSinceForVersion(WallTime, const String&);
+    void removeDatabasesWithOriginsForVersion(const Vector<SecurityOriginData>&, const String&);
 
-    void performCloseAndDeleteDatabasesModifiedSince(std::chrono::system_clock::time_point, uint64_t callbackID);
-    void performCloseAndDeleteDatabasesForOrigins(const Vector<SecurityOriginData>&, uint64_t callbackID);
-    void didPerformCloseAndDeleteDatabases(uint64_t callbackID);
-
-    void databaseRunLoop();
-    void handleTaskRepliesOnMainThread();
-
-    HashMap<uint64_t, RefPtr<IDBConnectionToClient>> m_connectionMap;
+    PAL::SessionID m_sessionID;
+    HashMap<IDBConnectionIdentifier, RefPtr<IDBConnectionToClient>> m_connectionMap;
     HashMap<IDBDatabaseIdentifier, std::unique_ptr<UniqueIDBDatabase>> m_uniqueIDBDatabaseMap;
-
-    RefPtr<Thread> m_thread { nullptr };
-    Lock m_databaseThreadCreationLock;
-    Lock m_mainThreadReplyLock;
-    bool m_mainThreadReplyScheduled { false };
-
-    CrossThreadQueue<CrossThreadTask> m_databaseQueue;
-    CrossThreadQueue<CrossThreadTask> m_databaseReplyQueue;
 
     HashMap<uint64_t, UniqueIDBDatabaseConnection*> m_databaseConnections;
     HashMap<IDBResourceIdentifier, UniqueIDBDatabaseTransaction*> m_transactions;
@@ -138,7 +131,10 @@ private:
     HashMap<uint64_t, Function<void ()>> m_deleteDatabaseCompletionHandlers;
 
     String m_databaseDirectoryPath;
-    IDBBackingStoreTemporaryFileHandler& m_backingStoreTemporaryFileHandler;
+
+    StorageQuotaManagerSpaceRequester m_spaceRequester;
+
+    Lock m_lock;
 };
 
 } // namespace IDBServer

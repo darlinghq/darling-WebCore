@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2004, 2006, 2007, 2008, 2009 Apple Inc. All rights reserved.
+ * Copyright (C) 2004-2017 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -25,15 +25,18 @@
 
 #pragma once
 
-#include "TextCodec.h"
-#include <wtf/Forward.h>
+#include <pal/text/UnencodableHandling.h>
+#include <wtf/URL.h>
+#include <wtf/text/StringView.h>
 
 namespace WebCore {
 
-class TextEncoding {
+enum class NFCNormalize : bool { No, Yes };
+
+class TextEncoding : public WTF::URLTextEncoding {
 public:
     TextEncoding() = default;
-    TextEncoding(const char* name);
+    WEBCORE_EXPORT TextEncoding(const char* name);
     WEBCORE_EXPORT TextEncoding(const String& name);
 
     bool isValid() const { return m_name; }
@@ -43,11 +46,12 @@ public:
     bool isJapanese() const;
 
     const TextEncoding& closestByteBasedEquivalent() const;
-    const TextEncoding& encodingForFormSubmission() const;
+    const TextEncoding& encodingForFormSubmissionOrURLParsing() const;
 
     WEBCORE_EXPORT String decode(const char*, size_t length, bool stopOnError, bool& sawError) const;
     String decode(const char*, size_t length) const;
-    CString encode(StringView, UnencodableHandling) const;
+    WEBCORE_EXPORT Vector<uint8_t> encode(StringView, UnencodableHandling, NFCNormalize = NFCNormalize::Yes) const;
+    Vector<uint8_t> encodeForURLParsing(StringView string) const final { return encode(string, UnencodableHandling::URLEncodedEntities, NFCNormalize::No); }
 
     UChar backslashAsCurrencySymbol() const;
     bool isByteBasedEncoding() const { return !isNonByteBasedEncoding(); }
@@ -67,10 +71,13 @@ const TextEncoding& ASCIIEncoding();
 const TextEncoding& Latin1Encoding();
 const TextEncoding& UTF16BigEndianEncoding();
 const TextEncoding& UTF16LittleEndianEncoding();
-const TextEncoding& UTF32BigEndianEncoding();
-const TextEncoding& UTF32LittleEndianEncoding();
 WEBCORE_EXPORT const TextEncoding& UTF8Encoding();
 WEBCORE_EXPORT const TextEncoding& WindowsLatin1Encoding();
+
+// Unescapes the given string using URL escaping rules.
+// DANGER: If the URL has "%00" in it,
+// the resulting string will have embedded null characters!
+WEBCORE_EXPORT String decodeURLEscapeSequences(StringView, const TextEncoding& = UTF8Encoding());
 
 inline String TextEncoding::decode(const char* characters, size_t length) const
 {

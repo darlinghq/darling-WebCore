@@ -29,10 +29,10 @@
 
 #include "FloatConversion.h"
 #include "IntRect.h"
-#include "TextStream.h"
 #include <algorithm>
 #include <math.h>
 #include <wtf/MathExtras.h>
+#include <wtf/text/TextStream.h>
 
 namespace WebCore {
 
@@ -54,9 +54,15 @@ bool FloatRect::isExpressibleAsIntRect() const
         && isWithinIntRange(maxX()) && isWithinIntRange(maxY());
 }
 
+bool FloatRect::inclusivelyIntersects(const FloatRect& other) const
+{
+    return width() >= 0 && height() >= 0 && other.width() >= 0 && other.height() >= 0
+        && x() <= other.maxX() && other.x() <= maxX() && y() <= other.maxY() && other.y() <= maxY();
+}
+
 bool FloatRect::intersects(const FloatRect& other) const
 {
-    // Checking emptiness handles negative widths as well as zero.
+    // Checking emptiness handles negative widths and heights as well as zero.
     return !isEmpty() && !other.isEmpty()
         && x() < other.maxX() && other.x() < maxX()
         && y() < other.maxY() && other.y() < maxY();
@@ -91,6 +97,25 @@ void FloatRect::intersect(const FloatRect& other)
     }
 
     setLocationAndSizeFromEdges(l, t, r, b);
+}
+
+bool FloatRect::edgeInclusiveIntersect(const FloatRect& other)
+{
+    FloatPoint newLocation(std::max(x(), other.x()), std::max(y(), other.y()));
+    FloatPoint newMaxPoint(std::min(maxX(), other.maxX()), std::min(maxY(), other.maxY()));
+
+    bool intersects = true;
+
+    // Return a clean empty rectangle for non-intersecting cases.
+    if (newLocation.x() > newMaxPoint.x() || newLocation.y() > newMaxPoint.y()) {
+        newLocation = { };
+        newMaxPoint = { };
+        intersects = false;
+    }
+
+    m_location = newLocation;
+    m_size = newMaxPoint - newLocation;
+    return intersects;
 }
 
 void FloatRect::unite(const FloatRect& other)

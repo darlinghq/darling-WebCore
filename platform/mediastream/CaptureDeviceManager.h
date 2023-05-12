@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (C) 2015-2018 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,23 +32,16 @@
 
 namespace WebCore {
 
-class CaptureDeviceManager {
+class WEBCORE_EXPORT CaptureDeviceManager {
 public:
-    using CaptureDeviceChangedCallback = WTF::Function<void()>;
-    using ObserverToken = uint32_t;
-    virtual ObserverToken addCaptureDeviceChangedObserver(CaptureDeviceChangedCallback&&);
-    virtual void removeCaptureDeviceChangedObserver(ObserverToken);
-
-    virtual Vector<CaptureDevice>& captureDevices() = 0;
-    virtual void refreshCaptureDevices() { }
-    virtual Vector<CaptureDevice> getAudioSourcesInfo();
-    virtual Vector<CaptureDevice> getVideoSourcesInfo();
-    virtual std::optional<CaptureDevice> deviceWithUID(const String&, RealtimeMediaSource::Type);
+    virtual const Vector<CaptureDevice>& captureDevices() = 0;
+    virtual void getCaptureDevices(CompletionHandler<void(Vector<CaptureDevice>&&)>&& callback) { callback(copyToVector(captureDevices())); };
+    virtual Optional<CaptureDevice> captureDeviceWithPersistentID(CaptureDevice::DeviceType, const String&) { return WTF::nullopt; }
 
 protected:
     virtual ~CaptureDeviceManager();
-    std::optional<CaptureDevice> captureDeviceFromPersistentID(const String& captureDeviceID);
-    HashMap<ObserverToken, CaptureDeviceChangedCallback> m_observers;
+    CaptureDevice captureDeviceFromPersistentID(const String& captureDeviceID);
+    void deviceChanged();
 };
 
 } // namespace WebCore

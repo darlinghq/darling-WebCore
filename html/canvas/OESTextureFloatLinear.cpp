@@ -27,17 +27,18 @@
 
 #if ENABLE(WEBGL)
 #include "OESTextureFloatLinear.h"
+#include <wtf/IsoMallocInlines.h>
 
 namespace WebCore {
+
+WTF_MAKE_ISO_ALLOCATED_IMPL(OESTextureFloatLinear);
 
 OESTextureFloatLinear::OESTextureFloatLinear(WebGLRenderingContextBase& context)
     : WebGLExtension(context)
 {
 }
 
-OESTextureFloatLinear::~OESTextureFloatLinear()
-{
-}
+OESTextureFloatLinear::~OESTextureFloatLinear() = default;
 
 WebGLExtension::ExtensionName OESTextureFloatLinear::getName() const
 {

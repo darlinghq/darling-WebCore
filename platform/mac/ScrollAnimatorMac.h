@@ -24,8 +24,7 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef ScrollAnimatorMac_h
-#define ScrollAnimatorMac_h
+#pragma once
 
 #if ENABLE(SMOOTH_SCROLLING)
 
@@ -47,7 +46,6 @@ namespace WebCore {
 class Scrollbar;
 
 class ScrollAnimatorMac : public ScrollAnimator {
-
 public:
     ScrollAnimatorMac(ScrollableArea&);
     virtual ~ScrollAnimatorMac();
@@ -81,11 +79,11 @@ private:
     Timer m_sendContentAreaScrolledTimer;
     FloatSize m_contentAreaScrolledTimerScrollDelta;
 
-    bool scroll(ScrollbarOrientation, ScrollGranularity, float step, float multiplier) override;
-    void scrollToOffsetWithoutAnimation(const FloatPoint&) override;
+    bool scroll(ScrollbarOrientation, ScrollGranularity, float step, float multiplier, ScrollBehavior) override;
+    void scrollToOffsetWithoutAnimation(const FloatPoint&, ScrollClamping) override;
 
 #if ENABLE(RUBBER_BANDING)
-    bool shouldForwardWheelEventsToParent(const PlatformWheelEvent&);
+    bool shouldForwardWheelEventsToParent(const PlatformWheelEvent&) const;
     bool handleWheelEvent(const PlatformWheelEvent&) override;
 #endif
 
@@ -134,25 +132,28 @@ private:
 
     FloatPoint adjustScrollPositionIfNecessary(const FloatPoint&) const;
 
-    void immediateScrollToPosition(const FloatPoint&);
+    void immediateScrollToPosition(const FloatPoint&, ScrollClamping = ScrollClamping::Clamped);
 
+    bool isUserScrollInProgress() const override;
     bool isRubberBandInProgress() const override;
     bool isScrollSnapInProgress() const override;
 
-#if ENABLE(RUBBER_BANDING)
-    /// ScrollControllerClient member functions.
-    IntSize stretchAmount() override;
-    bool allowsHorizontalStretching(const PlatformWheelEvent&) override;
-    bool allowsVerticalStretching(const PlatformWheelEvent&) override;
-    bool pinnedInDirection(const FloatSize&) override;
-    bool canScrollHorizontally() override;
-    bool canScrollVertically() override;
-    bool shouldRubberBandInDirection(ScrollDirection) override;
-    void immediateScrollByWithoutContentEdgeConstraints(const FloatSize&) override;
-    void immediateScrollBy(const FloatSize&) override;
-    void adjustScrollPositionToBoundsIfNecessary() override;
+    String horizontalScrollbarStateForTesting() const final;
+    String verticalScrollbarStateForTesting() const final;
 
-    bool isAlreadyPinnedInDirectionOfGesture(const PlatformWheelEvent&, ScrollEventAxis);
+    // ScrollControllerClient.
+#if ENABLE(RUBBER_BANDING)
+    IntSize stretchAmount() const final;
+    bool allowsHorizontalStretching(const PlatformWheelEvent&) const final;
+    bool allowsVerticalStretching(const PlatformWheelEvent&) const final;
+    bool isPinnedForScrollDelta(const FloatSize&) const final;
+    RectEdges<bool> edgePinnedState() const final;
+    bool allowsHorizontalScrolling() const final;
+    bool allowsVerticalScrolling() const final;
+    bool shouldRubberBandInDirection(ScrollDirection) const final;
+    void immediateScrollByWithoutContentEdgeConstraints(const FloatSize&) final;
+    void immediateScrollBy(const FloatSize&) final;
+    void adjustScrollPositionToBoundsIfNecessary() final;
 #endif
 
     bool m_haveScrolledSincePageLoad;
@@ -164,4 +165,3 @@ private:
 
 #endif // ENABLE(SMOOTH_SCROLLING)
 
-#endif // ScrollAnimatorMac_h

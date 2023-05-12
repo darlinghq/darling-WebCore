@@ -47,43 +47,53 @@ typedef RTCRtpTransceiverDirection RtpTransceiverDirection;
 };
 
 [
+Conditional=WEB_RTC,
+EnabledAtRuntime=PeerConnection
+] dictionary RTCCertificateParameters {
+    DOMString name;
+    DOMString hash;
+    DOMString namedCurve;
+    unsigned long modulusLength;
+    Uint8Array publicExponent;
+    double expires;
+};
+
+typedef (object or DOMString) AlgorithmIdentifier;
+
+[
     Conditional=WEB_RTC,
     EnabledAtRuntime=PeerConnection,
     ImplementedAs=RTCRtpTransceiverInit
 ] dictionary RTCRtpTransceiverInit {
     RtpTransceiverDirection direction = "sendrecv";
-    // FIXME 169662: missing streams
-    // FIXME 169662: missing sendEncodings
+    sequence<MediaStream> streams = [];
+    sequence<RTCRtpEncodingParameters> sendEncodings = [];
 };
 
 [
     ActiveDOMObject,
     Conditional=WEB_RTC,
-    ConstructorCallWith=ScriptExecutionContext,
     EnabledAtRuntime=PeerConnection,
     ExportMacro=WEBCORE_EXPORT,
-    JSBuiltinConstructor
+    Exposed=Window
 ] interface RTCPeerConnection : EventTarget {
-    // JS built-in constructor handles the optional RTCConfiguration
-    [PrivateIdentifier, CallWith=Document, MayThrowException] void initializeWith(RTCConfiguration configuration);
-
+    [CallWith=Document] constructor(optional RTCConfiguration configuration);
 
     // 4.3.2 Interface Definition
-    // JSBuiltins provide support for legacy signatures
-    [JSBuiltin] Promise<RTCSessionDescriptionInit> createOffer(optional RTCOfferOptions offerOptions);
-    [JSBuiltin] Promise<RTCSessionDescriptionInit> createAnswer(optional RTCAnswerOptions answerOptions);
+    Promise<RTCSessionDescriptionInit> createOffer(optional RTCOfferOptions offerOptions);
+    Promise<RTCSessionDescriptionInit> createAnswer(optional RTCAnswerOptions answerOptions);
 
-    [JSBuiltin] Promise<void> setLocalDescription(RTCSessionDescriptionInit description);
+    Promise<undefined> setLocalDescription(optional (RTCSessionDescriptionInit or RTCSessionDescription) description);
     readonly attribute RTCSessionDescription? localDescription;
     readonly attribute RTCSessionDescription? currentLocalDescription;
     readonly attribute RTCSessionDescription? pendingLocalDescription;
 
-    [JSBuiltin] Promise<void> setRemoteDescription(RTCSessionDescriptionInit description);
+    Promise<undefined> setRemoteDescription((RTCSessionDescriptionInit or RTCSessionDescription) description);
     readonly attribute RTCSessionDescription? remoteDescription;
     readonly attribute RTCSessionDescription? currentRemoteDescription;
     readonly attribute RTCSessionDescription? pendingRemoteDescription;
 
-    [JSBuiltin] Promise<void> addIceCandidate((RTCIceCandidateInit or RTCIceCandidate) candidate);
+    Promise<undefined> addIceCandidate((RTCIceCandidateInit or RTCIceCandidate) candidate);
 
     readonly attribute RTCSignalingState signalingState;
     readonly attribute RTCIceGatheringState iceGatheringState;
@@ -92,9 +102,10 @@ typedef RTCRtpTransceiverDirection RtpTransceiverDirection;
     // FIXME 169644: missing canTrickleIceCandidates
     // FIXME 169644: missing defaultIceServers
 
+    undefined restartIce();
     RTCConfiguration getConfiguration();
-    [MayThrowException] void setConfiguration(RTCConfiguration configuration);
-    void close();
+    [MayThrowException] undefined setConfiguration(RTCConfiguration configuration);
+    undefined close();
 
     attribute EventHandler onnegotiationneeded;
     attribute EventHandler onicecandidate;
@@ -102,58 +113,35 @@ typedef RTCRtpTransceiverDirection RtpTransceiverDirection;
     attribute EventHandler oniceconnectionstatechange;
     attribute EventHandler onicegatheringstatechange;
     attribute EventHandler onconnectionstatechange;
-    // FIXME 169644: missing onfingerprintfailure and onicecandidateerror
-
-    // Private API used to implement the overloaded operations above. Queued functions are called by runQueuedOperation().
-    // See RTCPeerConnectionInternals.js.
-    [PrivateIdentifier] Promise<RTCSessionDescriptionInit> queuedCreateOffer(optional RTCOfferOptions offerOptions);
-    [PrivateIdentifier] Promise<RTCSessionDescriptionInit> queuedCreateAnswer(optional RTCAnswerOptions answerOptions);
-    [PrivateIdentifier] Promise<void> queuedSetLocalDescription(RTCSessionDescription description);
-    [PrivateIdentifier] Promise<void> queuedSetRemoteDescription(RTCSessionDescription description);
-    [PrivateIdentifier] Promise<void> queuedAddIceCandidate(RTCIceCandidate? candidate);
-
+    attribute EventHandler onicecandidateerror;
 
     // 4.11 Certificate management
-    // FIXME 169644: missing generateCertificate
-
+    [CallWith=GlobalObject] static Promise<RTCCertificate> generateCertificate(AlgorithmIdentifier keygenAlgorithm);
 
     // 5.1 RTCPeerConnection extensions
     // RTP Media API extensions
-    [PrivateIdentifier, PublicIdentifier] sequence<RTCRtpSender> getSenders();
+    sequence<RTCRtpSender> getSenders();
     sequence<RTCRtpReceiver> getReceivers();
     sequence<RTCRtpTransceiver> getTransceivers();
 
-    [PrivateIdentifier, PublicIdentifier, MayThrowException] RTCRtpSender addTrack(MediaStreamTrack track, MediaStream... streams);
-    [PrivateIdentifier, PublicIdentifier, MayThrowException] void removeTrack(RTCRtpSender sender);
+    [MayThrowException] RTCRtpSender addTrack(MediaStreamTrack track, MediaStream... streams);
+    [MayThrowException] undefined removeTrack(RTCRtpSender sender);
 
     [MayThrowException] RTCRtpTransceiver addTransceiver((MediaStreamTrack or DOMString) track, optional RTCRtpTransceiverInit init);
 
     attribute EventHandler ontrack;
 
-
     // 6.1 Peer-to-peer data API
     // FIXME 169644: missing sctp
 
-    [CallWith=ScriptExecutionContext, MayThrowException] RTCDataChannel createDataChannel([TreatNullAs=EmptyString] USVString label, optional RTCDataChannelInit options);
+    [MayThrowException] RTCDataChannel createDataChannel([LegacyNullToEmptyString] USVString label, optional RTCDataChannelInit options);
     attribute EventHandler ondatachannel;
 
 
     // 8.2 Statistics API
-    // FIXME 169644: |selector| may go away in a future version of the spec
     Promise<RTCStatsReport> getStats(optional MediaStreamTrack? selector = null);
 
 
     // 9.6 Identity Provider API
     // FIXME 169644: missing IdP
-
-    // Legacy MediaStream API
-    [JSBuiltin, EnabledAtRuntime=WebRTCLegacyAPI] sequence<MediaStream> getLocalStreams();
-    [PrivateIdentifier, PublicIdentifier, EnabledAtRuntime=WebRTCLegacyAPI] sequence<MediaStream> getRemoteStreams();
-    [JSBuiltin, EnabledAtRuntime=WebRTCLegacyAPI] MediaStream getStreamById(DOMString streamId);
-
-    [JSBuiltin, EnabledAtRuntime=WebRTCLegacyAPI] void addStream(MediaStream stream);
-    [JSBuiltin, EnabledAtRuntime=WebRTCLegacyAPI] void removeStream(MediaStream stream);
-
-    // Legacy event handler (MediaStream-based API)
-    [EnabledAtRuntime=WebRTCLegacyAPI] attribute EventHandler onaddstream;
 };

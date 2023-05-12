@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2010 Google Inc. All Rights Reserved.
+ * Copyright (C) 2017 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -26,7 +27,7 @@
 
 #pragma once
 
-#include "Node.h"
+#include "HTMLFormElement.h"
 
 namespace WebCore {
 
@@ -35,83 +36,96 @@ class TouchList;
 class EventContext {
     WTF_MAKE_FAST_ALLOCATED;
 public:
-    // FIXME: Use ContainerNode instead of Node.
-    EventContext(Node*, EventTarget* currentTarget, EventTarget*);
-    virtual ~EventContext();
+    using EventInvokePhase = EventTarget::EventInvokePhase;
+
+    enum class Type : uint8_t {
+        Normal = 0,
+        MouseOrFocus,
+        Touch,
+        Window,
+    };
+
+    EventContext(Type, Node*, EventTarget* currentTarget, EventTarget* origin, int closedShadowDepth);
+    EventContext(Type, Node&, Node* currentTarget, EventTarget* origin, int closedShadowDepth);
+    ~EventContext();
 
     Node* node() const { return m_node.get(); }
     EventTarget* currentTarget() const { return m_currentTarget.get(); }
+    bool isCurrentTargetInShadowTree() const { return m_currentTargetIsInShadowTree; }
     EventTarget* target() const { return m_target.get(); }
-    bool currentTargetSameAsTarget() const { return m_currentTarget.get() == m_target.get(); }
-    virtual void handleLocalEvents(Event&) const;
-    virtual bool isMouseOrFocusEventContext() const;
-    virtual bool isTouchEventContext() const;
+    int closedShadowDepth() const { return m_closedShadowDepth; }
 
-protected:
-#if !ASSERT_DISABLED
+    void handleLocalEvents(Event&, EventInvokePhase) const;
+
+    bool isMouseOrFocusEventContext() const { return m_type == Type::MouseOrFocus; }
+    bool isTouchEventContext() const { return m_type == Type::Touch; }
+    bool isWindowContext() const { return m_type == Type::Window; }
+
+    Node* relatedTarget() const { return m_relatedTarget.get(); }
+    void setRelatedTarget(Node*);
+
+#if ENABLE(TOUCH_EVENTS)
+    enum TouchListType { Touches, TargetTouches, ChangedTouches };
+    TouchList& touchList(TouchListType);
+#endif
+
+private:
+    inline EventContext(Type, Node* currentNode, RefPtr<EventTarget>&& currentTarget, EventTarget* origin, int closedShadowDepth, bool currentTargetIsInShadowTree = false);
+
+#if ENABLE(TOUCH_EVENTS)
+    void initializeTouchLists();
+#endif
+
+#if ASSERT_ENABLED
     bool isUnreachableNode(EventTarget*) const;
 #endif
 
     RefPtr<Node> m_node;
     RefPtr<EventTarget> m_currentTarget;
     RefPtr<EventTarget> m_target;
-};
-
-class MouseOrFocusEventContext final : public EventContext {
-public:
-    MouseOrFocusEventContext(Node*, EventTarget* currentTarget, EventTarget*);
-    virtual ~MouseOrFocusEventContext();
-
-    Node* relatedTarget() const { return m_relatedTarget.get(); }
-    void setRelatedTarget(Node*);
-
-private:
-    void handleLocalEvents(Event&) const final;
-    bool isMouseOrFocusEventContext() const final;
-
     RefPtr<Node> m_relatedTarget;
-};
-
 #if ENABLE(TOUCH_EVENTS)
-
-class TouchEventContext final : public EventContext {
-public:
-    TouchEventContext(Node*, EventTarget* currentTarget, EventTarget*);
-    virtual ~TouchEventContext();
-
-    void handleLocalEvents(Event&) const override;
-    bool isTouchEventContext() const override;
-
-    enum TouchListType { Touches, TargetTouches, ChangedTouches, NotTouchList };
-    TouchList* touchList(TouchListType);
-
-    TouchList* touches() { return m_touches.get(); }
-    TouchList* targetTouches() { return m_targetTouches.get(); }
-    TouchList* changedTouches() { return m_changedTouches.get(); }
-
-private:
-#if !ASSERT_DISABLED
-    void checkReachability(TouchList*) const;
-#endif
-
     RefPtr<TouchList> m_touches;
     RefPtr<TouchList> m_targetTouches;
     RefPtr<TouchList> m_changedTouches;
+#endif
+    int m_closedShadowDepth { 0 };
+    bool m_currentTargetIsInShadowTree { false };
+    bool m_contextNodeIsFormElement { false };
+    Type m_type { Type::Normal };
 };
 
-#endif // ENABLE(TOUCH_EVENTS)
-
-#if !ASSERT_DISABLED
-
-inline bool EventContext::isUnreachableNode(EventTarget* target) const
+inline EventContext::EventContext(Type type, Node* node, RefPtr<EventTarget>&& currentTarget, EventTarget* origin, int closedShadowDepth, bool currentTargetIsInShadowTree)
+    : m_node { node }
+    , m_currentTarget { WTFMove(currentTarget) }
+    , m_target { origin }
+    , m_closedShadowDepth { closedShadowDepth }
+    , m_currentTargetIsInShadowTree { currentTargetIsInShadowTree }
+    , m_type { type }
 {
-    // FIXME: Checks also for SVG elements.
-    return target && target->toNode() && !target->toNode()->isSVGElement() && m_node->isClosedShadowHidden(*target->toNode());
+    ASSERT(!isUnreachableNode(m_target.get()));
+#if ENABLE(TOUCH_EVENTS)
+    if (m_type == Type::Touch)
+        initializeTouchLists();
+#else
+    ASSERT(m_type != Type::Touch);
+#endif
 }
 
-#endif
+inline EventContext::EventContext(Type type, Node* node, EventTarget* currentTarget, EventTarget* origin, int closedShadowDepth)
+    : EventContext(type, node, makeRefPtr(currentTarget), origin, closedShadowDepth)
+{
+    ASSERT(!is<Node>(currentTarget));
+}
 
-inline void MouseOrFocusEventContext::setRelatedTarget(Node* relatedTarget)
+// This variant avoids calling EventTarget::ref() which is a virtual function call.
+inline EventContext::EventContext(Type type, Node& node, Node* currentTarget, EventTarget* origin, int closedShadowDepth)
+    : EventContext(type, &node, makeRefPtr(currentTarget), origin, closedShadowDepth, currentTarget && currentTarget->isInShadowTree())
+{
+    m_contextNodeIsFormElement = is<HTMLFormElement>(node);
+}
+
+inline void EventContext::setRelatedTarget(Node* relatedTarget)
 {
     ASSERT(!isUnreachableNode(relatedTarget));
     m_relatedTarget = relatedTarget;
@@ -119,32 +133,20 @@ inline void MouseOrFocusEventContext::setRelatedTarget(Node* relatedTarget)
 
 #if ENABLE(TOUCH_EVENTS)
 
-inline TouchList* TouchEventContext::touchList(TouchListType type)
+inline TouchList& EventContext::touchList(TouchListType type)
 {
     switch (type) {
     case Touches:
-        return m_touches.get();
+        return *m_touches;
     case TargetTouches:
-        return m_targetTouches.get();
+        return *m_targetTouches;
     case ChangedTouches:
-        return m_changedTouches.get();
-    case NotTouchList:
-        break;
+        return *m_changedTouches;
     }
     ASSERT_NOT_REACHED();
-    return nullptr;
+    return *m_touches;
 }
 
 #endif
 
 } // namespace WebCore
-
-SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::MouseOrFocusEventContext)
-static bool isType(const WebCore::EventContext& context) { return context.isMouseOrFocusEventContext(); }
-SPECIALIZE_TYPE_TRAITS_END()
-
-#if ENABLE(TOUCH_EVENTS)
-SPECIALIZE_TYPE_TRAITS_BEGIN(WebCore::TouchEventContext)
-static bool isType(const WebCore::EventContext& context) { return context.isTouchEventContext(); }
-SPECIALIZE_TYPE_TRAITS_END()
-#endif

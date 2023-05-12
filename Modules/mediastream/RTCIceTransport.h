@@ -41,13 +41,14 @@
 
 namespace WebCore {
 
-class RTCIceTransport : public RefCounted<RTCIceTransport>, public ScriptWrappable {
+class RTCIceTransport final : public RefCounted<RTCIceTransport>, public ScriptWrappable {
+    WTF_MAKE_ISO_ALLOCATED(RTCIceTransport);
 public:
     static Ref<RTCIceTransport> create()
     {
         return adoptRef(*new RTCIceTransport());
     }
-    virtual ~RTCIceTransport() { }
+    virtual ~RTCIceTransport() = default;
 
     RTCIceTransportState state() const { return m_transportState; }
     void setState(RTCIceTransportState state) { m_transportState = state; }

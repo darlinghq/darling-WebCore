@@ -28,8 +28,9 @@
 
 #include <wtf/HashMap.h>
 #include <wtf/Ref.h>
-#include <wtf/text/AtomicString.h>
-#include <wtf/text/AtomicStringHash.h>
+#include <wtf/Seconds.h>
+#include <wtf/text/AtomString.h>
+#include <wtf/text/AtomStringHash.h>
 
 namespace WebCore {
 
@@ -42,26 +43,35 @@ enum class ConstantProperty {
     SafeAreaInsetRight,
     SafeAreaInsetBottom,
     SafeAreaInsetLeft,
+    FullscreenInsetTop,
+    FullscreenInsetRight,
+    FullscreenInsetBottom,
+    FullscreenInsetLeft,
+    FullscreenAutoHideDuration,
 };
 
 class ConstantPropertyMap {
+    WTF_MAKE_FAST_ALLOCATED;
 public:
     explicit ConstantPropertyMap(Document&);
 
-    typedef HashMap<AtomicString, Ref<CSSCustomPropertyValue>> Values;
+    typedef HashMap<AtomString, Ref<CSSCustomPropertyValue>> Values;
     const Values& values() const;
 
     void didChangeSafeAreaInsets();
+    void didChangeFullscreenInsets();
+    void setFullscreenAutoHideDuration(Seconds);
 
 private:
     void buildValues();
 
-    const AtomicString& nameForProperty(ConstantProperty) const;
+    const AtomString& nameForProperty(ConstantProperty) const;
     void setValueForProperty(ConstantProperty, Ref<CSSVariableData>&&);
 
     void updateConstantsForSafeAreaInsets();
+    void updateConstantsForFullscreen();
 
-    std::optional<Values> m_values;
+    Optional<Values> m_values;
 
     Document& m_document;
 };

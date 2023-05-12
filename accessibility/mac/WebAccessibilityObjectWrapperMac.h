@@ -26,12 +26,20 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#pragma once
-
 #import "WebAccessibilityObjectWrapperBase.h"
+
+#if PLATFORM(MAC)
+
+#import <pal/spi/mac/HIServicesSPI.h>
+
+#ifndef NSAccessibilityPrimaryScreenHeightAttribute
+#define NSAccessibilityPrimaryScreenHeightAttribute @"_AXPrimaryScreenHeight"
+#endif
 
 @interface WebAccessibilityObjectWrapper : WebAccessibilityObjectWrapperBase
 
+// FIXME: Remove these methods since clients should not need to call them and hence should not be exposed in the public interface.
+// Inside WebCore, use the WebCore homonymous declared below instead.
 - (id)textMarkerRangeFromVisiblePositions:(const WebCore::VisiblePosition&)startPosition endPosition:(const WebCore::VisiblePosition&)endPosition;
 - (id)textMarkerForVisiblePosition:(const WebCore::VisiblePosition&)visiblePos;
 - (id)textMarkerForFirstPositionInTextControl:(WebCore::HTMLTextFormControlElement&)textControl;
@@ -40,3 +48,39 @@
 - (id)associatedPluginParent;
 
 @end
+
+#else
+
+typedef const struct __AXTextMarker* AXTextMarkerRef;
+typedef const struct __AXTextMarkerRange* AXTextMarkerRangeRef;
+
+#endif // PLATFORM(MAC)
+
+namespace WebCore {
+
+class AccessibilityObject;
+struct CharacterOffset;
+
+// TextMarker and TextMarkerRange public funcstions.
+// FIXME: TextMarker and TextMarkerRange should become classes on their own right, wrapping the system objects.
+
+AccessibilityObject* accessibilityObjectForTextMarker(AXObjectCache*, AXTextMarkerRef);
+
+// TextMarker <-> VisiblePosition conversion.
+AXTextMarkerRef textMarkerForVisiblePosition(AXObjectCache*, const VisiblePosition&);
+VisiblePosition visiblePositionForTextMarker(AXObjectCache*, AXTextMarkerRef);
+
+// TextMarkerRange <-> VisiblePositionRange conversion.
+AXTextMarkerRangeRef textMarkerRangeFromVisiblePositions(AXObjectCache*, const VisiblePosition&, const VisiblePosition&);
+VisiblePositionRange visiblePositionRangeForTextMarkerRange(AXObjectCache*, AXTextMarkerRangeRef);
+
+// TextMarker <-> CharacterOffset conversion.
+AXTextMarkerRef textMarkerForCharacterOffset(AXObjectCache*, const CharacterOffset&);
+CharacterOffset characterOffsetForTextMarker(AXObjectCache*, AXTextMarkerRef);
+
+// TextMarkerRange <-> SimpleRange conversion.
+AXTextMarkerRef startOrEndTextMarkerForRange(AXObjectCache*, const Optional<SimpleRange>&, bool isStart);
+AXTextMarkerRangeRef textMarkerRangeFromRange(AXObjectCache*, const Optional<SimpleRange>&);
+Optional<SimpleRange> rangeForTextMarkerRange(AXObjectCache*, AXTextMarkerRangeRef);
+
+}

@@ -31,6 +31,7 @@
 #include "config.h"
 #include "PlatformLocale.h"
 
+#include "DateComponents.h"
 #include "DateTimeFormat.h"
 #include "LocalizedStrings.h"
 #include <wtf/text/StringBuilder.h>
@@ -158,7 +159,7 @@ void DateTimeStringBuilder::visitField(DateTimeFormat::FieldType fieldType, int 
             appendNumber(m_date.second(), numberOfPatternCharacters);
         else {
             double second = m_date.second() + m_date.millisecond() / 1000.0;
-            String zeroPaddedSecondString = zeroPadString(String::format("%.03f", second), numberOfPatternCharacters + 4);
+            String zeroPaddedSecondString = zeroPadString(String::numberToStringFixedWidth(second, 3), numberOfPatternCharacters + 4);
             m_builder.append(m_localizer.convertToLocalizedNumber(zeroPaddedSecondString));
         }
         return;
@@ -180,9 +181,7 @@ String DateTimeStringBuilder::toString()
 
 #endif
 
-Locale::~Locale()
-{
-}
+Locale::~Locale() = default;
 
 void Locale::setLocaleData(const Vector<String, DecimalSymbolsSize>& symbols, const String& positivePrefix, const String& positiveSuffix, const String& negativePrefix, const String& negativeSuffix)
 {
@@ -327,45 +326,40 @@ String Locale::convertFromLocalizedNumber(const String& localized)
 }
 
 #if ENABLE(DATE_AND_TIME_INPUT_TYPES)
-
-#if !PLATFORM(IOS)
 String Locale::formatDateTime(const DateComponents& date, FormatType formatType)
 {
-    if (date.type() == DateComponents::Invalid)
+    if (date.type() == DateComponentsType::Invalid)
         return String();
-#if !ENABLE(INPUT_TYPE_WEEK)
-    if (date.type() == DateComponents::Week)
-        return String();
-#endif
 
     DateTimeStringBuilder builder(*this, date);
     switch (date.type()) {
-    case DateComponents::Time:
+    case DateComponentsType::Time:
         builder.build(formatType == FormatTypeShort ? shortTimeFormat() : timeFormat());
         break;
-    case DateComponents::Date:
+    case DateComponentsType::Date:
         builder.build(dateFormat());
         break;
-    case DateComponents::Month:
+    case DateComponentsType::Month:
         builder.build(formatType == FormatTypeShort ? shortMonthFormat() : monthFormat());
         break;
-    case DateComponents::Week:    
-#if ENABLE(INPUT_TYPE_WEEK)
-        builder.build(weekFormatInLDML());
+    case DateComponentsType::Week:    
+        // FIXME: Add support for formatting weeks.
         break;
-#endif
-    case DateComponents::DateTime:
-    case DateComponents::DateTimeLocal:
+    case DateComponentsType::DateTimeLocal:
         builder.build(formatType == FormatTypeShort ? dateTimeFormatWithoutSeconds() : dateTimeFormatWithSeconds());
         break;
-    case DateComponents::Invalid:
+    case DateComponentsType::Invalid:
         ASSERT_NOT_REACHED();
         break;
     }
     return builder.toString();
 }
-#endif // !PLATFORM(IOS)
 
+String Locale::localizedDecimalSeparator()
+{
+    initializeLocaleData();
+    return m_decimalSymbols[DecimalSeparatorIndex];
+}
 #endif
 
 }

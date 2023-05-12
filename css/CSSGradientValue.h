@@ -27,13 +27,13 @@
 
 #include "CSSImageGeneratorValue.h"
 #include "CSSPrimitiveValue.h"
-#include <wtf/Vector.h>
+#include "Gradient.h"
 
 namespace WebCore {
 
-class FloatPoint;
-class Gradient;
-class StyleResolver;
+namespace Style {
+class BuilderState;
+}
 
 enum CSSGradientType {
     CSSDeprecatedLinearGradient,
@@ -41,92 +41,90 @@ enum CSSGradientType {
     CSSPrefixedLinearGradient,
     CSSPrefixedRadialGradient,
     CSSLinearGradient,
-    CSSRadialGradient
+    CSSRadialGradient,
+    CSSConicGradient
 };
 enum CSSGradientRepeat { NonRepeating, Repeating };
 
 struct CSSGradientColorStop {
-    RefPtr<CSSPrimitiveValue> m_position; // percentage or length
-    RefPtr<CSSPrimitiveValue> m_color;
-    Color m_resolvedColor;
-    bool m_colorIsDerivedFromElement = false;
-    bool isMidpoint = false;
-    bool operator==(const CSSGradientColorStop& other) const
-    {
-        return compareCSSValuePtr(m_color, other.m_color)
-            && compareCSSValuePtr(m_position, other.m_position);
-    }
+    RefPtr<CSSPrimitiveValue> color;
+    RefPtr<CSSPrimitiveValue> position; // percentage or length
+    Color resolvedColor;
 };
+
+inline bool operator==(const CSSGradientColorStop& a, const CSSGradientColorStop& b)
+{
+    return compareCSSValuePtr(a.color, b.color) && compareCSSValuePtr(a.position, b.position);
+}
 
 class CSSGradientValue : public CSSImageGeneratorValue {
 public:
-    RefPtr<Image> image(RenderElement&, const FloatSize&);
-
-    void setFirstX(RefPtr<CSSPrimitiveValue>&& val) { m_firstX = WTFMove(val); }
-    void setFirstY(RefPtr<CSSPrimitiveValue>&& val) { m_firstY = WTFMove(val); }
-    void setSecondX(RefPtr<CSSPrimitiveValue>&& val) { m_secondX = WTFMove(val); }
-    void setSecondY(RefPtr<CSSPrimitiveValue>&& val) { m_secondY = WTFMove(val); }
-
-    void addStop(const CSSGradientColorStop& stop) { m_stops.append(stop); }
-
-    unsigned stopCount() const { return m_stops.size(); }
-
-    void sortStopsIfNeeded();
-
-    bool isRepeating() const { return m_repeating; }
+    void setFirstX(RefPtr<CSSPrimitiveValue>&& value) { m_firstX = WTFMove(value); }
+    void setFirstY(RefPtr<CSSPrimitiveValue>&& value) { m_firstY = WTFMove(value); }
+    void setSecondX(RefPtr<CSSPrimitiveValue>&& value) { m_secondX = WTFMove(value); }
+    void setSecondY(RefPtr<CSSPrimitiveValue>&& value) { m_secondY = WTFMove(value); }
+    void addStop(CSSGradientColorStop&& stop) { m_stops.append(WTFMove(stop)); }
+    void doneAddingStops() { m_stops.shrinkToFit(); }
+    bool hasAtLeastTwoStops() const { return m_stops.size() >= 2; }
+    void resolveRGBColors();
 
     CSSGradientType gradientType() const { return m_gradientType; }
 
-    bool isFixedSize() const { return false; }
-    FloatSize fixedSize(const RenderElement&) const { return FloatSize(); }
+    RefPtr<Image> image(RenderElement&, const FloatSize&);
+    bool knownToBeOpaque(const RenderElement&) const;
 
-    bool isPending() const { return false; }
-    bool knownToBeOpaque() const;
+    static constexpr bool isFixedSize() { return false; }
+    static FloatSize fixedSize(const RenderElement&) { return FloatSize(); }
+    static constexpr bool isPending() { return false; }
+    static void loadSubimages(CachedResourceLoader&, const ResourceLoaderOptions&) { }
 
-    void loadSubimages(CachedResourceLoader&, const ResourceLoaderOptions&) { }
-    Ref<CSSGradientValue> gradientWithStylesResolved(const StyleResolver&);
+    Ref<CSSGradientValue> gradientWithStylesResolved(Style::BuilderState&);
 
 protected:
     CSSGradientValue(ClassType classType, CSSGradientRepeat repeat, CSSGradientType gradientType)
         : CSSImageGeneratorValue(classType)
-        , m_stopsSorted(false)
         , m_gradientType(gradientType)
         , m_repeating(repeat == Repeating)
     {
     }
 
-    CSSGradientValue(const CSSGradientValue& other, ClassType classType, CSSGradientType gradientType)
+    CSSGradientValue(const CSSGradientValue& other, ClassType classType)
         : CSSImageGeneratorValue(classType)
         , m_firstX(other.m_firstX)
         , m_firstY(other.m_firstY)
         , m_secondX(other.m_secondX)
         , m_secondY(other.m_secondY)
         , m_stops(other.m_stops)
-        , m_stopsSorted(other.m_stopsSorted)
-        , m_gradientType(gradientType)
-        , m_repeating(other.isRepeating() ? Repeating : NonRepeating)
+        , m_gradientType(other.m_gradientType)
+        , m_repeating(other.m_repeating)
+        , m_hasColorDerivedFromElement(other.m_hasColorDerivedFromElement)
     {
     }
 
-    void addStops(Gradient&, const CSSToLengthConversionData&, float maxLengthForRepeat = 0);
+    template<typename GradientAdapter> Gradient::ColorStopVector computeStops(GradientAdapter&, const CSSToLengthConversionData&, const RenderStyle&, float maxLengthForRepeat);
 
-    // Resolve points/radii to front end values.
-    FloatPoint computeEndPoint(CSSPrimitiveValue*, CSSPrimitiveValue*, const CSSToLengthConversionData&, const FloatSize&);
+    auto firstX() const { return m_firstX.get(); }
+    auto firstY() const { return m_firstY.get(); }
+    auto secondX() const { return m_secondX.get(); }
+    auto secondY() const { return m_secondY.get(); }
+    auto& stops() const { return m_stops; }
+    bool isRepeating() const { return m_repeating; }
 
+    bool equals(const CSSGradientValue&) const;
+
+private:
+    bool hasColorDerivedFromElement() const;
     bool isCacheable() const;
 
-    // Points. Some of these may be null.
     RefPtr<CSSPrimitiveValue> m_firstX;
     RefPtr<CSSPrimitiveValue> m_firstY;
-
     RefPtr<CSSPrimitiveValue> m_secondX;
     RefPtr<CSSPrimitiveValue> m_secondY;
-
-    // Stops
     Vector<CSSGradientColorStop, 2> m_stops;
-    bool m_stopsSorted;
     CSSGradientType m_gradientType;
-    bool m_repeating;
+    bool m_repeating { false };
+
+    mutable Optional<bool> m_hasColorDerivedFromElement;
 };
 
 class CSSLinearGradientValue final : public CSSGradientValue {
@@ -136,7 +134,7 @@ public:
         return adoptRef(*new CSSLinearGradientValue(repeat, gradientType));
     }
 
-    void setAngle(Ref<CSSPrimitiveValue>&& val) { m_angle = WTFMove(val); }
+    void setAngle(Ref<CSSPrimitiveValue>&& value) { m_angle = WTFMove(value); }
 
     String customCSSText() const;
 
@@ -157,7 +155,7 @@ private:
     }
 
     CSSLinearGradientValue(const CSSLinearGradientValue& other)
-        : CSSGradientValue(other, LinearGradientClass, other.gradientType())
+        : CSSGradientValue(other, LinearGradientClass)
         , m_angle(other.m_angle)
     {
     }
@@ -179,14 +177,14 @@ public:
 
     String customCSSText() const;
 
-    void setFirstRadius(RefPtr<CSSPrimitiveValue>&& val) { m_firstRadius = WTFMove(val); }
-    void setSecondRadius(RefPtr<CSSPrimitiveValue>&& val) { m_secondRadius = WTFMove(val); }
+    void setFirstRadius(RefPtr<CSSPrimitiveValue>&& value) { m_firstRadius = WTFMove(value); }
+    void setSecondRadius(RefPtr<CSSPrimitiveValue>&& value) { m_secondRadius = WTFMove(value); }
 
-    void setShape(RefPtr<CSSPrimitiveValue>&& val) { m_shape = WTFMove(val); }
-    void setSizingBehavior(RefPtr<CSSPrimitiveValue>&& val) { m_sizingBehavior = WTFMove(val); }
+    void setShape(RefPtr<CSSPrimitiveValue>&& value) { m_shape = WTFMove(value); }
+    void setSizingBehavior(RefPtr<CSSPrimitiveValue>&& value) { m_sizingBehavior = WTFMove(value); }
 
-    void setEndHorizontalSize(RefPtr<CSSPrimitiveValue>&& val) { m_endHorizontalSize = WTFMove(val); }
-    void setEndVerticalSize(RefPtr<CSSPrimitiveValue>&& val) { m_endVerticalSize = WTFMove(val); }
+    void setEndHorizontalSize(RefPtr<CSSPrimitiveValue>&& value) { m_endHorizontalSize = WTFMove(value); }
+    void setEndVerticalSize(RefPtr<CSSPrimitiveValue>&& value) { m_endVerticalSize = WTFMove(value); }
 
     // Create the gradient for a given size.
     Ref<Gradient> createGradient(RenderElement&, const FloatSize&);
@@ -200,7 +198,7 @@ private:
     }
 
     CSSRadialGradientValue(const CSSRadialGradientValue& other)
-        : CSSGradientValue(other, RadialGradientClass, other.gradientType())
+        : CSSGradientValue(other, RadialGradientClass)
         , m_firstRadius(other.m_firstRadius)
         , m_secondRadius(other.m_secondRadius)
         , m_shape(other.m_shape)
@@ -225,8 +223,45 @@ private:
     RefPtr<CSSPrimitiveValue> m_endVerticalSize;
 };
 
+class CSSConicGradientValue final : public CSSGradientValue {
+public:
+    static Ref<CSSConicGradientValue> create(CSSGradientRepeat repeat)
+    {
+        return adoptRef(*new CSSConicGradientValue(repeat));
+    }
+
+    Ref<CSSConicGradientValue> clone() const
+    {
+        return adoptRef(*new CSSConicGradientValue(*this));
+    }
+
+    String customCSSText() const;
+
+    void setAngle(RefPtr<CSSPrimitiveValue>&& value) { m_angle = WTFMove(value); }
+
+    // Create the gradient for a given size.
+    Ref<Gradient> createGradient(RenderElement&, const FloatSize&);
+
+    bool equals(const CSSConicGradientValue&) const;
+
+private:
+    explicit CSSConicGradientValue(CSSGradientRepeat repeat)
+        : CSSGradientValue(ConicGradientClass, repeat, CSSConicGradient)
+    {
+    }
+
+    CSSConicGradientValue(const CSSConicGradientValue& other)
+        : CSSGradientValue(other, ConicGradientClass)
+        , m_angle(other.m_angle)
+    {
+    }
+
+    RefPtr<CSSPrimitiveValue> m_angle; // may be null.
+};
+
 } // namespace WebCore
 
 SPECIALIZE_TYPE_TRAITS_CSS_VALUE(CSSGradientValue, isGradientValue())
 SPECIALIZE_TYPE_TRAITS_CSS_VALUE(CSSLinearGradientValue, isLinearGradientValue())
 SPECIALIZE_TYPE_TRAITS_CSS_VALUE(CSSRadialGradientValue, isRadialGradientValue())
+SPECIALIZE_TYPE_TRAITS_CSS_VALUE(CSSConicGradientValue, isConicGradientValue())

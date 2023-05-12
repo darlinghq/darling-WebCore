@@ -32,18 +32,15 @@
 namespace WTF {
 
 template<> struct FloatHash<WebCore::FloatSize> {
-    static unsigned hash(const WebCore::FloatSize& key) { return pairIntHash(DefaultHash<float>::Hash::hash(key.width()), DefaultHash<float>::Hash::hash(key.height())); }
+    static unsigned hash(const WebCore::FloatSize& key) { return pairIntHash(DefaultHash<float>::hash(key.width()), DefaultHash<float>::hash(key.height())); }
     static bool equal(const WebCore::FloatSize& a, const WebCore::FloatSize& b) { return a == b; }
     static const bool safeToCompareToEmptyOrDeleted = true;
 };
 
-template<> struct DefaultHash<WebCore::FloatSize> {
-    typedef FloatHash<WebCore::FloatSize> Hash;
-};
+template<> struct DefaultHash<WebCore::FloatSize> : FloatHash<WebCore::FloatSize> { };
 
 template<> struct HashTraits<WebCore::FloatSize> : GenericHashTraits<WebCore::FloatSize> {
     static const bool emptyValueIsZero = true;
-    static const bool needsDestruction = false;
     static void constructDeletedValue(WebCore::FloatSize& slot) { new (NotNull, &slot) WebCore::FloatSize(-1, -1); }
     static bool isDeletedValue(const WebCore::FloatSize& value) { return value.width() == -1 && value.height() == -1; }
 };
